@@ -12,6 +12,7 @@ This guide is for developers contributing to the Porter data migration tool. It 
 6. [Performance Considerations](#performance-considerations)
 7. [Contributing Guidelines](#contributing-guidelines)
 8. [Release Process](#release-process)
+9. [Complete Release Walkthrough](#complete-release-walkthrough)
 
 ## Architecture Overview
 
@@ -603,6 +604,300 @@ Each release includes:
 - [ ] User guide examples work
 - [ ] Homebrew installation works correctly
 - [ ] Pre-built binaries are functional on all platforms
+
+## Complete Release Walkthrough
+
+This section provides a step-by-step guide for pushing code changes and creating a new release.
+
+### Prerequisites
+
+Before starting a release, ensure you have:
+- ✅ Write access to the repository
+- ✅ Local development environment set up
+- ✅ All changes tested locally
+- ✅ Documentation updated
+
+### Step 1: Prepare Your Changes
+
+```bash
+# Ensure you're on the main branch
+git checkout prod
+
+# Pull latest changes
+git pull origin prod
+
+# Create a feature branch for your changes
+git checkout -b feature/your-feature-name
+
+# Make your changes and commit them
+git add .
+git commit -m "feat: add new feature description"
+
+# Push your feature branch
+git push origin feature/your-feature-name
+```
+
+### Step 2: Update Version and Documentation
+
+When ready to release:
+
+```bash
+# Switch back to main branch
+git checkout prod
+git pull origin prod
+
+# Update version in Cargo.toml
+# Edit Cargo.toml and change version = "1.0.0" to "1.0.1" (or appropriate version)
+
+# Update documentation if needed
+# Edit README.md, docs/user-guide.md, etc.
+
+# Commit version bump and documentation updates
+git add .
+git commit -m "release: bump version to 1.0.1 and update documentation"
+```
+
+### Step 3: Create and Push Release Tag
+
+```bash
+# Create an annotated tag
+git tag -a v1.0.1 -m "Release v1.0.1"
+
+# Push the tag to trigger GitHub Actions
+git push origin v1.0.1
+```
+
+**Important**: The tag must match the version in `Cargo.toml` exactly (with the `v` prefix).
+
+### Step 4: Monitor GitHub Actions
+
+1. **Go to GitHub**: Navigate to [Actions tab](https://github.com/umi-labs/porter/actions)
+2. **Watch the workflow**: The "Release" workflow should start automatically
+3. **Check for errors**: Monitor the build process for any failures
+
+The workflow will:
+- ✅ Build binaries for all platforms
+- ✅ Create GitHub release with assets
+- ✅ Update Homebrew tap automatically
+- ✅ Generate release notes
+
+### Step 5: Verify Release
+
+After the workflow completes:
+
+1. **Check GitHub Release**: Visit [Releases page](https://github.com/umi-labs/porter/releases)
+2. **Verify Homebrew**: Test installation with `brew install umi-labs/tap/porter`
+3. **Test binaries**: Download and test pre-built binaries for your platform
+
+### Troubleshooting Common Issues
+
+#### Issue: "This workspace doesn't have anything for dist to Release!"
+
+**Cause**: Version mismatch between git tag and Cargo.toml
+
+**Solution**:
+```bash
+# Check current version in Cargo.toml
+grep "version = " Cargo.toml
+
+# Check what commit the tag points to
+git show v1.0.1 --oneline
+
+# If they don't match, fix the tag:
+git tag -d v1.0.1
+git tag -a v1.0.1 -m "Release v1.0.1"
+git push origin v1.0.1 --force
+```
+
+#### Issue: GitHub Actions workflow fails
+
+**Common causes and solutions**:
+
+1. **Build failures**: Check Rust compilation errors
+2. **Permission issues**: Ensure workflow has proper permissions
+3. **Missing secrets**: Verify `HOMEBREW_TAP_TOKEN` is set in repository secrets
+
+#### Issue: Homebrew installation fails
+
+**Check**:
+- Homebrew tap repository exists and is accessible
+- Formula file was generated correctly
+- Release was marked as stable (not prerelease)
+
+### Release Checklist
+
+Before creating a release tag, verify:
+
+- [ ] All tests pass: `cargo test`
+- [ ] Code compiles: `cargo build --release`
+- [ ] Documentation is updated
+- [ ] Version is bumped in Cargo.toml
+- [ ] Commit message follows conventions
+- [ ] Tag name matches Cargo.toml version (with `v` prefix)
+- [ ] You have write access to repository
+
+### Post-Release Tasks
+
+After successful release:
+
+1. **Update main branch**: Merge any remaining changes
+2. **Announce release**: Share in team communications
+3. **Monitor feedback**: Watch for user issues or questions
+4. **Plan next release**: Start working on next version
+
+### Version Strategy
+
+- **Patch releases** (1.0.0 → 1.0.1): Bug fixes only
+- **Minor releases** (1.0.0 → 1.1.0): New features, backward compatible
+- **Major releases** (1.0.0 → 2.0.0): Breaking changes
+
+## 🤖 Release Automation
+
+Porter provides several automation options to streamline the release process.
+
+### Option 1: Local Release Script (Recommended)
+
+Use the included release script for complete automation:
+
+```bash
+# Make script executable (first time only)
+chmod +x scripts/release.sh
+
+# Patch release (1.0.0 → 1.0.1)
+./scripts/release.sh --patch
+
+# Minor release (1.0.0 → 1.1.0)
+./scripts/release.sh --minor
+
+# Major release (1.0.0 → 2.0.0)
+./scripts/release.sh --major
+
+# Specific version
+./scripts/release.sh 1.0.1
+
+# Dry run (see what would happen)
+./scripts/release.sh --patch --dry-run
+
+# Skip confirmation prompts
+./scripts/release.sh --patch --yes
+```
+
+**Features:**
+- ✅ Automatic version bumping
+- ✅ Prerequisites checking
+- ✅ Test execution
+- ✅ Build verification
+- ✅ Git operations (commit, tag, push)
+- ✅ Colored output and progress tracking
+- ✅ Dry run mode for testing
+
+### Option 2: GitHub Actions Manual Release
+
+Trigger releases directly from GitHub:
+
+1. **Go to Actions**: Navigate to [Actions tab](https://github.com/umi-labs/porter/actions)
+2. **Select "Automated Release"**: Click on the workflow
+3. **Run workflow**: Click "Run workflow"
+4. **Configure options**:
+   - **Version type**: patch, minor, or major
+   - **Specific version**: Leave empty for auto-bump
+   - **Skip tests**: Option to skip test execution
+   - **Dry run**: Test without making changes
+
+**Benefits:**
+- ✅ No local setup required
+- ✅ Web-based interface
+- ✅ Team collaboration
+- ✅ Audit trail
+
+### Option 3: GitHub CLI Release Script
+
+For GitHub CLI users:
+
+```bash
+# Install GitHub CLI first
+# macOS: brew install gh
+# Linux: https://cli.github.com/
+
+# Authenticate
+gh auth login
+
+# Make script executable
+chmod +x scripts/gh-release.sh
+
+# Create release
+./scripts/gh-release.sh --patch
+
+# Create draft release
+./scripts/gh-release.sh --minor --draft
+
+# Custom release notes
+./scripts/gh-release.sh 1.0.1 --notes "Bug fixes and performance improvements"
+```
+
+**Features:**
+- ✅ Direct GitHub release creation
+- ✅ Draft and prerelease support
+- ✅ Custom release notes
+- ✅ GitHub CLI integration
+
+### Automation Comparison
+
+| Method | Setup | Ease of Use | Features | Team Access |
+|--------|-------|-------------|----------|-------------|
+| **Local Script** | ✅ Simple | ✅ Very Easy | ✅ Complete | ❌ Individual |
+| **GitHub Actions** | ✅ None | ✅ Easy | ✅ Full | ✅ Team |
+| **GitHub CLI** | ⚠️ Medium | ✅ Easy | ✅ GitHub-focused | ❌ Individual |
+
+### Recommended Workflow
+
+1. **For regular releases**: Use the local script (`./scripts/release.sh --patch`)
+2. **For team releases**: Use GitHub Actions manual workflow
+3. **For GitHub-focused releases**: Use GitHub CLI script
+
+### Automation Prerequisites
+
+Before using automation, ensure:
+
+- ✅ Write access to repository
+- ✅ GitHub CLI installed (for CLI script)
+- ✅ Authenticated with GitHub (for CLI script)
+- ✅ Local development environment set up
+- ✅ Tests pass locally
+
+### Troubleshooting Automation
+
+#### Local Script Issues
+
+```bash
+# Check script permissions
+ls -la scripts/release.sh
+
+# Make executable if needed
+chmod +x scripts/release.sh
+
+# Run with verbose output
+bash -x scripts/release.sh --patch
+```
+
+#### GitHub Actions Issues
+
+- **Workflow not found**: Check `.github/workflows/auto-release.yml` exists
+- **Permission denied**: Ensure workflow has proper permissions
+- **Version conflicts**: Check if tag already exists
+
+#### GitHub CLI Issues
+
+```bash
+# Check authentication
+gh auth status
+
+# Re-authenticate if needed
+gh auth login
+
+# Check repository access
+gh repo view umi-labs/porter
+```
 
 ## Getting Help
 
