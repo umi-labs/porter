@@ -1,0 +1,159 @@
+name: Automated Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: 'Version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      version:
+        description: 'Specific version (leave empty for auto-bump)'
+        required: false
+        type: string
+      skip_tests:
+        description: 'Skip running tests'
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: 'Dry run (show what would be done)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automated-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+
+      - name: Get current version
+        id: current_version
+        run: |
+          CURRENT_VERSION=$(grep '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "Current version: $CURRENT_VERSION"
+
+      - name: Calculate new version
+        id: new_version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            NEW_VERSION="${{ github.event.inputs.version }}"
+          else
+            CURRENT_VERSION="${{ steps.current_version.outputs.current_version }}"
+            VERSION_TYPE="${{ github.event.inputs.version_type }}"
+            
+            IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+            MAJOR=${VERSION_PARTS[0]}
+            MINOR=${VERSION_PARTS[1]}
+            PATCH=${VERSION_PARTS[2]}
+            
+            case $VERSION_TYPE in
+              "patch")
+                PATCH=$((PATCH + 1))
+                ;;
+              "minor")
+                MINOR=$((MINOR + 1))
+                PATCH=0
+                ;;
+              "major")
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+                PATCH=0
+                ;;
+            esac
+            
+            NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          fi
+          
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+
+      - name: Validate version format
+        run: |
+          VERSION="${{ steps.new_version.outputs.new_version }}"
+          if ! [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Invalid version format: $VERSION. Expected format: X.Y.Z"
+            exit 1
+          fi
+
+      - name: Run tests
+        if: ${{ !github.event.inputs.skip_tests }}
+        run: cargo test
+
+      - name: Build project
+        run: cargo build --release
+
+      - name: Update version in Cargo.toml
+        if: ${{ !github.event.inputs.dry_run }}
+        run: |
+          NEW_VERSION="${{ steps.new_version.outputs.new_version }}"
+          sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
+          echo "Updated Cargo.toml version to $NEW_VERSION"
+
+      - name: Commit version bump
+        if: ${{ !github.event.inputs.dry_run }}
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add Cargo.toml
+          git commit -m "release: bump version to ${{ steps.new_version.outputs.new_version }}"
+
+      - name: Create and push tag
+        if: ${{ !github.event.inputs.dry_run }}
+        run: |
+          git tag -a "v${{ steps.new_version.outputs.new_version }}" -m "Release v${{ steps.new_version.outputs.new_version }}"
+          git push origin "v${{ steps.new_version.outputs.new_version }}"
+
+      - name: Push changes
+        if: ${{ !github.event.inputs.dry_run }}
+        run: |
+          git push origin prod
+
+      - name: Create release summary
+        run: |
+          echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Current Version**: ${{ steps.current_version.outputs.current_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **New Version**: ${{ steps.new_version.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version Type**: ${{ github.event.inputs.version_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Mode**: ${{ github.event.inputs.dry_run && 'DRY RUN' || 'LIVE' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ github.event.inputs.dry_run }}" = "false" ]; then
+            echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+            echo "1. Monitor the release workflow: [Actions](https://github.com/umi-labs/porter/actions)" >> $GITHUB_STEP_SUMMARY
+            echo "2. Check the release: [Releases](https://github.com/umi-labs/porter/releases)" >> $GITHUB_STEP_SUMMARY
+            echo "3. Test Homebrew installation: \`brew install umi-labs/tap/porter\`" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Show dry run summary
+        if: ${{ github.event.inputs.dry_run }}
+        run: |
+          echo "## Dry Run Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "This was a dry run. The following would have been done:" >> $GITHUB_STEP_SUMMARY
+          echo "- Update Cargo.toml version to ${{ steps.new_version.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit version bump" >> $GITHUB_STEP_SUMMARY
+          echo "- Create tag v${{ steps.new_version.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Push tag and changes" >> $GITHUB_STEP_SUMMARY
