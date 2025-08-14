@@ -71,7 +71,7 @@ porter/
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/porter.git
+git clone https://github.com/umi-labs/porter.git
 cd porter
 
 # Install dependencies
@@ -569,6 +569,31 @@ Porter uses semantic versioning (MAJOR.MINOR.PATCH):
    # Upload to GitHub releases
    ```
 
+### GitHub Releases & Homebrew Tap
+
+#### GitHub Releases
+- Pre-built binaries are automatically generated for multiple platforms
+- Release notes are automatically generated from the changelog
+- Assets include checksums for verification
+
+#### Homebrew Tap Setup
+The Homebrew tap is configured to automatically update when new releases are published:
+
+```bash
+# Users can install via:
+brew install umi-labs/tap/porter
+
+# The tap automatically tracks the latest stable release
+```
+
+#### Release Assets
+Each release includes:
+- **macOS (Apple Silicon)**: `porter-aarch64-apple-darwin.tar.xz`
+- **macOS (Intel)**: `porter-x86_64-apple-darwin.tar.xz`
+- **Windows**: `porter-x86_64-pc-windows-msvc.zip`
+- **Linux (ARM64)**: `porter-aarch64-unknown-linux-gnu.tar.xz`
+- **Linux (x64)**: `porter-x86_64-unknown-linux-gnu.tar.xz`
+
 ### Pre-release Testing
 
 - [ ] All tests pass
@@ -576,6 +601,8 @@ Porter uses semantic versioning (MAJOR.MINOR.PATCH):
 - [ ] Performance benchmarks are acceptable
 - [ ] Integration tests pass
 - [ ] User guide examples work
+- [ ] Homebrew installation works correctly
+- [ ] Pre-built binaries are functional on all platforms
 
 ## Getting Help
 
@@ -589,4 +616,4 @@ Porter uses semantic versioning (MAJOR.MINOR.PATCH):
 - Review the [user guide](user-guide.md) for user-facing features
 - Check [examples](examples/) for usage patterns
 - Explore [plugins](plugins/) for extension patterns
-- Join the [community discussions](https://github.com/your-org/porter/discussions)
+- Join the [community discussions](https://github.com/umi-labs/porter/discussions)
