@@ -22,6 +22,9 @@
 
 ## Installation
 
+### Homebrew Version
+Install via homebrew
+
 ### Prerequisites
 - Rust toolchain (2024 edition)
 - Cargo package manager
