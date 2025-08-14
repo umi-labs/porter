@@ -3,6 +3,10 @@ name = "porter"
 version = "0.1.0"
 edition = "2024"
 repository = "https://github.com/umi-labs/porter"
+description = "Porter is a high-performance, Rust-based CLI tool for migrating structured content between different systems. It supports complex nested data structures, parallel processing, and provides an intuitive interactive interface for data transformation."
+license = "MIT"
+authors = ["Isaac <isaac@umidigital.co.uk>"]
+homepage = "https://github.com/umi-labs/porter"
 
 [dependencies]
 anyhow = "1"
