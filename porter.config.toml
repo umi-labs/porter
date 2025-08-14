@@ -1,0 +1,23 @@
+source = "umbraco"
+target = "payload"
+output = "./seed"
+interactive = true
+verbose = true
+dry_run = false
+debug = false
+fixtures = false
+
+[[collections]]
+name = "hotels"
+source_data = "./test-data/hotels.json"
+collection_path = "./test-data/hotels.ts"
+related_collections = [
+    "countries",
+    "regions",
+    "amenities",
+]
+
+[[collections]]
+name = "pages"
+source_data = "./test-data/pages.json"
+collection_path = "./test-data/pages.ts"

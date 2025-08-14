@@ -1,0 +1,45 @@
+use clap::{Parser, ArgAction, Subcommand};
+
+#[derive(Parser, Debug)]
+#[command(name = "porter", version, about = "Data migration CLI")]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+    
+    #[arg(long)]
+    pub source: Option<String>,
+    #[arg(long)]
+    pub target: Option<String>,
+    #[arg(long, default_value = "./seed")]
+    pub output: String,
+    #[arg(long)]
+    pub plugin_dir: Option<String>,
+    #[arg(long, action=ArgAction::SetTrue)]
+    pub list_adapters: bool,
+    #[arg(long, action=ArgAction::SetTrue)]
+    pub interactive: bool,
+    #[arg(long, action=ArgAction::SetTrue)]
+    pub dry_run: bool,
+    #[arg(long, action=ArgAction::SetTrue)]
+    pub verbose: bool,
+    #[arg(long, action=ArgAction::SetTrue)]
+    pub debug: bool,
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub fixtures: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    /// Initialize a new Porter configuration file
+    Init {
+        /// Output file path for the configuration
+        #[arg(short, long, default_value = "porter.config.toml")]
+        output: String,
+    },
+    /// Show current configuration
+    Config {
+        /// Configuration file to read
+        #[arg(short, long)]
+        file: Option<String>,
+    },
+}
