@@ -15,16 +15,38 @@ Porter is a powerful, high-performance data migration tool designed to transform
 
 ## Installation
 
-### Prerequisites
+### 🍺 Homebrew (Recommended)
+
+The easiest way to install Porter is via Homebrew:
+
+```bash
+brew install umi-labs/tap/porter
+```
+
+This will install the latest stable version and keep it updated with `brew upgrade`.
+
+### 📦 Pre-built Binaries
+
+Download pre-built binaries for your platform from the [GitHub releases page](https://github.com/umi-labs/porter/releases):
+
+- **macOS (Apple Silicon)**: `porter-aarch64-apple-darwin.tar.xz`
+- **macOS (Intel)**: `porter-x86_64-apple-darwin.tar.xz`
+- **Windows**: `porter-x86_64-pc-windows-msvc.zip`
+- **Linux (ARM64)**: `porter-aarch64-unknown-linux-gnu.tar.xz`
+- **Linux (x64)**: `porter-x86_64-unknown-linux-gnu.tar.xz`
+
+### 🔧 Building from Source
+
+#### Prerequisites
 
 - Rust 1.70+ (for building from source)
 - Git (for cloning the repository)
 
-### Building from Source
+#### Build Steps
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/porter.git
+git clone https://github.com/umi-labs/porter.git
 cd porter
 
 # Build the project
@@ -37,7 +59,7 @@ cargo install --path .
 porter --help
 ```
 
-### Alternative: Local Build
+#### Alternative: Local Build
 ```bash
 # Build without installing globally
 cargo build --release
@@ -45,10 +67,6 @@ cargo build --release
 # Run from the project directory
 ./target/release/porter --help
 ```
-
-### Using Pre-built Binaries
-
-Download the latest release from the [releases page](https://github.com/your-org/porter/releases).
 
 ## Quick Start
 

@@ -22,10 +22,29 @@
 
 ## Installation
 
-### Homebrew Version
-Install via homebrew
+### 🍺 Homebrew (Recommended)
 
-### Prerequisites
+The easiest way to install Porter is via Homebrew:
+
+```bash
+brew install umi-labs/tap/porter
+```
+
+This will install the latest stable version and keep it updated with `brew upgrade`.
+
+### 📦 Pre-built Binaries
+
+Download pre-built binaries for your platform from the [GitHub releases page](https://github.com/umi-labs/porter/releases):
+
+- **macOS (Apple Silicon)**: `porter-aarch64-apple-darwin.tar.xz`
+- **macOS (Intel)**: `porter-x86_64-apple-darwin.tar.xz`
+- **Windows**: `porter-x86_64-pc-windows-msvc.zip`
+- **Linux (ARM64)**: `porter-aarch64-unknown-linux-gnu.tar.xz`
+- **Linux (x64)**: `porter-x86_64-unknown-linux-gnu.tar.xz`
+
+### 🔧 Building from Source
+
+#### Prerequisites
 - Rust toolchain (2024 edition)
 - Cargo package manager
 
@@ -35,10 +54,10 @@ Install via homebrew
 
 You can check with: `echo $PATH` (Unix) or `echo %PATH%` (Windows)
 
-### Building from Source
+#### Build Steps
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/porter.git
+git clone https://github.com/umi-labs/porter.git
 cd porter
 
 # Build the project
@@ -285,8 +304,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🆘 Support
 
 - **Documentation**: Start with the [User Guide](docs/user-guide.md)
-- **Issues**: [GitHub Issues](https://github.com/your-org/porter/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/your-org/porter/discussions)
+- **Issues**: [GitHub Issues](https://github.com/umi-labs/porter/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/umi-labs/porter/discussions)
 - **API Questions**: Check the [API Reference](docs/api-reference.md)
 
 ---
