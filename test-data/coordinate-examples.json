@@ -1,0 +1,86 @@
+{
+  "examples": [
+    {
+      "name": "Single Coordinate Object",
+      "description": "Coordinates as a single object with lat/lng properties",
+      "data": {
+        "id": 1,
+        "name": "Hotel A",
+        "coordinates": {
+          "lat": 40.7128,
+          "lng": -74.0060
+        },
+        "address": "123 Main St, New York"
+      },
+      "expected_mapping": {
+        "transform": "to_point",
+        "params": {
+          "lat": "coordinates.lat",
+          "lng": "coordinates.lng"
+        }
+      }
+    },
+    {
+      "name": "Separate Latitude and Longitude Fields",
+      "description": "Coordinates as separate latitude and longitude fields",
+      "data": {
+        "id": 2,
+        "name": "Hotel B",
+        "latitude": 34.0522,
+        "longitude": -118.2437,
+        "address": "456 Oak Ave, Los Angeles"
+      },
+      "expected_mapping": {
+        "transform": "combine_coordinates",
+        "params": {
+          "lat_field": "latitude",
+          "lng_field": "longitude"
+        }
+      }
+    },
+    {
+      "name": "Alternative Field Names",
+      "description": "Coordinates with alternative field names",
+      "data": {
+        "id": 3,
+        "name": "Hotel C",
+        "lat": 51.5074,
+        "lng": -0.1278,
+        "address": "789 Park Lane, London"
+      },
+      "expected_mapping": {
+        "transform": "combine_coordinates",
+        "params": {
+          "lat_field": "lat",
+          "lng_field": "lng"
+        }
+      }
+    },
+    {
+      "name": "Mixed Coordinate Formats",
+      "description": "Multiple hotels with different coordinate formats",
+      "data": [
+        {
+          "id": 4,
+          "name": "Hotel D",
+          "coordinates": {
+            "lat": 48.8566,
+            "lng": 2.3522
+          }
+        },
+        {
+          "id": 5,
+          "name": "Hotel E",
+          "latitude": 35.6762,
+          "longitude": 139.6503
+        },
+        {
+          "id": 6,
+          "name": "Hotel F",
+          "lat": -33.8688,
+          "lng": 151.2093
+        }
+      ]
+    }
+  ]
+}

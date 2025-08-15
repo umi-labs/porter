@@ -36,7 +36,8 @@ fn test_umbraco_to_payload() -> Result<()> {
         "payload",
         &docs,
         None,
-        false
+        false,
+        None
     )?;
     
     // Apply mapping

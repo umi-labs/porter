@@ -1,0 +1,46 @@
+{
+  "example_collections": [
+    {
+      "name": "hotels",
+      "description": "Hotel collection with coordinate mapping",
+      "source_data": "./test-data/hotels.json",
+      "collection_path": "./schemas/hotels.ts",
+      "locale": "en"
+    },
+    {
+      "name": "pages", 
+      "description": "Page collection with content mapping",
+      "source_data": "./test-data/pages.json",
+      "collection_path": "./schemas/pages.ts",
+      "locale": "en"
+    },
+    {
+      "name": "restaurants",
+      "description": "Restaurant collection with location data",
+      "source_data": "./test-data/restaurants.json", 
+      "collection_path": "./schemas/restaurants.ts",
+      "locale": "en"
+    }
+  ],
+  "expected_progress_output": [
+    "🔄 Processing Collection: 1/3 - hotels",
+    "📋 Collections remaining: 2",
+    "=== Collection: hotels ===",
+    "=== Collection Progress: 1/3 ===",
+    "=== Field Progress: 1/5 ===",
+    "📊 Progress Summary - Collection: hotels (1/3)",
+    "",
+    "🔄 Processing Collection: 2/3 - pages", 
+    "📋 Collections remaining: 1",
+    "=== Collection: pages ===",
+    "=== Collection Progress: 2/3 ===",
+    "=== Field Progress: 1/3 ===",
+    "📊 Progress Summary - Collection: pages (2/3)",
+    "",
+    "🔄 Processing Collection: 3/3 - restaurants",
+    "=== Collection: restaurants ===",
+    "=== Collection Progress: 3/3 ===",
+    "=== Field Progress: 1/4 ===",
+    "📊 Progress Summary - Collection: restaurants (3/3)"
+  ]
+}

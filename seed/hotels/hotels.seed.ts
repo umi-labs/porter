@@ -3,7 +3,12 @@
 
 export const seed = [
   {
-    "featureImage": "Botswana",
-    "title": "Jack's Camp"
+    "coordinates": {
+      "coordinates": [
+        25.184771,
+        -20.496752
+      ],
+      "type": "Point"
+    }
   }
 ] as const;
