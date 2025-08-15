@@ -158,10 +158,19 @@ fn main() -> Result<()> {
     }
 
     // Process each collection
-    for collection_config in &config.collections {
+    let total_collections = config.collections.len();
+    for (collection_index, collection_config) in config.collections.iter().enumerate() {
+        let current_collection = collection_index + 1;
+        
         println!();
-        println!("{}", format!("🔄 Processing Collection: {}", collection_config.name).cyan().bold());
-        println!("{}", "─".repeat(60));
+        println!("{}", format!("🔄 Processing Collection: {}/{} - {}", current_collection, total_collections, collection_config.name).cyan().bold());
+        println!("{}", "─".repeat(80));
+        
+        if current_collection < total_collections {
+            let remaining_collections = total_collections - current_collection;
+            println!("{}", format!("📋 Collections remaining: {}", remaining_collections).yellow());
+            println!();
+        }
 
         // 1) Read source docs for this collection
         info!("Reading source documents from {:?}", collection_config.source_data);
@@ -178,7 +187,8 @@ fn main() -> Result<()> {
             target,
             &docs,
             collection_config.collection_path.as_deref(),
-            config.interactive
+            config.interactive,
+            Some((current_collection, total_collections))
         )?;
         info!("Mapping loaded with {} field mappings", mapping.field_mappings.len());
 

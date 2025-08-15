@@ -21,4 +21,12 @@ pub fn to_point_from_latlng(lat: &Value, lng: &Value) -> Result<Value> {
     Ok(json!({"type":"Point","coordinates":[lng,lat]}))
 }
 
+/// Combines coordinates from separate latitude and longitude fields in a document
+pub fn combine_coordinates_from_fields(doc: &Value, lat_field: &str, lng_field: &str) -> Result<Value> {
+    let lat = get_path(doc, lat_field).ok_or_else(|| anyhow!("Latitude field '{}' not found", lat_field))?;
+    let lng = get_path(doc, lng_field).ok_or_else(|| anyhow!("Longitude field '{}' not found", lng_field))?;
+    
+    to_point_from_latlng(lat, lng)
+}
+
 // … add: split_comma, media_ref, maps for select, to_rich_text, etc.

@@ -14,8 +14,14 @@ use crate::util::fs;
 use crate::util::interact;
 use self::json_mapping::{Mapping, FieldMapping};
 use self::nested::{NestedPath, NestedMapping, apply_nested_mapping};
-use self::transforms::{get_path, to_point_from_latlng};
+use self::transforms::{get_path, to_point_from_latlng, combine_coordinates_from_fields};
 use self::validation::{validate_mapping, create_schema_from_documents, ValidationResult};
+
+/// Result of coordinate combination operation
+struct CombineCoordinatesResult {
+    transforms: Vec<Value>,
+    description: String,
+}
 
 /// Generates a mapping file path based on the collection name
 pub fn get_mapping_path(collection: &str, source: &str, target: &str) -> String {
@@ -29,7 +35,8 @@ pub fn load_or_create_mapping(
     target: &str,
     source_docs: &[Value],
     collection_path: Option<&str>,
-    interactive: bool
+    interactive: bool,
+    collection_progress: Option<(usize, usize)>
 ) -> Result<Mapping> {
     let mapping_path = get_mapping_path(collection, source, target);
 
@@ -69,7 +76,7 @@ pub fn load_or_create_mapping(
     };
 
     // Generate field mappings
-    let field_mappings = generate_field_mappings(&source_fields, &target_fields, interactive)?;
+    let field_mappings = generate_field_mappings(&source_fields, &target_fields, interactive, Some(collection), collection_progress)?;
 
     let mapping = Mapping {
         source: source.to_string(),
@@ -226,7 +233,9 @@ fn extract_source_fields(doc: &Value) -> Vec<String> {
 fn generate_field_mappings(
     source_fields: &[String], 
     target_fields: &[String],
-    interactive: bool
+    interactive: bool,
+    collection_name: Option<&str>,
+    collection_progress: Option<(usize, usize)>
 ) -> Result<Vec<FieldMapping>> {
     let mut mappings = Vec::new();
     let mut used_source_fields = std::collections::HashSet::<String>::new();
@@ -261,6 +270,10 @@ fn generate_field_mappings(
     // Show initial configuration message
     clear_screen();
     println!("{}", "=== Field Mapping Configuration ===".cyan().bold());
+    if let Some(collection) = collection_name {
+        println!("{}", format!("Collection: {}", collection).white().bold());
+        println!();
+    }
     println!("{}", "Configure field mappings from Umbraco to Payload CMS".white());
     println!("{}", "Use arrow keys to navigate and Enter to select".white());
     println!();
@@ -270,7 +283,13 @@ fn generate_field_mappings(
         
         // Clear screen and show progress header
         clear_screen();
-        println!("{}", format!("=== Progress: {}/{} ===", current_field, total_fields).yellow().bold());
+        if let Some(collection) = collection_name {
+            println!("{}", format!("=== Collection: {} ===", collection).blue().bold());
+            if let Some((current_collection, total_collections)) = collection_progress {
+                println!("{}", format!("=== Collection Progress: {}/{} ===", current_collection, total_collections).green().bold());
+            }
+        }
+        println!("{}", format!("=== Field Progress: {}/{} ===", current_field, total_fields).yellow().bold());
         println!("{}", format!("=== Mapping for target field: {} ===", target).magenta().bold());
 
         // Suggest matching source fields
@@ -297,7 +316,7 @@ fn generate_field_mappings(
         options.push("Skip this field".to_string());
         
         // Show progress table
-        display_progress_table(&completed_mappings, &target_fields, current_field, total_fields);
+        display_progress_table(&completed_mappings, &target_fields, current_field, total_fields, collection_name, collection_progress);
 
         // Prompt user to select a source field using arrow keys
         let selection = interact::select_with_arrows("Select source field by using arrow keys to move up and down and enter to select:", &options, target)?;
@@ -324,6 +343,7 @@ fn generate_field_mappings(
             let transform_options = vec![
                 "None",
                 "Convert to point (for coordinates)",
+                "Combine coordinates from separate fields",
                 "Split by comma",
                 "Custom (specify later)"
             ];
@@ -343,13 +363,19 @@ fn generate_field_mappings(
                     transform_description = "point".to_string();
                 },
                 2 => {
+                    // Combine coordinates from separate fields
+                    let combine_result = handle_combine_coordinates(selected_source, &source_fields)?;
+                    transforms.extend(combine_result.transforms);
+                    transform_description = combine_result.description;
+                },
+                3 => {
                     // Split by comma
                     transforms.push(json!({
                         "type": "split_comma"
                     }));
                     transform_description = "split".to_string();
                 },
-                3 => {
+                4 => {
                     // Custom - would need more sophisticated handling
                     let custom = interact::prompt("Enter custom transform (JSON)")?;
                     if !custom.is_empty() {
@@ -413,14 +439,136 @@ fn clear_screen() {
     io::stdout().flush().unwrap();
 }
 
+/// Handles coordinate combination from separate fields
+fn handle_combine_coordinates(selected_source: &str, source_fields: &[String]) -> Result<CombineCoordinatesResult> {
+    println!("{}", "Coordinate combination options:".cyan());
+    println!("1. Single coordinate object (e.g., {{ lat: 1.23, lng: 4.56 }})");
+    println!("2. Separate latitude and longitude fields");
+    
+    let choice = interact::select_with_default("Choose coordinate format:", &["Single object", "Separate fields"], 0)?;
+    
+    match choice {
+        0 => {
+            // Single coordinate object - use existing to_point logic
+            let transforms = vec![json!({
+                "type": "to_point",
+                "params": {
+                    "lat": format!("{}.lat", selected_source),
+                    "lng": format!("{}.lng", selected_source)
+                }
+            })];
+            
+            Ok(CombineCoordinatesResult {
+                transforms,
+                description: "point".to_string(),
+            })
+        },
+        1 => {
+            // Separate latitude and longitude fields
+            let lat_field = select_coordinate_field("latitude", source_fields)?;
+            let lng_field = select_coordinate_field("longitude", source_fields)?;
+            
+            let transforms = vec![json!({
+                "type": "combine_coordinates",
+                "params": {
+                    "lat_field": lat_field,
+                    "lng_field": lng_field
+                }
+            })];
+            
+            Ok(CombineCoordinatesResult {
+                transforms,
+                description: format!("combine({}+{})", lat_field, lng_field),
+            })
+        },
+        _ => Err(anyhow!("Invalid choice for coordinate combination"))
+    }
+}
+
+/// Helper function to select a coordinate field
+fn select_coordinate_field(coordinate_type: &str, source_fields: &[String]) -> Result<String> {
+    println!("{}", format!("Select {} field:", coordinate_type).cyan());
+    
+    // Filter fields that might be coordinate-related
+    let coordinate_keywords = match coordinate_type {
+        "latitude" => vec!["lat", "latitude", "y"],
+        "longitude" => vec!["lng", "long", "longitude", "x"],
+        _ => vec![]
+    };
+    
+    let mut options = Vec::new();
+    let mut coordinate_fields = Vec::new();
+    
+    // Add fields that match coordinate keywords first
+    for field in source_fields {
+        let field_lower = field.to_lowercase();
+        if coordinate_keywords.iter().any(|keyword| field_lower.contains(keyword)) {
+            coordinate_fields.push(field.clone());
+        }
+    }
+    
+    // Add coordinate-related fields first
+    options.extend(coordinate_fields.clone());
+    
+    // Add separator if we have coordinate fields
+    if !coordinate_fields.is_empty() {
+        options.push("--- Other fields ---".to_string());
+    }
+    
+    // Add all other fields
+    for field in source_fields {
+        if !coordinate_fields.contains(field) {
+            options.push(field.clone());
+        }
+    }
+    
+    let selection = interact::select_with_arrows(
+        &format!("Select {} field:", coordinate_type),
+        &options,
+        coordinate_type
+    )?;
+    
+    if selection < coordinate_fields.len() {
+        Ok(coordinate_fields[selection].clone())
+    } else if !coordinate_fields.is_empty() && selection == coordinate_fields.len() {
+        // User selected the separator, so select from other fields
+        let other_fields: Vec<String> = source_fields.iter()
+            .filter(|f| !coordinate_fields.contains(f))
+            .cloned()
+            .collect();
+        
+        let other_selection = interact::select_with_arrows(
+            &format!("Select {} field from other fields:", coordinate_type),
+            &other_fields,
+            coordinate_type
+        )?;
+        
+        Ok(other_fields[other_selection].clone())
+    } else {
+        // Direct selection from all fields
+        let adjusted_index = if !coordinate_fields.is_empty() { selection - 1 } else { selection };
+        Ok(options[adjusted_index].clone())
+    }
+}
+
 /// Displays a progress table showing completed mappings and remaining fields
 fn display_progress_table(
     completed_mappings: &[(String, String, String, String)], 
     target_fields: &[String], 
     current_field: usize, 
-    total_fields: usize
+    total_fields: usize,
+    collection_name: Option<&str>,
+    collection_progress: Option<(usize, usize)>
 ) {
-    println!("{}", "📊 Progress Summary".cyan().bold());
+    if let Some(collection) = collection_name {
+        let mut title = format!("📊 Progress Summary - Collection: {}", collection);
+        if let Some((current_collection, total_collections)) = collection_progress {
+            title.push_str(&format!(" ({}/{})", current_collection, total_collections));
+        }
+        println!("{}", title.cyan().bold());
+    } else {
+        println!("{}", "📊 Progress Summary".cyan().bold());
+    }
     println!("{}", "─".repeat(80));
     
     // Show completed mappings
@@ -582,7 +730,18 @@ fn extract_value(doc: &Value, from: &Value, transforms: &[Value]) -> Result<Valu
 
     // Apply transforms
     for transform in transforms {
-        value = apply_transform(&value, transform)?;
+        // Special handling for combine_coordinates transform
+        if let Some(transform_type) = transform.get("type").and_then(Value::as_str) {
+            if transform_type == "combine_coordinates" {
+                // For combine_coordinates, pass the original document instead of the extracted value
+                value = apply_transform(doc, transform)?;
+            } else {
+                // For other transforms, apply to the extracted value
+                value = apply_transform(&value, transform)?;
+            }
+        } else {
+            value = apply_transform(&value, transform)?;
+        }
     }
 
     Ok(value)
@@ -603,6 +762,19 @@ fn apply_transform(value: &Value, transform: &Value) -> Result<Value> {
                     to_point_from_latlng(lat, lng)
                 } else {
                     Err(anyhow!("Missing params for to_point transform"))
+                }
+            },
+            "combine_coordinates" => {
+                if let Some(params) = transform.get("params") {
+                    let lat_field = params.get("lat_field").and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("Missing lat_field parameter"))?;
+                    let lng_field = params.get("lng_field").and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("Missing lng_field parameter"))?;
+
+                    // Use the helper function to combine coordinates from the document
+                    combine_coordinates_from_fields(value, lat_field, lng_field)
+                } else {
+                    Err(anyhow!("Missing params for combine_coordinates transform"))
                 }
             },
             "split_comma" => {
@@ -678,6 +850,62 @@ mod tests {
     }
 
     #[test]
+    fn test_combine_coordinates_transform() {
+        let doc = json!({
+            "latitude": 40.7128,
+            "longitude": -74.0060,
+            "name": "New York"
+        });
+
+        let transform = json!({
+            "type": "combine_coordinates",
+            "params": {
+                "lat_field": "latitude",
+                "lng_field": "longitude"
+            }
+        });
+
+        let result = apply_transform(&doc, &transform).unwrap();
+        
+        assert_eq!(result, json!({
+            "type": "Point",
+            "coordinates": [-74.0060, 40.7128]
+        }));
+    }
+
+    #[test]
+    fn test_combine_coordinates_with_field_mapping() {
+        // Simulate the user's scenario with rcasLatitude and rcasLongitude
+        let doc = json!({
+            "rcasLatitude": 40.7128,
+            "rcasLongitude": -74.0060,
+            "name": "Hotel A"
+        });
+
+        // Create a field mapping similar to what the user created
+        let field_mapping = FieldMapping {
+            to: "coordinates".to_string(),
+            from: json!("rcasLatitude"), // This is the issue - we're extracting from rcasLatitude
+            transforms: vec![json!({
+                "type": "combine_coordinates",
+                "params": {
+                    "lat_field": "rcasLatitude",
+                    "lng_field": "rcasLongitude"
+                }
+            })],
+            fallback: None,
+        };
+
+        // Test the extract_value function directly
+        let result = extract_value(&doc, &field_mapping.from, &field_mapping.transforms).unwrap();
+        
+        assert_eq!(result, json!({
+            "type": "Point",
+            "coordinates": [-74.0060, 40.7128]
+        }));
+    }
+
+    #[test]
     fn test_save_and_load_mapping() -> Result<()> {
         let original_mapping = Mapping {
             source: "umbraco".to_string(),
@@ -704,7 +932,7 @@ mod tests {
         save_mapping(&original_mapping)?;
 
         // Load mapping
-        let loaded_mapping = load_or_create_mapping("hotels", "umbraco", "payload", &vec![json!({})], None, false)?;
+        let loaded_mapping = load_or_create_mapping("hotels", "umbraco", "payload", &vec![json!({})], None, false, None)?;
 
         // Verify they match
         assert_eq!(original_mapping.source, loaded_mapping.source);
@@ -868,7 +1096,7 @@ mod tests {
 
     #[test]
     fn test_load_nonexistent_mapping() {
-        let result = load_or_create_mapping("hotels", "umbraco", "payload", &vec![json!({})], None, false);
+        let result = load_or_create_mapping("hotels", "umbraco", "payload", &vec![json!({})], None, false, None);
         // Should create a new mapping when file doesn't exist
         assert!(result.is_ok());
     }

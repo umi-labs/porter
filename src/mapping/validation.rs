@@ -218,6 +218,10 @@ fn validate_transforms(
                     // Validate to_point transform
                     validate_to_point_transform(transform, result);
                 }
+                "combine_coordinates" => {
+                    // Validate combine_coordinates transform
+                    validate_combine_coordinates_transform(transform, result);
+                }
                 _ => {
                     result.warnings.push(ValidationWarning {
                         field: field_mapping.to.clone(),
@@ -247,6 +251,28 @@ fn validate_to_point_transform(transform: &Value, result: &mut ValidationResult)
         result.errors.push(ValidationError {
             field: "to_point".to_string(),
             message: "to_point transform requires 'params' object".to_string(),
+            severity: ErrorSeverity::Error,
+        });
+    }
+}
+
+/// Validates the combine_coordinates transform
+fn validate_combine_coordinates_transform(transform: &Value, result: &mut ValidationResult) {
+    if let Some(params) = transform.get("params") {
+        let lat_field = params.get("lat_field").and_then(Value::as_str);
+        let lng_field = params.get("lng_field").and_then(Value::as_str);
+
+        if lat_field.is_none() || lng_field.is_none() {
+            result.errors.push(ValidationError {
+                field: "combine_coordinates".to_string(),
+                message: "combine_coordinates transform requires 'lat_field' and 'lng_field' parameters".to_string(),
+                severity: ErrorSeverity::Error,
+            });
+        }
+    } else {
+        result.errors.push(ValidationError {
+            field: "combine_coordinates".to_string(),
+            message: "combine_coordinates transform requires 'params' object".to_string(),
             severity: ErrorSeverity::Error,
         });
     }

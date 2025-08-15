@@ -257,6 +257,38 @@ pub fn create_schema_from_documents(documents: &[Value]) -> SchemaInfo
 ```
 Creates schema information from document samples.
 
+### `porter::mapping::transforms`
+
+Coordinate and data transformation utilities.
+
+#### Functions
+
+```rust
+pub fn get_path<'a>(v: &'a Value, path: &str) -> Option<&'a Value>
+```
+Extracts a value from a JSON object using dot notation path.
+
+```rust
+pub fn to_point_from_latlng(lat: &Value, lng: &Value) -> Result<Value>
+```
+Converts latitude and longitude values to GeoJSON Point format.
+
+```rust
+pub fn combine_coordinates_from_fields(doc: &Value, lat_field: &str, lng_field: &str) -> Result<Value>
+```
+Combines coordinates from separate latitude and longitude fields in a document into GeoJSON Point format.
+
+#### Transform Types
+
+The mapping system supports several transform types:
+
+- **`to_point`**: Converts a coordinate object with `lat` and `lng` properties to GeoJSON Point
+- **`combine_coordinates`**: Combines separate latitude and longitude fields into GeoJSON Point
+  - **Special Behavior**: This transform operates on the entire document, not just the extracted value
+  - **Parameters**: `lat_field` and `lng_field` specify the field names to extract coordinates from
+- **`split_comma`**: Splits a comma-separated string into an array
+- **Custom transforms**: User-defined JSON transformations
+
 ## Adapter System
 
 ### `porter::adapter`
@@ -723,24 +755,4 @@ Key dependencies and their versions:
 
 - `anyhow = "1"` - Error handling
 - `serde = "1"` - Serialization
-- `serde_json = "1"` - JSON handling
-- `rayon = "1.10"` - Parallel processing
-- `clap = "4"` - CLI argument parsing
-- `dialoguer = "0.11"` - Interactive prompts
-- `colored = "2"` - Terminal colors
-- `log = "0.4"` - Logging
-- `chrono = "0.4"` - Date/time handling
-
-### Breaking Changes
-
-- **v0.2.0**: Added nested mapping support, breaking changes to mapping API
-- **v0.1.0**: Initial release
-
-## Support
-
-For API questions and issues:
-
-- **Documentation**: This API reference
-- **Examples**: Check the [examples directory](../examples/)
-- **Issues**: [GitHub Issues](https://github.com/your-org/porter/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/your-org/porter/discussions)
+- `serde_json = "1"`

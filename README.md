@@ -2,15 +2,19 @@
 
 **Porter** is a high-performance, Rust-based CLI tool for migrating structured content between different systems. It supports complex nested data structures, parallel processing, and provides an intuitive interactive interface for data transformation.
 
-## 🚀 Features
+## Features
 
-- **🔄 Interactive Mapping** - Guided field mapping with arrow key navigation and progress tracking
-- **🔗 Nested Data Support** - Handle complex nested structures with dot notation and array operations
-- **⚡ High Performance** - Parallel processing with rayon and memory-optimized batch processing
-- **📊 Batch Processing** - Efficient processing of large datasets with resume capability
-- **✅ Validation** - Comprehensive mapping validation and error reporting
-- **🔌 Plugin System** - Extensible adapter system for new source and target formats
-- **📝 Configuration Management** - Multi-collection configuration with TOML files
+- **Multi-source Support**: Connect to various data sources (Umbraco, WordPress, etc.)
+- **Multi-target Support**: Export to different CMS platforms (Payload, Strapi, etc.)
+- **Smart Field Mapping**: Interactive field mapping with intelligent suggestions
+- **Advanced Transformations**: 
+  - Coordinate mapping (single objects or separate lat/lng fields)
+  - Data type conversions
+  - Custom transformations
+- **Batch Processing**: Handle large datasets efficiently
+- **Validation**: Comprehensive mapping validation
+- **Progress Tracking**: Real-time progress monitoring with collection-level context
+- **Configuration Management**: Flexible configuration system
 
 ## 📚 Documentation
 

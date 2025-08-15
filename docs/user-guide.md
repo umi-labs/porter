@@ -199,6 +199,50 @@ When running in interactive mode, Porter will:
 - **Progress Tracking** - Real-time progress bars and statistics
 - **Confirmation Prompts** - Confirm important decisions with default values
 
+## Field Mapping
+
+### Basic Mapping
+
+For each target field, you'll be prompted to select a source field. The system will:
+
+1. Show available source fields
+2. Allow you to select a field or skip
+3. Ask if transformations are needed
+4. Apply the mapping
+
+### Transformations
+
+Porter supports several transformation types:
+
+#### Coordinate Transformations
+
+**Convert to Point (for coordinates)**
+- Use when source has a single coordinate object: `{ lat: 1.23, lng: 4.56 }`
+- Automatically extracts `lat` and `lng` properties
+- Converts to GeoJSON Point format: `{ "type": "Point", "coordinates": [lng, lat] }`
+
+**Combine Coordinates from Separate Fields**
+- Use when source has separate latitude and longitude fields
+- Examples: `latitude: 1.23` and `longitude: 4.56`
+- **Important**: When using this option, select either the latitude or longitude field as the source field - the transform will automatically find both fields in the document
+- Smart field selection with coordinate-related keywords prioritized
+- Combines into GeoJSON Point format
+
+**Field Selection Tips for Coordinate Combination:**
+- Choose either the latitude or longitude field as your source field
+- The system will automatically detect and use both fields
+- Coordinate-related fields (containing "lat", "latitude", "lng", "longitude", "x", "y") are prioritized in the selection list
+
+#### Other Transformations
+
+**Split by Comma**
+- Splits comma-separated strings into arrays
+- Example: `"tag1, tag2, tag3"` → `["tag1", "tag2", "tag3"]`
+
+**Custom Transformations**
+- Define custom JSON transformations
+- Advanced users can specify complex transformation logic
+
 ## Mapping System
 
 Porter supports both simple and complex field mappings.
@@ -487,3 +531,33 @@ export const Posts: CollectionConfig = {
 - Read the [maintainer guide](maintainer-guide.md) for development information
 - Check out [examples](examples/) for more use cases
 - Explore [plugins](plugins/) for extending functionality
+
+## Progress Tracking
+
+Porter provides comprehensive progress tracking at multiple levels:
+
+### Collection-Level Progress
+
+When processing multiple collections, Porter shows:
+
+- **Current Collection**: `🔄 Processing Collection: 1/3 - hotels`
+- **Collections Remaining**: `📋 Collections remaining: 2`
+- **Collection Progress**: Clear indication of which collection is being processed
+
+### Field-Level Progress
+
+During interactive field mapping, Porter displays:
+
+- **Collection Context**: `=== Collection: hotels ===`
+- **Collection Progress**: `=== Collection Progress: 1/5 ===`
+- **Field Progress**: `=== Field Progress: 1/40 ===`
+- **Current Field**: `=== Mapping for target field: title ===`
+- **Progress Summary**: `📊 Progress Summary - Collection: hotels (1/5)`
+
+### Progress Components
+
+- **Progress Bars**: Visual progress indicators with percentages
+- **Completed Mappings**: List of successfully mapped fields
+- **Remaining Fields**: Preview of upcoming fields to map
+- **Color Coding**: Different colors for different types of information
+- **Dual Progress Tracking**: Both collection-level and field-level progress
