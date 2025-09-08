@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod adapters; // New trait system
 pub mod batch;
 pub mod cli;
 pub mod config;
@@ -12,7 +13,6 @@ pub mod util;
 #[cfg(test)]
 mod tests {
 
-    
     #[test]
     fn test_library_compiles() {
         // Basic test to ensure the library compiles and can be imported
@@ -21,7 +21,8 @@ mod tests {
 }
 
 // Re-export commonly used items
-pub use adapter::{SourceReader, TargetWriter, TargetOptions};
-pub use sources::umbraco::UmbracoSource;
-pub use targets::payload::PayloadTarget;
+pub use adapter::{SourceReader, TargetOptions, TargetWriter};
 pub use plugin::{PluginManager, PluginRegistrar};
+pub use sources::umbraco::UmbracoSource;
+pub use sources::wordpress::WordPressSource;
+pub use targets::payload::PayloadTarget;

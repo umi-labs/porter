@@ -1,0 +1,196 @@
+{
+  "collection": "pages",
+  "field_mappings": [
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "date",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "menu_order",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "_links",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "acf",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "modified_gmt",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "ping_status",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "template",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "title",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "type",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "yoast_head",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "class_list",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "content",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "id",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "meta",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "guid",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "slug",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "status",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "excerpt",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "date_gmt",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "modified",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "parent",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "yoast_head_json",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "author",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "link",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "comment_status",
+      "target_field": "",
+      "transformation": "manual"
+    },
+    {
+      "confidence": 0.0,
+      "notes": "No automatic mapping found - requires manual mapping",
+      "source_field": "featured_media",
+      "target_field": "",
+      "transformation": "manual"
+    }
+  ],
+  "generated_at": "2025-09-08T15:21:44.129050+00:00",
+  "metadata": {
+    "automatic_mappings": 0,
+    "manual_mappings_needed": 26,
+    "total_mappings": 26
+  },
+  "source": "wordpress",
+  "source_endpoint": "pages",
+  "target": "payload"
+}

@@ -4,7 +4,7 @@
 
 ## Features
 
-- **Multi-source Support**: Connect to various data sources (Umbraco, WordPress, etc.)
+- **Multi-source Support**: Connect to various data sources (Umbraco, WordPress API, WordPress WXR files, etc.)
 - **Multi-target Support**: Export to different CMS platforms (Payload, Strapi, etc.)
 - **Smart Field Mapping**: Interactive field mapping with intelligent suggestions
 - **Advanced Transformations**: 
@@ -85,6 +85,35 @@ cargo build --release
 
 ## 🚀 Quick Start
 
+### Installation
+
+#### Homebrew (Recommended)
+
+```bash
+# Install Porter
+brew install umi-labs/tap/porter
+
+# Update to latest version
+brew update && brew upgrade porter
+
+# Verify installation
+porter --version
+```
+
+#### Manual Installation
+
+```bash
+# Clone and build
+git clone https://github.com/umi-labs/porter.git
+cd porter
+cargo build --release
+cargo install --path .
+
+# Update (when new versions are available)
+git pull origin main
+cargo install --path . --force
+```
+
 ### 1. Initialize Configuration
 
 ```bash
@@ -92,9 +121,20 @@ cargo build --release
 porter init
 
 # This will guide you through setting up your first collection
+# Now supports WordPress API as a source option!
 ```
 
-### 2. Run Migration
+### 2. Generate Mappings (New!)
+
+```bash
+# Generate field mappings for WordPress API endpoints
+porter generate
+
+# Generate mappings for a specific collection
+porter generate --collection pages
+```
+
+### 3. Run Migration
 
 ```bash
 # Run with interactive mapping
@@ -102,6 +142,22 @@ porter --interactive
 
 # Run with existing configuration
 porter
+
+# Migrate using generated mappings
+porter migrate
+```
+
+### 4. Get Help and Explanations
+
+```bash
+# Explain the migration process
+porter explain
+
+# Explain with specific configuration
+porter explain --config porter.config.toml
+
+# Show current configuration
+porter config
 ```
 
 ## 📖 Usage
@@ -227,6 +283,23 @@ porter --source umbraco --target payload --source-data ./data/umbraco.json --col
 
 # Dry run (no files written)
 porter --source umbraco --target payload --source-data ./data/umbraco.json --collection hotels --dry-run
+```
+
+### Migrating WordPress API to Payload CMS (New!)
+
+```bash
+# Initialize WordPress API configuration
+porter init
+# Select 'wordpress' as source, 'api' as input type, enter your WordPress API URL
+
+# Generate mappings for WordPress API endpoints
+porter generate --config porter.config.toml
+
+# Migrate data using generated mappings
+porter migrate --config porter.config.toml
+
+# Migrate specific collection
+porter migrate --config porter.config.toml --collection pages
 ```
 
 ### Complex Nested Data Example

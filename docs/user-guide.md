@@ -1,71 +1,266 @@
 # Porter User Guide
 
-Porter is a powerful, high-performance data migration tool designed to transform structured content between different systems. It supports complex nested data structures, parallel processing, and provides an intuitive interactive interface.
+Welcome to Porter! This guide will help you get started with migrating content between different systems.
 
 ## Table of Contents
 
 1. [Installation](#installation)
-2. [Quick Start](#quick-start)
-3. [Configuration](#configuration)
-4. [Usage](#usage)
-5. [Mapping System](#mapping-system)
-6. [Advanced Features](#advanced-features)
-7. [Examples](#examples)
-8. [Troubleshooting](#troubleshooting)
+2. [Updating Porter](#updating-porter)
+3. [Checking for Updates](#checking-for-updates)
+4. [Package Management Best Practices](#package-management-best-practices)
+5. [Quick Start](#quick-start)
+6. [Configuration](#configuration)
+7. [Field Mapping](#field-mapping)
+8. [Progress Tracking](#progress-tracking)
+9. [Troubleshooting](#troubleshooting)
 
 ## Installation
 
-### 🍺 Homebrew (Recommended)
-
-The easiest way to install Porter is via Homebrew:
+### Homebrew (macOS/Linux)
 
 ```bash
-brew install umi-labs/tap/porter
+# Install Porter
+brew install porter
+
+# Update Porter to the latest version
+brew update
+brew upgrade porter
+
+# Check current version
+porter --version
 ```
 
-This will install the latest stable version and keep it updated with `brew upgrade`.
+### Checking for Updates
 
-### 📦 Pre-built Binaries
+#### Homebrew Users
 
-Download pre-built binaries for your platform from the [GitHub releases page](https://github.com/umi-labs/porter/releases):
+```bash
+# Check if updates are available
+brew outdated
 
-- **macOS (Apple Silicon)**: `porter-aarch64-apple-darwin.tar.xz`
-- **macOS (Intel)**: `porter-x86_64-apple-darwin.tar.xz`
-- **Windows**: `porter-x86_64-pc-windows-msvc.zip`
-- **Linux (ARM64)**: `porter-aarch64-unknown-linux-gnu.tar.xz`
-- **Linux (x64)**: `porter-x86_64-unknown-linux-gnu.tar.xz`
+# Check Porter specifically
+brew outdated porter
 
-### 🔧 Building from Source
+# See what would be updated
+brew upgrade --dry-run porter
+```
 
-#### Prerequisites
+#### Manual Installation Users
 
-- Rust 1.70+ (for building from source)
-- Git (for cloning the repository)
+```bash
+# Check current version
+porter --version
 
-#### Build Steps
+# Check for new releases on GitHub
+# Visit: https://github.com/umi-labs/porter/releases
+
+# Or use GitHub CLI
+gh repo view umi-labs/porter --json releases
+```
+
+#### Development Version
+
+If you're tracking the development branch:
+
+```bash
+# Check current commit
+git log --oneline -1
+
+# Check for new commits
+git fetch origin
+git log HEAD..origin/main --oneline
+
+# See what files have changed
+git diff HEAD origin/main --name-only
+```
+
+## Package Management Best Practices
+
+### Recommended Installation Method
+
+**Homebrew is the recommended installation method** for most users because it:
+
+- Automatically handles dependencies
+- Provides easy updates with `brew upgrade`
+- Manages PATH configuration
+- Offers rollback capabilities
+- Integrates with macOS system updates
+
+### When to Use Manual Installation
+
+Consider manual installation if you:
+
+- Need a specific version not available in Homebrew
+- Want to contribute to development
+- Need to modify the source code
+- Are on a platform not supported by Homebrew
+
+### Version Management
+
+#### Stable vs Development
+
+- **Stable releases**: Available via Homebrew, recommended for production use
+- **Development builds**: Latest features but may be unstable, use for testing
+
+#### Pinning Versions
+
+If you need to stick to a specific version:
+
+```bash
+# Homebrew (not recommended, but possible)
+brew install umi-labs/tap/porter@<version>
+
+# Manual installation
+git checkout v<version>
+cargo install --path .
+```
+
+### Backup and Recovery
+
+Before major updates, consider backing up your configuration:
+
+```bash
+# Backup your Porter configuration
+cp ~/.porter/config.toml ~/.porter/config.toml.backup
+
+# Backup your mappings
+cp -r ./mappings ~/porter-mappings-backup
+```
+
+### Manual Installation
+
+If you prefer to build from source:
 
 ```bash
 # Clone the repository
-git clone https://github.com/umi-labs/porter.git
+git clone https://github.com/your-org/porter.git
 cd porter
 
-# Build the project
+# Build and install
 cargo build --release
-
-# Install globally (recommended)
 cargo install --path .
-
-# Now you can run 'porter' from anywhere!
-porter --help
 ```
 
-#### Alternative: Local Build
-```bash
-# Build without installing globally
-cargo build --release
+### Updating Porter
 
-# Run from the project directory
-./target/release/porter --help
+#### Homebrew Users
+
+```bash
+# Update Homebrew and Porter
+brew update
+brew upgrade porter
+
+# Verify the update
+porter --version
+```
+
+#### Manual Installation Users
+
+```bash
+# Navigate to your Porter directory
+cd porter
+
+# Pull latest changes
+git pull origin main
+
+# Rebuild and reinstall
+cargo build --release
+cargo install --path . --force
+```
+
+#### Development Updates
+
+If you're working with a development version:
+
+```bash
+# Pull latest changes
+git pull origin main
+
+# Update dependencies
+cargo update
+
+# Rebuild
+cargo build --release
+```
+
+## Troubleshooting
+
+### Update Issues
+
+#### Homebrew Update Problems
+
+If you encounter issues updating via Homebrew:
+
+```bash
+# Clean Homebrew cache
+brew cleanup
+
+# Update Homebrew itself
+brew update
+
+# Try upgrading again
+brew upgrade porter
+
+# If still having issues, try uninstalling and reinstalling
+brew uninstall porter
+brew install umi-labs/tap/porter
+```
+
+#### Manual Installation Issues
+
+If you encounter build errors after updating:
+
+```bash
+# Clean build artifacts
+cargo clean
+
+# Update Rust toolchain
+rustup update
+
+# Rebuild
+cargo build --release
+```
+
+#### Version Conflicts
+
+If you have multiple Porter installations:
+
+```bash
+# Check which Porter is being used
+which porter
+
+# Check all Porter installations
+find /usr/local/bin /opt/homebrew/bin ~/.cargo/bin -name "porter" 2>/dev/null
+
+# Remove old installations if needed
+rm /path/to/old/porter
+```
+
+### Common Issues
+
+#### "Command not found: porter"
+
+This usually means Porter isn't in your PATH:
+
+```bash
+# Check if Porter is installed
+brew list | grep porter
+
+# Add Homebrew to PATH (if not already done)
+echo 'export PATH="/opt/homebrew/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+#### Permission Errors
+
+If you get permission errors during installation:
+
+```bash
+# Fix Homebrew permissions
+sudo chown -R $(whoami) /opt/homebrew
+
+# Or for Intel Macs
+sudo chown -R $(whoami) /usr/local
 ```
 
 ## Quick Start
@@ -561,3 +756,40 @@ During interactive field mapping, Porter displays:
 - **Remaining Fields**: Preview of upcoming fields to map
 - **Color Coding**: Different colors for different types of information
 - **Dual Progress Tracking**: Both collection-level and field-level progress
+
+## Quick Reference
+
+### Common Update Commands
+
+| Action | Homebrew | Manual Installation |
+|--------|----------|-------------------|
+| Check version | `porter --version` | `porter --version` |
+| Update | `brew upgrade porter` | `git pull && cargo install --path . --force` |
+| Check for updates | `brew outdated porter` | `git fetch && git log HEAD..origin/main` |
+| Reinstall | `brew reinstall porter` | `cargo clean && cargo install --path .` |
+| Uninstall | `brew uninstall porter` | `cargo uninstall porter` |
+
+### Version Information
+
+```bash
+# Get detailed version info
+porter --version
+
+# Check build information
+porter --help
+
+# Verify installation
+which porter
+```
+
+### Configuration Backup
+
+```bash
+# Backup before updates
+cp ~/.porter/config.toml ~/.porter/config.toml.backup
+cp -r ./mappings ~/porter-mappings-backup
+
+# Restore if needed
+cp ~/.porter/config.toml.backup ~/.porter/config.toml
+cp -r ~/porter-mappings-backup ./mappings
+```

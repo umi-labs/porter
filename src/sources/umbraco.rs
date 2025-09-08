@@ -1,5 +1,8 @@
-use super::super::adapter::SourceReader;
-use anyhow::{Result, Context};
+use crate::adapters::{
+    ConnectionMethod, FileSourceAdapter, SourceAdapter, SourceCapabilities, SourceConfig,
+    SourceMetadata,
+};
+use anyhow::{Context, Result};
 use log::{debug, info, warn};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -9,6 +12,10 @@ use std::fs;
 pub struct UmbracoSource {
     /// Content type mappings for special handling
     content_type_mappings: HashMap<String, String>,
+    /// Configuration for this adapter instance
+    config: Option<SourceConfig>,
+    /// Whether the adapter is initialized
+    initialized: bool,
 }
 
 impl Default for UmbracoSource {
@@ -22,6 +29,8 @@ impl Default for UmbracoSource {
 
         Self {
             content_type_mappings: mappings,
+            config: None,
+            initialized: false,
         }
     }
 }
@@ -34,7 +43,8 @@ impl UmbracoSource {
 
     /// Add a custom content type mapping
     pub fn with_content_type_mapping(mut self, content_type: &str, mapping: &str) -> Self {
-        self.content_type_mappings.insert(content_type.to_string(), mapping.to_string());
+        self.content_type_mappings
+            .insert(content_type.to_string(), mapping.to_string());
         self
     }
 
@@ -102,9 +112,13 @@ impl UmbracoSource {
                         debug!("Found media reference in field: {}", key);
 
                         // Extract media information
-                        let media_url = value.get("mediaUrl").and_then(|v| v.as_str()).unwrap_or("");
+                        let media_url =
+                            value.get("mediaUrl").and_then(|v| v.as_str()).unwrap_or("");
                         let media_id = value.get("mediaId").and_then(|v| v.as_str()).unwrap_or("");
-                        let media_name = value.get("mediaName").and_then(|v| v.as_str()).unwrap_or("");
+                        let media_name = value
+                            .get("mediaName")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
 
                         // Create a structured media object
                         obj[key] = json!({
@@ -214,7 +228,11 @@ impl UmbracoSource {
                             // Collect properties to insert
                             let properties_to_insert: Vec<(String, Value)> = variant_obj
                                 .iter()
-                                .filter(|(key, _)| !obj.contains_key(*key) || *key == "language" || *key == "segment")
+                                .filter(|(key, _)| {
+                                    !obj.contains_key(*key)
+                                        || *key == "language"
+                                        || *key == "segment"
+                                })
                                 .map(|(key, value)| (key.clone(), value.clone()))
                                 .collect();
 
@@ -229,8 +247,14 @@ impl UmbracoSource {
                     let mut processed_variants = Vec::new();
                     for variant in variants_clone {
                         if let Some(variant_obj) = variant.as_object() {
-                            let language = variant_obj.get("language").and_then(|v| v.as_str()).unwrap_or("unknown");
-                            let segment = variant_obj.get("segment").and_then(|v| v.as_str()).unwrap_or("");
+                            let language = variant_obj
+                                .get("language")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            let segment = variant_obj
+                                .get("segment")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
 
                             processed_variants.push(json!({
                                 "language": language,
@@ -279,7 +303,7 @@ impl UmbracoSource {
             "content",
             "items",
             "nodes",
-            "pages"
+            "pages",
         ];
 
         let mut found_content = false;
@@ -287,7 +311,11 @@ impl UmbracoSource {
         // Check each possible content array
         for array_name in content_arrays {
             if let Some(arr) = json.get(array_name).and_then(|x| x.as_array()) {
-                info!("Found content in '{}' array with {} items", array_name, arr.len());
+                info!(
+                    "Found content in '{}' array with {} items",
+                    array_name,
+                    arr.len()
+                );
                 for item in arr {
                     documents.push(item.clone());
                 }
@@ -316,6 +344,9 @@ impl UmbracoSource {
     }
 }
 
+// Temporary: implement both old and new traits during transition
+use crate::adapter::SourceReader;
+
 impl SourceReader for UmbracoSource {
     fn read_documents(&self, inputs: &[String]) -> Result<Vec<Value>> {
         let mut out = Vec::new();
@@ -331,7 +362,8 @@ impl SourceReader for UmbracoSource {
                 .with_context(|| format!("Failed to parse JSON from file: {}", path))?;
 
             // Extract documents from the JSON
-            let documents = self.extract_documents(&v)
+            let documents = self
+                .extract_documents(&v)
                 .with_context(|| format!("Failed to extract documents from file: {}", path))?;
 
             info!("Extracted {} documents from {}", documents.len(), path);
@@ -341,7 +373,7 @@ impl SourceReader for UmbracoSource {
                 match self.process_document(&doc) {
                     Ok(processed_doc) => {
                         out.push(processed_doc);
-                    },
+                    }
                     Err(e) => {
                         // Log the error but continue processing other documents
                         warn!("Error processing document: {}. Skipping.", e);
@@ -352,5 +384,138 @@ impl SourceReader for UmbracoSource {
 
         info!("Total documents processed: {}", out.len());
         Ok(out)
+    }
+}
+
+// Implement new trait system
+impl SourceAdapter for UmbracoSource {
+    fn metadata(&self) -> SourceMetadata {
+        SourceMetadata::new(
+            "Umbraco CMS",
+            "1.0.0",
+            "Reads and processes Umbraco JSON export files with support for nested content, media, and multi-language variants"
+        )
+        .with_formats(vec!["json".to_string()])
+        .with_author("Porter Team".to_string())
+        .with_homepage("https://github.com/umi-labs/porter".to_string())
+    }
+
+    fn capabilities(&self) -> SourceCapabilities {
+        SourceCapabilities::new()
+            .with_streaming(false)
+            .with_pagination(false)
+            .with_content_types(vec![
+                "pages".to_string(),
+                "content".to_string(),
+                "media".to_string(),
+                "nested_content".to_string(),
+            ])
+            .with_file_formats(vec!["json".to_string()])
+            .with_batch_size(Some(1000))
+    }
+
+    fn init(&mut self, config: &SourceConfig) -> Result<()> {
+        // Validate that this is a file-based configuration
+        match &config.connection_method {
+            ConnectionMethod::File { .. } => {
+                self.config = Some(config.clone());
+                self.initialized = true;
+                Ok(())
+            }
+            _ => Err(anyhow::anyhow!(
+                "Umbraco source only supports file-based connections"
+            )),
+        }
+    }
+
+    fn validate_config(&self, config: &SourceConfig) -> Result<()> {
+        match &config.connection_method {
+            ConnectionMethod::File { paths, format, .. } => {
+                if paths.is_empty() {
+                    return Err(anyhow::anyhow!("At least one file path must be provided"));
+                }
+
+                if format != "json" {
+                    return Err(anyhow::anyhow!("Umbraco source only supports JSON format"));
+                }
+
+                // Check if files exist and are readable
+                for path in paths {
+                    if !std::path::Path::new(path).exists() {
+                        return Err(anyhow::anyhow!("File does not exist: {}", path));
+                    }
+                }
+
+                Ok(())
+            }
+            _ => Err(anyhow::anyhow!(
+                "Umbraco source only supports file-based connections"
+            )),
+        }
+    }
+
+    fn cleanup(&mut self) -> Result<()> {
+        self.config = None;
+        self.initialized = false;
+        Ok(())
+    }
+}
+
+impl FileSourceAdapter for UmbracoSource {
+    fn read_documents(&self, file_paths: &[String]) -> Result<Vec<Value>> {
+        if !self.initialized {
+            return Err(anyhow::anyhow!("Umbraco source not initialized"));
+        }
+
+        // Use the existing implementation (explicitly call the old trait method)
+        SourceReader::read_documents(self, file_paths)
+    }
+
+    fn stream_documents(
+        &self,
+        _file_paths: &[String],
+    ) -> Result<Box<dyn Iterator<Item = Result<Value>>>> {
+        // For now, return an error as streaming is not implemented
+        Err(anyhow::anyhow!(
+            "Streaming not yet implemented for Umbraco source"
+        ))
+    }
+
+    fn supported_formats(&self) -> Vec<String> {
+        vec!["json".to_string()]
+    }
+
+    fn validate_files(&self, file_paths: &[String]) -> Result<()> {
+        for path in file_paths {
+            let path_obj = std::path::Path::new(path);
+
+            if !path_obj.exists() {
+                return Err(anyhow::anyhow!("File does not exist: {}", path));
+            }
+
+            if !path_obj.is_file() {
+                return Err(anyhow::anyhow!("Path is not a file: {}", path));
+            }
+
+            // Check if we can read the file
+            match std::fs::File::open(path) {
+                Ok(_) => {}
+                Err(e) => return Err(anyhow::anyhow!("Cannot read file {}: {}", path, e)),
+            }
+
+            // Basic JSON validation - try to read first few bytes
+            match std::fs::read_to_string(path) {
+                Ok(content) => {
+                    // Check if it's valid JSON by parsing just the first few characters
+                    let trimmed = content.trim();
+                    if !trimmed.starts_with('{') && !trimmed.starts_with('[') {
+                        return Err(anyhow::anyhow!("File does not appear to be JSON: {}", path));
+                    }
+                }
+                Err(e) => return Err(anyhow::anyhow!("Cannot read file content {}: {}", path, e)),
+            }
+        }
+
+        Ok(())
     }
 }
