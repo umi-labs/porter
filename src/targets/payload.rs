@@ -1,6 +1,8 @@
-use super::super::adapter::TargetWriter;
-use super::super::adapter::TargetOptions;
-use anyhow::{Result, Context};
+use crate::adapters::{
+    FileTargetAdapter, OutputMethod, TargetAdapter, TargetCapabilities, TargetConfig,
+    TargetMetadata, TargetOptions,
+};
+use anyhow::{Context, Result};
 use log::{debug, info, warn};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -40,21 +42,22 @@ impl PayloadTarget {
 
     /// Add a custom field type mapping
     pub fn with_field_type_mapping(mut self, field_type: &str, mapping: &str) -> Self {
-        self.field_type_mappings.insert(field_type.to_string(), mapping.to_string());
+        self.field_type_mappings
+            .insert(field_type.to_string(), mapping.to_string());
         self
     }
 
     /// Process a document to handle special field types
-    fn process_document(&self, doc: &Value, opts: &TargetOptions) -> Result<Value> {
+    fn process_document(&self, doc: &Value, opts: &crate::adapter::TargetOptions) -> Result<Value> {
         let mut processed_doc = doc.clone();
 
         // Process special field types
         self.process_field_types(&mut processed_doc)?;
 
-        // Process relationships
-        if let Some(related_collections) = &opts.related_collections {
-            self.process_relationships(&mut processed_doc, related_collections)?;
-        }
+        // Process relationships - TODO: implement this properly with new config structure
+        // if let Some(related_collections) = &opts.related_collections {
+        //     self.process_relationships(&mut processed_doc, related_collections)?;
+        // }
 
         // Process localization
         if let Some(locale) = &opts.locale {
@@ -78,8 +81,10 @@ impl PayloadTarget {
                             match payload_type.as_str() {
                                 "upload" => {
                                     // Handle media/upload fields
-                                    let url = field_obj.get("url").and_then(|v| v.as_str()).unwrap_or("");
-                                    let filename = Path::new(url).file_name()
+                                    let url =
+                                        field_obj.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                                    let filename = Path::new(url)
+                                        .file_name()
                                         .and_then(|n| n.to_str())
                                         .unwrap_or("");
 
@@ -91,13 +96,13 @@ impl PayloadTarget {
                                         "width": field_obj.get("width").cloned().unwrap_or(Value::Null),
                                         "height": field_obj.get("height").cloned().unwrap_or(Value::Null),
                                     });
-                                },
+                                }
                                 "relationship" => {
                                     // Basic relationship handling (enhanced in process_relationships)
                                     if let Some(id) = field_obj.get("id") {
                                         obj[key] = id.clone();
                                     }
-                                },
+                                }
                                 "point" => {
                                     // Handle point fields
                                     let lat = field_obj.get("lat").cloned().unwrap_or(Value::Null);
@@ -107,22 +112,26 @@ impl PayloadTarget {
                                         "type": "Point",
                                         "coordinates": [lng, lat]
                                     });
-                                },
+                                }
                                 "date" => {
                                     // Handle date fields
-                                    if let Some(date_str) = field_obj.get("value").and_then(|v| v.as_str()) {
+                                    if let Some(date_str) =
+                                        field_obj.get("value").and_then(|v| v.as_str())
+                                    {
                                         obj[key] = Value::String(date_str.to_string());
                                     }
-                                },
+                                }
                                 "richText" => {
                                     // Handle rich text fields
                                     if let Some(content) = field_obj.get("content") {
                                         obj[key] = content.clone();
                                     }
-                                },
+                                }
                                 "array" | "blocks" => {
                                     // Handle array and blocks fields recursively
-                                    if let Some(items) = field_obj.get("items").and_then(|v| v.as_array()) {
+                                    if let Some(items) =
+                                        field_obj.get("items").and_then(|v| v.as_array())
+                                    {
                                         let mut processed_items = Vec::new();
                                         for item in items {
                                             let mut item_clone = item.clone();
@@ -131,7 +140,7 @@ impl PayloadTarget {
                                         }
                                         obj[key] = json!(processed_items);
                                     }
-                                },
+                                }
                                 _ => {
                                     // Unknown type, leave as is
                                     warn!("Unknown field type mapping: {}", payload_type);
@@ -180,7 +189,9 @@ impl PayloadTarget {
                             debug!("Processing relationship field: {}", key);
 
                             // Check if the relationship has a collection specified
-                            if let Some(collection) = field_obj.get("collection").and_then(|v| v.as_str()) {
+                            if let Some(collection) =
+                                field_obj.get("collection").and_then(|v| v.as_str())
+                            {
                                 if related_collections.contains(&collection.to_string()) {
                                     // This is a relationship to a known collection
                                     if let Some(id) = field_obj.get("id") {
@@ -242,7 +253,9 @@ impl PayloadTarget {
                     // Find the variant that matches the requested locale
                     for variant in variants_clone {
                         if let Some(variant_obj) = variant.as_object() {
-                            if let Some(language) = variant_obj.get("language").and_then(|v| v.as_str()) {
+                            if let Some(language) =
+                                variant_obj.get("language").and_then(|v| v.as_str())
+                            {
                                 if language == locale {
                                     debug!("Found matching locale variant: {}", locale);
 
@@ -251,7 +264,8 @@ impl PayloadTarget {
                                         if let Some(props_obj) = properties.as_object() {
                                             // Collect properties to insert
                                             for (key, value) in props_obj {
-                                                properties_to_insert.push((key.clone(), value.clone()));
+                                                properties_to_insert
+                                                    .push((key.clone(), value.clone()));
                                             }
                                         }
                                     }
@@ -300,8 +314,16 @@ impl PayloadTarget {
     }
 }
 
+// Temporary: implement both old and new traits during transition
+use crate::adapter::TargetWriter;
+
 impl TargetWriter for PayloadTarget {
-    fn emit_seed(&self, docs: &[Value], out_dir: &str, opts: &TargetOptions) -> Result<()> {
+    fn emit_seed(
+        &self,
+        docs: &[Value],
+        out_dir: &str,
+        opts: &crate::adapter::TargetOptions,
+    ) -> Result<()> {
         // Create output directory
         create_dir_all(out_dir).context("Failed to create output directory")?;
 
@@ -309,7 +331,10 @@ impl TargetWriter for PayloadTarget {
         let collection = opts.collection.as_deref().unwrap_or("seed");
         let file = format!("{}/{}.seed.ts", out_dir, collection);
 
-        info!("Generating Payload seed file for collection: {}", collection);
+        info!(
+            "Generating Payload seed file for collection: {}",
+            collection
+        );
 
         // Process and validate each document
         let mut processed_docs = Vec::new();
@@ -321,7 +346,7 @@ impl TargetWriter for PayloadTarget {
                         warn!("Document validation warning: {}", e);
                     }
                     processed_docs.push(processed_doc);
-                },
+                }
                 Err(e) => {
                     // Log the error but continue processing other documents
                     warn!("Error processing document: {}. Skipping.", e);
@@ -343,8 +368,10 @@ impl TargetWriter for PayloadTarget {
         }
 
         buf.push_str("\nexport const seed = ");
-        buf.push_str(&serde_json::to_string_pretty(&processed_docs)
-            .context("Failed to serialize processed documents")?);
+        buf.push_str(
+            &serde_json::to_string_pretty(&processed_docs)
+                .context("Failed to serialize processed documents")?,
+        );
         buf.push_str(" as const;\n");
 
         // Write the file
@@ -384,5 +411,291 @@ fn guess_mime_type(path: &str) -> &'static str {
         "css" => "text/css",
         "js" => "application/javascript",
         _ => "application/octet-stream",
+    }
+}
+
+/// Payload target adapter state
+pub struct PayloadTargetState {
+    config: Option<TargetConfig>,
+    initialized: bool,
+}
+
+impl Default for PayloadTargetState {
+    fn default() -> Self {
+        Self {
+            config: None,
+            initialized: false,
+        }
+    }
+}
+
+// Add state to PayloadTarget
+impl PayloadTarget {
+    /// Create new instance with state
+    pub fn with_state() -> (Self, PayloadTargetState) {
+        (Self::new(), PayloadTargetState::default())
+    }
+}
+
+// Implement new trait system
+impl TargetAdapter for PayloadTarget {
+    fn metadata(&self) -> TargetMetadata {
+        TargetMetadata::new(
+            "Payload CMS",
+            "1.0.0",
+            "Generates TypeScript seed files for Payload CMS with support for complex field types and relationships"
+        )
+        .with_formats(vec!["typescript".to_string(), "javascript".to_string(), "json".to_string()])
+        .with_author("Porter Team".to_string())
+        .with_homepage("https://github.com/umi-labs/porter".to_string())
+    }
+
+    fn capabilities(&self) -> TargetCapabilities {
+        TargetCapabilities::new()
+            .with_batch_writing(true)
+            .with_schema_validation(false) // TODO: Implement schema validation
+            .with_output_formats(vec![
+                "typescript".to_string(),
+                "javascript".to_string(),
+                "json".to_string(),
+            ])
+            .with_write_strategies(vec!["insert".to_string()])
+            .with_batch_size(Some(1000))
+            .with_preview(true)
+    }
+
+    fn init(&mut self, config: &TargetConfig) -> Result<()> {
+        // Validate that this is a file-based configuration
+        match &config.output_method {
+            OutputMethod::SeedFiles { .. } => {
+                // Store config would need state management
+                // For now, just validate
+                Ok(())
+            }
+            _ => Err(anyhow::anyhow!(
+                "Payload target currently only supports seed file output"
+            )),
+        }
+    }
+
+    fn validate_config(&self, config: &TargetConfig) -> Result<()> {
+        match &config.output_method {
+            OutputMethod::SeedFiles { output_dir, format } => {
+                if output_dir.is_empty() {
+                    return Err(anyhow::anyhow!("Output directory must be provided"));
+                }
+
+                let supported_formats = vec!["typescript", "javascript", "json"];
+                if !supported_formats.contains(&format.as_str()) {
+                    return Err(anyhow::anyhow!(
+                        "Unsupported format '{}'. Supported formats: {:?}",
+                        format,
+                        supported_formats
+                    ));
+                }
+
+                // Check if output directory can be created/written to
+                let output_path = std::path::Path::new(output_dir);
+                if let Some(parent) = output_path.parent() {
+                    if !parent.exists() {
+                        return Err(anyhow::anyhow!(
+                            "Parent directory does not exist: {}",
+                            parent.display()
+                        ));
+                    }
+                }
+
+                Ok(())
+            }
+            _ => Err(anyhow::anyhow!(
+                "Payload target currently only supports seed file output"
+            )),
+        }
+    }
+
+    fn cleanup(&mut self) -> Result<()> {
+        // No cleanup needed for current implementation
+        Ok(())
+    }
+
+    fn validate_documents(&self, docs: &[Value]) -> Result<()> {
+        // Basic document validation
+        for (index, doc) in docs.iter().enumerate() {
+            if !doc.is_object() {
+                return Err(anyhow::anyhow!(
+                    "Document at index {} is not an object",
+                    index
+                ));
+            }
+
+            // Check for required fields (basic validation)
+            let obj = doc.as_object().unwrap();
+            if obj.is_empty() {
+                return Err(anyhow::anyhow!("Document at index {} is empty", index));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl FileTargetAdapter for PayloadTarget {
+    fn write_documents(&self, docs: &[Value], options: &TargetOptions) -> Result<()> {
+        // Use the existing implementation
+        // Convert new TargetOptions to old format temporarily
+        let legacy_options = crate::adapter::TargetOptions {
+            collection: Some(options.collection_name.clone()),
+            locale: options.locale.clone(),
+            related_collections: None, // TODO: map this properly
+        };
+        self.emit_seed(docs, &options.output_dir, &legacy_options)
+    }
+
+    fn write_documents_batch(
+        &self,
+        docs: &[Value],
+        options: &TargetOptions,
+        batch_config: &crate::adapters::BatchConfig,
+    ) -> Result<()> {
+        if batch_config.parallel && docs.len() > batch_config.size {
+            // Process in parallel batches
+            use rayon::prelude::*;
+
+            let batches: Vec<_> = docs.chunks(batch_config.size).collect();
+            let results: Result<Vec<_>, _> = batches
+                .into_par_iter()
+                .map(|batch| self.write_documents(batch, options))
+                .collect();
+
+            results.map(|_| ())
+        } else {
+            // Process in sequential batches
+            for chunk in docs.chunks(batch_config.size) {
+                self.write_documents(chunk, options)?;
+            }
+            Ok(())
+        }
+    }
+
+    fn supported_formats(&self) -> Vec<String> {
+        vec![
+            "typescript".to_string(),
+            "javascript".to_string(),
+            "json".to_string(),
+        ]
+    }
+
+    fn validate_output_path(&self, output_path: &str) -> Result<()> {
+        let path = std::path::Path::new(output_path);
+
+        // Check if parent directory exists
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                return Err(anyhow::anyhow!(
+                    "Parent directory does not exist: {}",
+                    parent.display()
+                ));
+            }
+
+            // Check write permissions
+            match std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(path.join(".porter_test"))
+            {
+                Ok(_) => {
+                    // Cleanup test file
+                    let _ = std::fs::remove_file(path.join(".porter_test"));
+                    Ok(())
+                }
+                Err(e) => Err(anyhow::anyhow!(
+                    "Cannot write to output directory {}: {}",
+                    output_path,
+                    e
+                )),
+            }
+        } else {
+            Err(anyhow::anyhow!("Invalid output path: {}", output_path))
+        }
+    }
+
+    fn preview_output(&self, docs: &[Value], options: &TargetOptions) -> Result<String> {
+        if docs.is_empty() {
+            return Ok("// No documents to preview".to_string());
+        }
+
+        // Generate preview for first few documents
+        let preview_docs = if docs.len() > 3 { &docs[0..3] } else { docs };
+
+        let mut preview = String::new();
+        preview.push_str(&format!(
+            "// Preview for collection: {}\n",
+            options.collection_name
+        ));
+        preview.push_str(&format!("// Total documents: {}\n", docs.len()));
+        preview.push_str(&format!(
+            "// Showing first {} document(s)\n\n",
+            preview_docs.len()
+        ));
+
+        // Generate TypeScript interface preview
+        preview.push_str(&self.generate_interface_preview(preview_docs)?);
+
+        // Add sample data
+        preview.push_str("\n// Sample data:\n");
+        for (index, doc) in preview_docs.iter().enumerate() {
+            preview.push_str(&format!("// Document {}:\n", index + 1));
+            preview.push_str(&format!("// {}\n", serde_json::to_string_pretty(doc)?));
+        }
+
+        if docs.len() > 3 {
+            preview.push_str(&format!("\n// ... and {} more documents", docs.len() - 3));
+        }
+
+        Ok(preview)
+    }
+}
+
+impl PayloadTarget {
+    fn generate_interface_preview(&self, docs: &[Value]) -> Result<String> {
+        let mut interface = String::new();
+        interface.push_str("interface DocumentPreview {\n");
+
+        // Analyze fields from sample documents
+        let mut field_types = HashMap::new();
+        for doc in docs {
+            if let Some(obj) = doc.as_object() {
+                for (key, value) in obj {
+                    let type_name = self.infer_typescript_type(value);
+                    field_types.insert(key.clone(), type_name);
+                }
+            }
+        }
+
+        // Generate interface fields
+        for (field_name, type_name) in field_types {
+            interface.push_str(&format!("  {}: {};\n", field_name, type_name));
+        }
+
+        interface.push_str("}\n");
+        Ok(interface)
+    }
+
+    fn infer_typescript_type(&self, value: &Value) -> String {
+        match value {
+            Value::String(_) => "string".to_string(),
+            Value::Number(_) => "number".to_string(),
+            Value::Bool(_) => "boolean".to_string(),
+            Value::Array(arr) => {
+                if arr.is_empty() {
+                    "any[]".to_string()
+                } else {
+                    let element_type = self.infer_typescript_type(&arr[0]);
+                    format!("{}[]", element_type)
+                }
+            }
+            Value::Object(_) => "object".to_string(),
+            Value::Null => "null".to_string(),
+        }
     }
 }

@@ -1,0 +1,28 @@
+{
+  "source": "umbraco",
+  "target": "payload",
+  "collection": "hotels",
+  "fieldMappings": [
+    {
+      "to": "title",
+      "from": "nodeName",
+      "transforms": [],
+      "fallback": null
+    },
+    {
+      "to": "coordinates",
+      "from": "rcasLatitude",
+      "transforms": [
+        {
+          "params": {
+            "lat_field": "rcasLatitude",
+            "lng_field": "rcasLongitude"
+          },
+          "type": "combine_coordinates"
+        }
+      ],
+      "fallback": null
+    }
+  ],
+  "blockMappings": null
+}

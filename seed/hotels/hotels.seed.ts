@@ -9,6 +9,7 @@ export const seed = [
         -20.496752
       ],
       "type": "Point"
-    }
+    },
+    "title": "Jack's Camp"
   }
 ] as const;

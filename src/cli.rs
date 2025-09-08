@@ -42,4 +42,28 @@ pub enum Commands {
         #[arg(short, long)]
         file: Option<String>,
     },
+    /// Generate mappings for collections
+    Generate {
+        /// Configuration file to use
+        #[arg(short, long)]
+        config: Option<String>,
+        /// Collection name to generate mapping for (if not specified, generates for all)
+        #[arg(long)]
+        collection: Option<String>,
+    },
+    /// Migrate data using existing mappings
+    Migrate {
+        /// Configuration file to use
+        #[arg(short, long)]
+        config: Option<String>,
+        /// Collection name to migrate (if not specified, migrates all)
+        #[arg(long)]
+        collection: Option<String>,
+    },
+    /// Explain the migration process and steps
+    Explain {
+        /// Configuration file to use for explanation
+        #[arg(short, long)]
+        config: Option<String>,
+    },
 }

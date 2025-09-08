@@ -1,21 +1,25 @@
 mod cli;
 
+use crate::cli::{Cli, Commands};
+use anyhow::{Result, anyhow};
+use clap::Parser;
+use colored::Colorize;
+use log::{debug, info, warn};
 use porter::adapter::TargetOptions;
+use porter::batch::BatchConfig;
+use porter::config::{
+    CollectionConfig, PorterConfig, create_config_interactively, find_and_load_config,
+};
+use porter::mapping;
+use porter::mapping::generator::MappingGenerator;
+use porter::performance::{OptimizedBatchProcessor, PerformanceConfig, PerformanceProcessor};
+use porter::plugin::{PluginManager, get_default_plugin_dir};
 use porter::sources::umbraco::UmbracoSource;
 use porter::targets::payload::PayloadTarget;
-use porter::plugin::{PluginManager, get_default_plugin_dir};
-use porter::mapping;
-use porter::batch::BatchConfig;
-use porter::performance::{PerformanceProcessor, PerformanceConfig, OptimizedBatchProcessor};
-use porter::config::{PorterConfig, CollectionConfig, find_and_load_config, create_config_interactively};
-use crate::cli::{Cli, Commands};
-use clap::Parser;
-use anyhow::{Result, anyhow};
-use log::{info, debug, warn};
 use std::path::Path;
-use colored::Colorize;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Handle subcommands first
@@ -36,16 +40,71 @@ fn main() -> Result<()> {
                 }
                 return Ok(());
             }
+            Commands::Generate { config: config_file, collection } => {
+                println!("{}", "🔄 Generating Mappings".cyan().bold());
+                
+                let config = if let Some(config_path) = config_file {
+                    PorterConfig::load_from_file(&config_path)?
+                } else if let Some(file_config) = find_and_load_config()? {
+                    file_config
+                } else {
+                    return Err(anyhow!("No configuration file found. Run 'porter init' first."));
+                };
+                
+                // Create mapping generator and generate mappings
+                let generator = MappingGenerator::new(config);
+                generator.generate_mappings(collection.as_deref()).await?;
+                return Ok(());
+            }
+            Commands::Migrate { config: config_file, collection: _collection } => {
+                println!("{}", "🚀 Starting Migration".cyan().bold());
+                
+                let _config = if let Some(config_path) = config_file {
+                    PorterConfig::load_from_file(&config_path)?
+                } else if let Some(file_config) = find_and_load_config()? {
+                    file_config
+                } else {
+                    return Err(anyhow!("No configuration file found. Run 'porter init' first."));
+                };
+                
+                // TODO: Implement migration logic
+                println!("{}", "⚠️  Migration will be implemented in the next phase".yellow());
+                println!("This will migrate data from WordPress API to Payload CMS using generated mappings");
+                return Ok(());
+            }
+            Commands::Explain { config: config_file } => {
+                println!("{}", "📚 Porter Migration Process Explanation".cyan().bold());
+                println!();
+                
+                let config = if let Some(config_path) = config_file {
+                    PorterConfig::load_from_file(&config_path)?
+                } else if let Some(file_config) = find_and_load_config()? {
+                    file_config
+                } else {
+                    println!("{}", "No configuration file found. Here's the general migration process:".yellow());
+                    explain_general_migration_process();
+                    return Ok(());
+                };
+                
+                explain_migration_process(&config);
+                return Ok(());
+            }
         }
     }
 
     // Load configuration from file if available
     let mut config = if let Some(file_config) = find_and_load_config()? {
         println!("{}", "📁 Using configuration from file".cyan());
-        println!("DEBUG: File config - interactive: {}, verbose: {}", file_config.interactive, file_config.verbose);
+        println!(
+            "DEBUG: File config - interactive: {}, verbose: {}",
+            file_config.interactive, file_config.verbose
+        );
         file_config
     } else {
-        println!("{}", "📝 No configuration file found, using command line arguments".yellow());
+        println!(
+            "{}",
+            "📝 No configuration file found, using command line arguments".yellow()
+        );
         println!("Run 'porter init' to create a new configuration");
         PorterConfig::default()
     };
@@ -56,7 +115,7 @@ fn main() -> Result<()> {
         config.source = "umbraco".to_string();
         config.target = "payload".to_string();
         config.output = "./seed".to_string();
-        
+
         // Create default collection for fixtures
         let default_collection = CollectionConfig {
             name: "hotels".to_string(),
@@ -76,7 +135,8 @@ fn main() -> Result<()> {
     if cli.target.is_some() {
         config.target = cli.target.unwrap();
     }
-    if cli.output != "./seed" { // Only override if not default
+    if cli.output != "./seed" {
+        // Only override if not default
         config.output = cli.output;
     }
     if cli.plugin_dir.is_some() {
@@ -103,15 +163,21 @@ fn main() -> Result<()> {
     config.validate()?;
 
     // Debug: Print configuration values
-    println!("DEBUG: Configuration loaded - interactive: {}, verbose: {}, debug: {}", 
-             config.interactive, config.verbose, config.debug);
+    println!(
+        "DEBUG: Configuration loaded - interactive: {}, verbose: {}, debug: {}",
+        config.interactive, config.verbose, config.debug
+    );
 
     // Set log level based on configuration
     if config.verbose {
-        unsafe { std::env::set_var("RUST_LOG", "info"); }
+        unsafe {
+            std::env::set_var("RUST_LOG", "info");
+        }
     }
     if config.debug {
-        unsafe { std::env::set_var("RUST_LOG", "debug"); }
+        unsafe {
+            std::env::set_var("RUST_LOG", "debug");
+        }
     }
     env_logger::init();
 
@@ -124,6 +190,10 @@ fn main() -> Result<()> {
 
     // Register built-in source adapters
     plugin_manager.register_source("umbraco", Box::new(UmbracoSource::new()));
+    plugin_manager.register_source(
+        "wordpress",
+        Box::new(porter::sources::wordpress::WordPressSource::new()),
+    );
 
     // Register built-in target adapters
     plugin_manager.register_target("payload", Box::new(PayloadTarget::new()));
@@ -161,26 +231,61 @@ fn main() -> Result<()> {
     let total_collections = config.collections.len();
     for (collection_index, collection_config) in config.collections.iter().enumerate() {
         let current_collection = collection_index + 1;
-        
+
         println!();
-        println!("{}", format!("🔄 Processing Collection: {}/{} - {}", current_collection, total_collections, collection_config.name).cyan().bold());
+        println!(
+            "{}",
+            format!(
+                "🔄 Processing Collection: {}/{} - {}",
+                current_collection, total_collections, collection_config.name
+            )
+            .cyan()
+            .bold()
+        );
         println!("{}", "─".repeat(80));
-        
+
         if current_collection < total_collections {
             let remaining_collections = total_collections - current_collection;
-            println!("{}", format!("📋 Collections remaining: {}", remaining_collections).yellow());
+            println!(
+                "{}",
+                format!("📋 Collections remaining: {}", remaining_collections).yellow()
+            );
             println!();
         }
 
         // 1) Read source docs for this collection
-        info!("Reading source documents from {:?}", collection_config.source_data);
-        let source_adapter = plugin_manager.get_source(source)
+        info!(
+            "Reading source documents from {:?}",
+            collection_config.source_data
+        );
+        let source_adapter = plugin_manager
+            .get_source(source)
             .ok_or_else(|| anyhow!("Unsupported source: {}", source))?;
-        let docs = source_adapter.read_documents(&[collection_config.source_data.clone()])?;
-        info!("Read {} documents for collection '{}'", docs.len(), collection_config.name);
+        
+        let docs = if source == "wordpress" && 
+            config.metadata.as_ref().and_then(|m| m.get("wordpress_input_type")).map(|s| s.as_str()) == Some("api") {
+            // For WordPress API, we need to fetch from the API
+            info!("Fetching data from WordPress API endpoint: {}", collection_config.source_data);
+            
+            // TODO: Implement API-based document fetching
+            // For now, return empty docs as placeholder
+            println!("{}", "⚠️  WordPress API fetching will be implemented in the next phase".yellow());
+            vec![]
+        } else {
+            // For file-based sources, read from files
+            source_adapter.read_documents(&[collection_config.source_data.clone()])?
+        };
+        info!(
+            "Read {} documents for collection '{}'",
+            docs.len(),
+            collection_config.name
+        );
 
         // 2) Load/create mapping for this collection
-        info!("Loading or creating mapping for collection '{}'", collection_config.name);
+        info!(
+            "Loading or creating mapping for collection '{}'",
+            collection_config.name
+        );
         let mapping = mapping::load_or_create_mapping(
             &collection_config.name,
             source,
@@ -188,12 +293,16 @@ fn main() -> Result<()> {
             &docs,
             collection_config.collection_path.as_deref(),
             config.interactive,
-            Some((current_collection, total_collections))
+            Some((current_collection, total_collections)),
         )?;
-        info!("Mapping loaded with {} field mappings", mapping.field_mappings.len());
+        info!(
+            "Mapping loaded with {} field mappings",
+            mapping.field_mappings.len()
+        );
 
         // 3) Transform docs using mapping (with batch processing for large datasets)
-        let target_adapter = plugin_manager.get_target(target)
+        let target_adapter = plugin_manager
+            .get_target(target)
             .ok_or_else(|| anyhow!("Unsupported target: {}", target))?;
 
         let opts = TargetOptions {
@@ -204,18 +313,35 @@ fn main() -> Result<()> {
         };
 
         if config.dry_run {
-            info!("Dry run - not writing output files for collection '{}'", collection_config.name);
+            info!(
+                "Dry run - not writing output files for collection '{}'",
+                collection_config.name
+            );
             // For dry run, just validate the mapping
             let validation_result = mapping::validate_mapping_with_documents(
                 &mapping,
                 &docs,
                 collection_config.collection_path.as_deref(),
             )?;
-            
+
             if validation_result.is_valid {
-                println!("{}", format!("✓ Mapping validation passed for '{}'", collection_config.name).green());
+                println!(
+                    "{}",
+                    format!(
+                        "✓ Mapping validation passed for '{}'",
+                        collection_config.name
+                    )
+                    .green()
+                );
             } else {
-                println!("{}", format!("⚠ Mapping validation failed for '{}'", collection_config.name).yellow());
+                println!(
+                    "{}",
+                    format!(
+                        "⚠ Mapping validation failed for '{}'",
+                        collection_config.name
+                    )
+                    .yellow()
+                );
                 for error in &validation_result.errors {
                     println!("  Error: {} - {}", error.field, error.message);
                 }
@@ -223,8 +349,11 @@ fn main() -> Result<()> {
         } else {
             // Use optimized processing based on dataset size
             if docs.len() > 1000 {
-                info!("Large dataset detected ({} documents), using optimized batch processing", docs.len());
-                
+                info!(
+                    "Large dataset detected ({} documents), using optimized batch processing",
+                    docs.len()
+                );
+
                 let batch_config = BatchConfig {
                     batch_size: 100,
                     max_memory_mb: 512,
@@ -232,7 +361,7 @@ fn main() -> Result<()> {
                     progress_interval: 5,
                     temp_dir: format!("./temp/{}", collection_config.name),
                 };
-                
+
                 let perf_config = PerformanceConfig {
                     num_threads: num_cpus::get(),
                     memory_limit_mb: 1024,
@@ -241,20 +370,38 @@ fn main() -> Result<()> {
                     memory_monitor_interval: 5,
                     enable_adaptive_chunking: true,
                 };
-                
-                let mut optimized_processor = OptimizedBatchProcessor::new(batch_config, perf_config);
-                let transformed_docs = optimized_processor.process_documents_optimized(&docs, &mapping)?;
-                
+
+                let mut optimized_processor =
+                    OptimizedBatchProcessor::new(batch_config, perf_config);
+                let transformed_docs =
+                    optimized_processor.process_documents_optimized(&docs, &mapping)?;
+
                 let output_path = format!("{}/{}", config.output, collection_config.name);
                 info!("Writing seed file to {}", output_path);
                 target_adapter.emit_seed(&transformed_docs, &output_path, &opts)?;
-                
-                println!("{}", format!("✓ Optimized processing completed for '{}'", collection_config.name).green());
+
+                println!(
+                    "{}",
+                    format!(
+                        "✓ Optimized processing completed for '{}'",
+                        collection_config.name
+                    )
+                    .green()
+                );
                 println!("  Processed: {} documents", transformed_docs.len());
-                println!("  Time: {:.1}s", optimized_processor.performance_processor.get_performance_stats().processing_time_seconds);
+                println!(
+                    "  Time: {:.1}s",
+                    optimized_processor
+                        .performance_processor
+                        .get_performance_stats()
+                        .processing_time_seconds
+                );
             } else if docs.len() > 100 {
-                info!("Medium dataset ({} documents), using parallel processing", docs.len());
-                
+                info!(
+                    "Medium dataset ({} documents), using parallel processing",
+                    docs.len()
+                );
+
                 let perf_config = PerformanceConfig {
                     num_threads: num_cpus::get(),
                     memory_limit_mb: 512,
@@ -263,37 +410,247 @@ fn main() -> Result<()> {
                     memory_monitor_interval: 5,
                     enable_adaptive_chunking: true,
                 };
-                
+
                 let mut perf_processor = PerformanceProcessor::new(perf_config);
-                let transformed_docs = perf_processor.process_documents_parallel(&docs, &mapping)?;
-                
+                let transformed_docs =
+                    perf_processor.process_documents_parallel(&docs, &mapping)?;
+
                 let output_path = format!("{}/{}", config.output, collection_config.name);
                 info!("Writing seed file to {}", output_path);
                 target_adapter.emit_seed(&transformed_docs, &output_path, &opts)?;
-                
-                println!("{}", format!("✓ Parallel processing completed for '{}'", collection_config.name).green());
+
+                println!(
+                    "{}",
+                    format!(
+                        "✓ Parallel processing completed for '{}'",
+                        collection_config.name
+                    )
+                    .green()
+                );
                 println!("  Processed: {} documents", transformed_docs.len());
-                println!("  Time: {:.1}s", perf_processor.get_performance_stats().processing_time_seconds);
+                println!(
+                    "  Time: {:.1}s",
+                    perf_processor
+                        .get_performance_stats()
+                        .processing_time_seconds
+                );
             } else {
                 // Use simple processing for small datasets
-                info!("Small dataset ({} documents), using simple processing", docs.len());
+                info!(
+                    "Small dataset ({} documents), using simple processing",
+                    docs.len()
+                );
                 let mut transformed_docs = Vec::new();
                 for doc in &docs {
                     let transformed = mapping::apply_mapping(doc, &mapping)?;
                     transformed_docs.push(transformed);
                 }
-                
+
                 let output_path = format!("{}/{}", config.output, collection_config.name);
                 info!("Writing seed file to {}", output_path);
                 target_adapter.emit_seed(&transformed_docs, &output_path, &opts)?;
-                info!("Migration completed successfully for collection '{}'", collection_config.name);
+                info!(
+                    "Migration completed successfully for collection '{}'",
+                    collection_config.name
+                );
             }
         }
     }
 
     println!();
-    println!("{}", "🎉 All Collections Processed Successfully!".green().bold());
-    println!("{}", format!("Processed {} collections", config.collections.len()).cyan());
+    println!(
+        "{}",
+        "🎉 All Collections Processed Successfully!".green().bold()
+    );
+    println!(
+        "{}",
+        format!("Processed {} collections", config.collections.len()).cyan()
+    );
 
     Ok(())
+}
+
+/// Explain the general migration process
+fn explain_general_migration_process() {
+    use colored::Colorize;
+    
+    println!("{}", "🔄 General Migration Process".cyan().bold());
+    println!("{}", "─".repeat(50));
+    println!();
+    
+    println!("{}", "1. Initialize Configuration".yellow().bold());
+    println!("   Run: {}", "porter init".green());
+    println!("   • Select your source system (Umbraco, WordPress, etc.)");
+    println!("   • Select your target system (Payload, Strapi, etc.)");
+    println!("   • Configure collections and their data sources");
+    println!();
+    
+    println!("{}", "2. Generate Mappings".yellow().bold());
+    println!("   Run: {}", "porter generate".green());
+    println!("   • Analyzes source data structure");
+    println!("   • Analyzes target collection schemas");
+    println!("   • Creates field mapping files");
+    println!("   • Allows interactive field mapping");
+    println!();
+    
+    println!("{}", "3. Migrate Data".yellow().bold());
+    println!("   Run: {}", "porter migrate".green());
+    println!("   • Reads source data");
+    println!("   • Applies field mappings");
+    println!("   • Transforms data to target format");
+    println!("   • Generates seed files for target system");
+    println!();
+    
+    println!("{}", "📋 Available Commands".cyan().bold());
+    println!("{}", "─".repeat(30));
+    println!("{} - Initialize configuration", "porter init".green());
+    println!("{} - Generate field mappings", "porter generate".green());
+    println!("{} - Migrate data", "porter migrate".green());
+    println!("{} - Show current configuration", "porter config".green());
+    println!("{} - Explain migration process", "porter explain".green());
+    println!();
+}
+
+/// Explain the migration process for a specific configuration
+fn explain_migration_process(config: &PorterConfig) {
+    use colored::Colorize;
+    
+    println!("{}", "📋 Your Migration Configuration".cyan().bold());
+    println!("{}", "─".repeat(50));
+    println!("Source: {}", config.source.blue());
+    println!("Target: {}", config.target.blue());
+    println!("Output: {}", config.output.blue());
+    println!("Collections: {}", config.collections.len().to_string().blue());
+    println!();
+    
+    // Show collection details
+    for (i, collection) in config.collections.iter().enumerate() {
+        println!("{} Collection {}: {}", "📁".cyan(), (i + 1).to_string().yellow(), collection.name.blue());
+        println!("   Source: {}", collection.source_data.blue());
+        if let Some(path) = &collection.collection_path {
+            println!("   Schema: {}", path.blue());
+        }
+        println!();
+    }
+    
+    // Explain the process based on source type
+    match config.source.as_str() {
+        "wordpress" => {
+            if let Some(input_type) = config.metadata.as_ref().and_then(|m| m.get("wordpress_input_type")) {
+                if input_type == "api" {
+                    explain_wordpress_api_migration(config);
+                } else {
+                    explain_wordpress_file_migration(config);
+                }
+            } else {
+                explain_wordpress_file_migration(config);
+            }
+        }
+        "umbraco" => explain_umbraco_migration(config),
+        _ => explain_general_migration_process(),
+    }
+}
+
+/// Explain WordPress API migration process
+fn explain_wordpress_api_migration(config: &PorterConfig) {
+    use colored::Colorize;
+    
+    println!("{}", "🌐 WordPress API Migration Process".cyan().bold());
+    println!("{}", "─".repeat(50));
+    println!();
+    
+    if let Some(api_url) = config.metadata.as_ref().and_then(|m| m.get("wordpress_api_url")) {
+        println!("WordPress API URL: {}", api_url.blue());
+        println!();
+    }
+    
+    println!("{}", "Step 1: Generate Mappings".yellow().bold());
+    println!("   Run: {}", "porter generate".green());
+    println!("   • Connects to WordPress API at the configured URL");
+    println!("   • Discovers available endpoints (posts, pages, media, etc.)");
+    println!("   • Fetches sample data from each configured endpoint");
+    println!("   • Analyzes WordPress field structure");
+    println!("   • Analyzes Payload collection schemas");
+    println!("   • Creates field mapping files in ./mappings/ directory");
+    println!("   • Allows interactive field mapping for complex fields");
+    println!();
+    
+    println!("{}", "Step 2: Review and Adjust Mappings".yellow().bold());
+    println!("   • Check generated mapping files in ./mappings/");
+    println!("   • Edit mappings if needed for custom field transformations");
+    println!("   • Test mappings with a small dataset if desired");
+    println!();
+    
+    println!("{}", "Step 3: Migrate Data".yellow().bold());
+    println!("   Run: {}", "porter migrate".green());
+    println!("   • Connects to WordPress API");
+    println!("   • Fetches all data from configured endpoints");
+    println!("   • Applies field mappings to transform data");
+    println!("   • Generates Payload seed files in {}", config.output.blue());
+    println!("   • Creates TypeScript seed files for each collection");
+    println!();
+    
+    println!("{}", "Step 4: Import to Payload".yellow().bold());
+    println!("   • Copy generated seed files to your Payload project");
+    println!("   • Run Payload's seed command to import data");
+    println!("   • Verify data in Payload admin interface");
+    println!();
+    
+    println!("{}", "🔧 Collection Details".cyan().bold());
+    for collection in &config.collections {
+        println!("• {} → {}", collection.source_data.blue(), collection.name.blue());
+        if let Some(schema_path) = &collection.collection_path {
+            println!("  Schema: {}", schema_path.blue());
+        }
+    }
+    println!();
+}
+
+/// Explain WordPress file migration process
+fn explain_wordpress_file_migration(_config: &PorterConfig) {
+    use colored::Colorize;
+    
+    println!("{}", "📄 WordPress File Migration Process".cyan().bold());
+    println!("{}", "─".repeat(50));
+    println!();
+    
+    println!("{}", "Step 1: Generate Mappings".yellow().bold());
+    println!("   Run: {}", "porter generate".green());
+    println!("   • Reads WordPress WXR export files");
+    println!("   • Parses WordPress XML structure");
+    println!("   • Analyzes WordPress field structure");
+    println!("   • Analyzes Payload collection schemas");
+    println!("   • Creates field mapping files");
+    println!();
+    
+    println!("{}", "Step 2: Migrate Data".yellow().bold());
+    println!("   Run: {}", "porter migrate".green());
+    println!("   • Reads WordPress export files");
+    println!("   • Applies field mappings");
+    println!("   • Generates Payload seed files");
+    println!();
+}
+
+/// Explain Umbraco migration process
+fn explain_umbraco_migration(_config: &PorterConfig) {
+    use colored::Colorize;
+    
+    println!("{}", "🏢 Umbraco Migration Process".cyan().bold());
+    println!("{}", "─".repeat(50));
+    println!();
+    
+    println!("{}", "Step 1: Generate Mappings".yellow().bold());
+    println!("   Run: {}", "porter generate".green());
+    println!("   • Reads Umbraco JSON export files");
+    println!("   • Analyzes Umbraco content structure");
+    println!("   • Analyzes Payload collection schemas");
+    println!("   • Creates field mapping files");
+    println!();
+    
+    println!("{}", "Step 2: Migrate Data".yellow().bold());
+    println!("   Run: {}", "porter migrate".green());
+    println!("   • Reads Umbraco export files");
+    println!("   • Applies field mappings");
+    println!("   • Generates Payload seed files");
+    println!();
 }

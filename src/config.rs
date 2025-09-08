@@ -202,7 +202,7 @@ pub fn create_config_interactively() -> Result<PorterConfig> {
     let mut config = PorterConfig::default();
 
     // Source selection
-    let source_options = vec!["umbraco", "wordpress (not implemented)", "drupal (not implemented)", "custom"];
+    let source_options = vec!["umbraco", "wordpress", "drupal (not implemented)", "custom"];
     let source_index = interact::select_with_arrows(
         "Select source system:",
         &source_options,
@@ -210,6 +210,38 @@ pub fn create_config_interactively() -> Result<PorterConfig> {
     )?;
     config.source = source_options[source_index].to_string();
     println!("{}", format!("✓ Selected source: {}", config.source).green());
+
+    // WordPress-specific configuration
+    if config.source == "wordpress" {
+        println!();
+        println!("{}", "🔧 WordPress Configuration".cyan().bold());
+        
+        // Source input type selection
+        let input_type_options = vec!["api", "file (wxr export)"];
+        let input_type_index = interact::select_with_arrows(
+            "Select WordPress source input type:",
+            &input_type_options,
+            "input_type"
+        )?;
+        let input_type = input_type_options[input_type_index].to_string();
+        println!("{}", format!("✓ Selected input type: {}", input_type).green());
+        
+        // Store WordPress configuration in metadata
+        if config.metadata.is_none() {
+            config.metadata = Some(HashMap::new());
+        }
+        config.metadata.as_mut().unwrap().insert("wordpress_input_type".to_string(), input_type.clone());
+        
+        // If API is selected, ask for API URL
+        if input_type.as_str() == "api" {
+            let api_url = interact::prompt("Enter WordPress API URL (e.g., https://example.com/wp-json/wp/v2):")?;
+            if api_url.is_empty() {
+                return Err(anyhow!("API URL is required for WordPress API source"));
+            }
+            config.metadata.as_mut().unwrap().insert("wordpress_api_url".to_string(), api_url);
+            println!("{}", format!("✓ API URL: {}", config.metadata.as_ref().unwrap().get("wordpress_api_url").unwrap()).green());
+        }
+    }
 
     // Target selection
     let target_options = vec!["payload", "strapi (not implemented)", "contentful (not implemented)", "custom"];
@@ -222,7 +254,12 @@ pub fn create_config_interactively() -> Result<PorterConfig> {
     println!("{}", format!("✓ Selected target: {}", config.target).green());
 
     // Output directory
-    let output = interact::prompt_with_default("Enter output directory:", "./seed")?;
+    let default_output = if config.source == "wordpress" {
+        "./test-data/ya/seed"
+    } else {
+        "./seed"
+    };
+    let output = interact::prompt_with_default("Enter output directory:", default_output)?;
     config.output = output;
     println!("{}", format!("✓ Output: {}", config.output).green());
 
@@ -245,17 +282,35 @@ pub fn create_config_interactively() -> Result<PorterConfig> {
         }
         println!("{}", format!("✓ Collection name: {}", collection_name).green());
         
-        // Source data path
-        let source_data = interact::prompt(&format!("Enter source data file path for '{}' (e.g., ./test-data/{}-umbraco.json):", collection_name, collection_name))?;
-        if source_data.is_empty() {
-            return Err(anyhow!("Source data path is required"));
-        }
-        println!("{}", format!("✓ Source data: {}", source_data).green());
+        // Source data path or API endpoint
+        let source_data = if config.source == "wordpress" && 
+            config.metadata.as_ref().and_then(|m| m.get("wordpress_input_type")).map(|s| s.as_str()) == Some("api") {
+            // For WordPress API, ask for endpoint
+            let endpoint = interact::prompt(&format!("Enter WordPress API endpoint for '{}' (e.g., posts, pages, media):", collection_name))?;
+            if endpoint.is_empty() {
+                return Err(anyhow!("API endpoint is required for WordPress API source"));
+            }
+            println!("{}", format!("✓ API endpoint: {}", endpoint).green());
+            endpoint
+        } else {
+            // For file-based sources
+            let file_path = interact::prompt(&format!("Enter source data file path for '{}' (e.g., ./test-data/{}-umbraco.json):", collection_name, collection_name))?;
+            if file_path.is_empty() {
+                return Err(anyhow!("Source data path is required"));
+            }
+            println!("{}", format!("✓ Source data: {}", file_path).green());
+            file_path
+        };
         
         // Collection path for Payload
         let mut collection_path = None;
         if config.target == "payload" {
-            let path = interact::prompt(&format!("Enter collection schema path for '{}' (e.g., ./test-data/{}.ts):", collection_name, collection_name))?;
+            let default_path = if config.source == "wordpress" {
+                format!("./test-data/ya/collections/{}.ts", collection_name)
+            } else {
+                format!("./test-data/{}.ts", collection_name)
+            };
+            let path = interact::prompt_with_default(&format!("Enter collection schema path for '{}':", collection_name), &default_path)?;
             if path.is_empty() {
                 return Err(anyhow!("Collection schema path is required for Payload CMS"));
             }

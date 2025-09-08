@@ -1,0 +1,17 @@
+source = "wordpress"
+target = "payload"
+output = "./test-data/ya/seed"
+interactive = true
+verbose = true
+dry_run = false
+debug = false
+fixtures = false
+
+[metadata]
+wordpress_input_type = "api"
+wordpress_api_url = "https://www.yourapartment.com/wp-json/wp/v2"
+
+[[collections]]
+name = "pages"
+source_data = "pages"
+collection_path = "./test-data/ya/collections/pages.ts"
