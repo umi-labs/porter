@@ -23,7 +23,7 @@ id = "ENT-007"
 title = "DRY Policy & Dead Code Removal"
 description = "Enforce DRY principles, remove unused code, and add CI guardrails for dead code detection and duplication checks"
 priority = 1
-status = "todo"
+status = "completed"
 complexity = "medium"
 
 [categories.platform_expansion]
@@ -83,7 +83,7 @@ id = "PLAT-009"
 title = "Clarify WordPress API Config Semantics"
 description = "Make API mode explicit in WordPressConfig (avoid WXR placeholder) and update usage in main flow"
 priority = 3
-status = "todo"
+status = "completed"
 complexity = "low"
 
 [[categories.platform_expansion.tasks]]
@@ -91,7 +91,7 @@ id = "PLAT-010"
 title = "Additional WordPress Endpoints"
 description = "Add fetch + processing for users, categories, and tags in the API connector and source adapter"
 priority = 3
-status = "todo"
+status = "completed"
 complexity = "low"
 
 [[categories.platform_expansion.tasks]]
@@ -183,7 +183,7 @@ id = "DEV-006"
 title = "Dead Code & Duplication Checks in CI"
 description = "Add CI jobs to detect dead code and duplication; fail builds on regressions"
 priority = 2
-status = "todo"
+status = "completed"
 complexity = "low"
 
 [categories.core_architecture]
@@ -239,7 +239,7 @@ id = "CLI-INIT-001"
 title = "Init Flow: Source/Target Selection & Details"
 description = "Collect source (e.g., wordpress/umbraco) + format (api/wxr/json), target (payload) + format (seed files), capture required details, and write porter.config.toml at repo root"
 priority = 1
-status = "todo"
+status = "completed"
 complexity = "medium"
 
 [[categories.cli_tool.tasks]]
@@ -247,7 +247,7 @@ id = "CLI-INIT-002"
 title = "Init Flow: Collection Alignment"
 description = "Discover source endpoints, prompt for collection names with suggestions, map each to a source endpoint and a target collection config path"
 priority = 1
-status = "todo"
+status = "completed"
 complexity = "medium"
 
 [[categories.cli_tool.tasks]]
@@ -324,9 +324,9 @@ complexity = "low"
 
 [progress_summary]
 total_tasks = 56
-completed_tasks = 26
-remaining_tasks = 30
-completion_percentage = 46
+completed_tasks = 32
+remaining_tasks = 24
+completion_percentage = 57
 
 [recent_achievements]
 achievement_1 = "Implemented comprehensive nested mapping system with dot notation, array indexing, and wildcards"

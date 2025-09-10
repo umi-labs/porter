@@ -16,7 +16,7 @@ use porter::performance::{OptimizedBatchProcessor, PerformanceConfig, Performanc
 use porter::plugin::{PluginManager, get_default_plugin_dir};
 use porter::sources::umbraco::UmbracoSource;
 use porter::targets::payload::PayloadTarget;
-use porter::adapters::{SourceAdapter, ApiSourceAdapter, AuthConfig, AuthType, ConnectionMethod};
+use porter::adapters::{SourceAdapter, ApiSourceAdapter, ConnectionMethod};
 use std::path::Path;
 
 #[tokio::main]
@@ -27,8 +27,8 @@ async fn main() -> Result<()> {
     if let Some(command) = cli.command {
         match command {
             Commands::Init { output } => {
-                println!("{}", "🚀 Initializing Porter Configuration".cyan().bold());
-                let config = create_config_interactively()?;
+                println!("{}", "🚀 Initialising Porter Configuration".cyan().bold());
+                let config = create_config_interactively().await?;
                 config.save_to_file(&output)?;
                 return Ok(());
             }
@@ -342,7 +342,7 @@ async fn main() -> Result<()> {
             // Initialize WordPress source with API configuration
             let mut wp_source = porter::sources::wordpress::WordPressSource::new();
             let wp_config = porter::sources::wordpress::WordPressConfig {
-                format: porter::sources::wordpress::WordPressFormat::WXR, // API mode
+                format: porter::sources::wordpress::WordPressFormat::Api,
                 content_types: vec![collection_config.source_data.clone()],
                 include_drafts: false,
                 include_private: false,
@@ -360,36 +360,7 @@ async fn main() -> Result<()> {
             
             // Initialize the source adapter
             // Build auth_config from metadata if present
-            let auth_config = config.metadata.as_ref().and_then(|m| m.get("wordpress_auth_type")).map(|t| t.as_str()).and_then(|auth_type| {
-                let mut credentials = std::collections::HashMap::new();
-                match auth_type {
-                    "bearer" => {
-                        if let Some(token) = config.metadata.as_ref().and_then(|m| m.get("wordpress_bearer_token")) {
-                            credentials.insert("token".to_string(), token.clone());
-                            Some(AuthConfig { auth_type: AuthType::Bearer, credentials })
-                        } else { None }
-                    }
-                    "basic" => {
-                        let user = config.metadata.as_ref().and_then(|m| m.get("wordpress_basic_username"));
-                        let pass = config.metadata.as_ref().and_then(|m| m.get("wordpress_basic_password"));
-                        if let (Some(u), Some(p)) = (user, pass) {
-                            credentials.insert("username".to_string(), u.clone());
-                            credentials.insert("password".to_string(), p.clone());
-                            Some(AuthConfig { auth_type: AuthType::Basic, credentials })
-                        } else { None }
-                    }
-                    "apikey" => {
-                        let header = config.metadata.as_ref().and_then(|m| m.get("wordpress_api_key_header"));
-                        let key = config.metadata.as_ref().and_then(|m| m.get("wordpress_api_key"));
-                        if let Some(k) = key { 
-                            credentials.insert("key".to_string(), k.clone());
-                            credentials.insert("header".to_string(), header.cloned().unwrap_or_else(|| "X-API-Key".to_string()));
-                            Some(AuthConfig { auth_type: AuthType::ApiKey, credentials })
-                        } else { None }
-                    }
-                    _ => None,
-                }
-            });
+            let auth_config = config.metadata.as_ref().and_then(|m| porter::util::auth::build_auth_config_from_metadata(m));
 
             let source_config = porter::adapters::SourceConfig {
                 adapter_type: "wordpress".to_string(),

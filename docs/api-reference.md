@@ -89,7 +89,7 @@ pub fn find_and_load_config() -> Result<Option<PorterConfig>>
 Finds and loads configuration from common locations.
 
 ```rust
-pub fn create_config_interactively() -> Result<PorterConfig>
+pub async fn create_config_interactively() -> Result<PorterConfig>
 ```
 Creates configuration through interactive prompts.
 
