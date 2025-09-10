@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use anyhow::{Result, anyhow};
 use colored::Colorize;
+use porter::adapters::{AuthConfig, AuthType};
+use porter::sources::wordpress::{WordPressApiConnector};
+use porter::sources::wordpress::config::WordPressConfig;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct CollectionConfig {
@@ -240,6 +243,109 @@ pub fn create_config_interactively() -> Result<PorterConfig> {
             }
             config.metadata.as_mut().unwrap().insert("wordpress_api_url".to_string(), api_url);
             println!("{}", format!("✓ API URL: {}", config.metadata.as_ref().unwrap().get("wordpress_api_url").unwrap()).green());
+
+            // Optional authentication configuration
+            println!("\n{}", "🔐 WordPress API Authentication (optional)".cyan().bold());
+            let auth_options = vec!["none", "bearer", "basic", "apikey"];
+            let auth_choice = interact::select_with_arrows(
+                "Select authentication type:",
+                &auth_options,
+                "auth_type"
+            )?;
+            let auth_type = auth_options[auth_choice].to_string();
+            config.metadata.as_mut().unwrap().insert("wordpress_auth_type".to_string(), auth_type.clone());
+
+            match auth_type.as_str() {
+                "bearer" => {
+                    let token = interact::prompt("Enter Bearer token (will be stored in config):")?;
+                    if !token.is_empty() {
+                        config.metadata.as_mut().unwrap().insert("wordpress_bearer_token".to_string(), token);
+                        println!("{}", "✓ Bearer token saved".green());
+                    }
+                }
+                "basic" => {
+                    let user = interact::prompt("Enter Basic auth username:")?;
+                    let pass = interact::prompt("Enter Basic auth password:")?;
+                    if !user.is_empty() && !pass.is_empty() {
+                        config.metadata.as_mut().unwrap().insert("wordpress_basic_username".to_string(), user);
+                        config.metadata.as_mut().unwrap().insert("wordpress_basic_password".to_string(), pass);
+                        println!("{}", "✓ Basic credentials saved".green());
+                    }
+                }
+                "apikey" => {
+                    let header = interact::prompt_with_default("Enter API key header name:", "X-API-Key")?;
+                    let key = interact::prompt("Enter API key value:")?;
+                    if !key.is_empty() {
+                        config.metadata.as_mut().unwrap().insert("wordpress_api_key_header".to_string(), header);
+                        config.metadata.as_mut().unwrap().insert("wordpress_api_key".to_string(), key);
+                        println!("{}", "✓ API key saved".green());
+                    }
+                }
+                _ => {
+                    // none
+                }
+            }
+            // Endpoint discovery from API root
+            let mut discovered_endpoints: Vec<String> = Vec::new();
+            if let Some(api_url) = config.metadata.as_ref().and_then(|m| m.get("wordpress_api_url")).cloned() {
+                // Build auth_config from metadata
+                let auth_config = config.metadata.as_ref().and_then(|m| m.get("wordpress_auth_type")).map(|t| t.as_str()).and_then(|auth_type| {
+                    let mut credentials = HashMap::new();
+                    match auth_type {
+                        "bearer" => {
+                            if let Some(token) = config.metadata.as_ref().and_then(|m| m.get("wordpress_bearer_token")) {
+                                credentials.insert("token".to_string(), token.clone());
+                                Some(AuthConfig { auth_type: AuthType::Bearer, credentials })
+                            } else { None }
+                        }
+                        "basic" => {
+                            let user = config.metadata.as_ref().and_then(|m| m.get("wordpress_basic_username"));
+                            let pass = config.metadata.as_ref().and_then(|m| m.get("wordpress_basic_password"));
+                            if let (Some(u), Some(p)) = (user, pass) {
+                                credentials.insert("username".to_string(), u.clone());
+                                credentials.insert("password".to_string(), p.clone());
+                                Some(AuthConfig { auth_type: AuthType::Basic, credentials })
+                            } else { None }
+                        }
+                        "apikey" => {
+                            let header = config.metadata.as_ref().and_then(|m| m.get("wordpress_api_key_header")).cloned().unwrap_or_else(|| "X-API-Key".to_string());
+                            let key = config.metadata.as_ref().and_then(|m| m.get("wordpress_api_key"));
+                            if let Some(k) = key { 
+                                credentials.insert("key".to_string(), k.clone());
+                                credentials.insert("header".to_string(), header);
+                                Some(AuthConfig { auth_type: AuthType::ApiKey, credentials })
+                            } else { None }
+                        }
+                        _ => None,
+                    }
+                });
+
+                // Use a small runtime for discovery (init is sync)
+                let connector = WordPressApiConnector::new(api_url, WordPressConfig::default(), auth_config);
+                if let Ok(conn) = connector {
+                    if let Ok(rt) = tokio::runtime::Runtime::new() {
+                        match rt.block_on(conn.get_available_content_types()) {
+                            Ok(mut eps) => {
+                                eps.sort(); eps.dedup();
+                                discovered_endpoints = eps;
+                                if !discovered_endpoints.is_empty() {
+                                    println!("{} {:?}", "✓ Discovered endpoints:".green(), discovered_endpoints);
+                                }
+                            }
+                            Err(e) => println!("{} {}", "⚠ Failed to discover endpoints:".yellow(), e),
+                        }
+                    }
+                }
+            }
+
+            // Persist discovered endpoints temporarily in metadata for use in collection wizard
+            if !discovered_endpoints.is_empty() {
+                // Store as comma-separated for simple handoff; not part of long-term schema
+                config.metadata.as_mut().unwrap().insert(
+                    "_wp_discovered_endpoints".to_string(),
+                    discovered_endpoints.join(",")
+                );
+            }
         }
     }
 
@@ -270,6 +376,51 @@ pub fn create_config_interactively() -> Result<PorterConfig> {
     
     let mut collections = Vec::new();
     let mut add_more = true;
+
+    // If we have discovered endpoints, walk the wizard over them first
+    let mut discovered: Vec<String> = config.metadata.as_ref()
+        .and_then(|m| m.get("_wp_discovered_endpoints").cloned())
+        .map(|s| s.split(',').map(|v| v.to_string()).collect())
+        .unwrap_or_else(|| Vec::new());
+
+    if !discovered.is_empty() && config.source == "wordpress" &&
+        config.metadata.as_ref().and_then(|m| m.get("wordpress_input_type")).map(|s| s.as_str()) == Some("api") {
+        println!("{}", "🔎 Found endpoints from API – let’s align them to collections".cyan().bold());
+        let total = discovered.len();
+        for (i, endpoint) in discovered.clone().into_iter().enumerate() {
+            println!("\n{}", format!("=== Endpoint {}/{}: {} ===", i + 1, total, endpoint).yellow().bold());
+            // Suggest collection name from endpoint
+            let suggested = endpoint.clone();
+            let collection_name = interact::prompt_with_default("What would you like to name this collection?", &suggested)?;
+            println!("{}", format!("✓ Collection name: {}", collection_name).green());
+
+            // Confirm endpoint (single selection)
+            println!("{}", format!("Using source endpoint: {}", endpoint).green());
+
+            // Target schema path
+            let default_path = format!("./src/collections/{}.ts", collection_name);
+            let path = interact::prompt_with_default(&format!("Enter collection schema path for '{}':", collection_name), &default_path)?;
+            if path.is_empty() {
+                return Err(anyhow!("Collection schema path is required for Payload CMS"));
+            }
+            let collection_path = Some(path);
+
+            let collection_config = CollectionConfig {
+                name: collection_name,
+                source_data: endpoint,
+                collection_path,
+                locale: None,
+                related_collections: None,
+            };
+            collections.push(collection_config);
+        }
+        // Clean up temporary metadata key
+        if let Some(meta) = &mut config.metadata {
+            meta.remove("_wp_discovered_endpoints");
+        }
+        // Ask if they want to add additional collections manually
+        add_more = interact::confirm_with_default("Add another collection (manual)?", false)?;
+    }
     
     while add_more {
         println!();
