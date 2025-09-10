@@ -444,6 +444,20 @@ impl MappingGenerator {
     }
 }
 
+impl MappingGenerator {
+    fn write_porter_format(&self, collection_name: &str, docs: &[Value]) -> Result<()> {
+        let out_dir = Path::new("./porter-format");
+        if !out_dir.exists() {
+            fs::create_dir_all(out_dir).context("Failed to create porter-format directory")?;
+        }
+        let out_file = out_dir.join(format!("{}.json", collection_name));
+        let content = serde_json::to_string_pretty(&docs)
+            .context("Failed to serialize porter-format docs")?;
+        fs::write(out_file, content).context("Failed to write porter-format file")?;
+        Ok(())
+    }
+}
+
 /// Information about a field
 #[derive(Debug, Clone)]
 struct FieldInfo {

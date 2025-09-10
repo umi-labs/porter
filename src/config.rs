@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use anyhow::{Result, anyhow};
 use colored::Colorize;
-use porter::adapters::{AuthConfig, AuthType};
-use porter::sources::wordpress::{WordPressApiConnector};
-use porter::sources::wordpress::config::WordPressConfig;
+use crate::adapters::{AuthConfig, AuthType};
+use crate::sources::wordpress::WordPressApiConnector;
+use crate::sources::wordpress::config::WordPressConfig;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct CollectionConfig {
