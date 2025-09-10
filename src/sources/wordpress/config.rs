@@ -51,6 +51,8 @@ pub enum WordPressFormat {
     WXR,
     /// JSON dump format
     JSON,
+    /// WordPress REST API
+    Api,
     /// Direct database connection (future)
     Database,
 }

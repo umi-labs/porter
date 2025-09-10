@@ -3,9 +3,8 @@ use crate::adapters::{
     SourceConfig, SourceMetadata, SourceQuery,
 };
 use anyhow::{Context, Result};
-use crate::adapters::{AuthConfig};
-use futures::future::BoxFuture;
-use futures::stream::{BoxStream, Stream};
+// use crate::adapters::{AuthConfig};
+use futures::stream::Stream;
 use log::info;
 use serde_json::{Value, json};
 use std::pin::Pin;
@@ -400,7 +399,7 @@ impl ApiSourceAdapter for WordPressSource {
         query: &SourceQuery,
     ) -> Pin<Box<dyn futures::Future<Output = Result<Vec<Value>>> + Send + '_>> {
         let endpoint = query.query.clone();
-        let include_media = self.wp_config.include_media;
+        let _include_media = self.wp_config.include_media;
 
         Box::pin(async move {
             if !self.initialized {
@@ -419,6 +418,9 @@ impl ApiSourceAdapter for WordPressSource {
                 Some("posts") => connector.fetch_posts().await,
                 Some("pages") => connector.fetch_pages().await,
                 Some("media") => connector.fetch_media().await,
+                Some("users") => connector.fetch_users().await,
+                Some("categories") => connector.fetch_categories().await,
+                Some("tags") => connector.fetch_tags().await,
                 None => {
                     // Fetch all content types and combine them
                     let mut all_documents = Vec::new();
@@ -440,6 +442,26 @@ impl ApiSourceAdapter for WordPressSource {
                         match connector.fetch_media().await {
                             Ok(mut media) => all_documents.append(&mut media),
                             Err(e) => info!("Failed to fetch media: {}", e),
+                        }
+                    }
+
+                    // Fetch users if configured
+                    if self.wp_config.include_users {
+                        match connector.fetch_users().await {
+                            Ok(mut users) => all_documents.append(&mut users),
+                            Err(e) => info!("Failed to fetch users: {}", e),
+                        }
+                    }
+
+                    // Fetch taxonomies if configured
+                    if self.wp_config.include_taxonomies {
+                        match connector.fetch_categories().await {
+                            Ok(mut categories) => all_documents.append(&mut categories),
+                            Err(e) => info!("Failed to fetch categories: {}", e),
+                        }
+                        match connector.fetch_tags().await {
+                            Ok(mut tags) => all_documents.append(&mut tags),
+                            Err(e) => info!("Failed to fetch tags: {}", e),
                         }
                     }
 

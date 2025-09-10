@@ -1155,6 +1155,14 @@ pub struct WordPressConfig {
 pub enum WordPressFormat {
     WXR,
     JSON,
+    Api,
+    Database,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum WordPressFormat {
+    WXR,
+    JSON,
+    Api,
     Database,
 }
 
@@ -1261,6 +1269,26 @@ name = "medium"
 width = 300
 height = 300
 crop = false
+```
+
+```toml
+# WordPress REST API Configuration
+[source]
+adapter_type = "wordpress"
+connection_method = { type = "api", endpoint = "https://example.com/wp-json/wp/v2" }
+
+[source.adapter_config]
+format = "api"
+content_types = ["posts", "pages", "media"]
+include_acf_fields = true
+include_users = true
+include_taxonomies = true
+
+# Optional auth
+[source.connection_method.auth_config]
+# one of: "bearer", "basic", "apikey"
+type = "bearer"
+token = "<YOUR_TOKEN>"
 ```
 
 This comprehensive WordPress source implementation provides robust support for all major WordPress export formats and data structures, with extensible field processing capabilities and flexible configuration options.

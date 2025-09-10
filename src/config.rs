@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use anyhow::{Result, anyhow};
 use colored::Colorize;
-use crate::adapters::{AuthConfig, AuthType};
+// use crate::adapters::{AuthConfig, AuthType};
+use crate::util::auth::build_auth_config_from_metadata;
 use crate::sources::wordpress::WordPressApiConnector;
 use crate::sources::wordpress::config::WordPressConfig;
 
@@ -195,7 +196,7 @@ pub fn find_and_load_config() -> Result<Option<PorterConfig>> {
 }
 
 /// Creates a new configuration file interactively
-pub fn create_config_interactively() -> Result<PorterConfig> {
+pub async fn create_config_interactively() -> Result<PorterConfig> {
     use crate::util::interact;
     
     println!("{}", "🚀 Porter Configuration Setup".cyan().bold());
@@ -289,51 +290,20 @@ pub fn create_config_interactively() -> Result<PorterConfig> {
             let mut discovered_endpoints: Vec<String> = Vec::new();
             if let Some(api_url) = config.metadata.as_ref().and_then(|m| m.get("wordpress_api_url")).cloned() {
                 // Build auth_config from metadata
-                let auth_config = config.metadata.as_ref().and_then(|m| m.get("wordpress_auth_type")).map(|t| t.as_str()).and_then(|auth_type| {
-                    let mut credentials = HashMap::new();
-                    match auth_type {
-                        "bearer" => {
-                            if let Some(token) = config.metadata.as_ref().and_then(|m| m.get("wordpress_bearer_token")) {
-                                credentials.insert("token".to_string(), token.clone());
-                                Some(AuthConfig { auth_type: AuthType::Bearer, credentials })
-                            } else { None }
-                        }
-                        "basic" => {
-                            let user = config.metadata.as_ref().and_then(|m| m.get("wordpress_basic_username"));
-                            let pass = config.metadata.as_ref().and_then(|m| m.get("wordpress_basic_password"));
-                            if let (Some(u), Some(p)) = (user, pass) {
-                                credentials.insert("username".to_string(), u.clone());
-                                credentials.insert("password".to_string(), p.clone());
-                                Some(AuthConfig { auth_type: AuthType::Basic, credentials })
-                            } else { None }
-                        }
-                        "apikey" => {
-                            let header = config.metadata.as_ref().and_then(|m| m.get("wordpress_api_key_header")).cloned().unwrap_or_else(|| "X-API-Key".to_string());
-                            let key = config.metadata.as_ref().and_then(|m| m.get("wordpress_api_key"));
-                            if let Some(k) = key { 
-                                credentials.insert("key".to_string(), k.clone());
-                                credentials.insert("header".to_string(), header);
-                                Some(AuthConfig { auth_type: AuthType::ApiKey, credentials })
-                            } else { None }
-                        }
-                        _ => None,
-                    }
-                });
+                let auth_config = config.metadata.as_ref().and_then(|m| build_auth_config_from_metadata(m));
 
-                // Use a small runtime for discovery (init is sync)
+                // Discover endpoints asynchronously (avoid nested runtimes)
                 let connector = WordPressApiConnector::new(api_url, WordPressConfig::default(), auth_config);
                 if let Ok(conn) = connector {
-                    if let Ok(rt) = tokio::runtime::Runtime::new() {
-                        match rt.block_on(conn.get_available_content_types()) {
-                            Ok(mut eps) => {
-                                eps.sort(); eps.dedup();
-                                discovered_endpoints = eps;
-                                if !discovered_endpoints.is_empty() {
-                                    println!("{} {:?}", "✓ Discovered endpoints:".green(), discovered_endpoints);
-                                }
+                    match conn.get_available_content_types().await {
+                        Ok(mut eps) => {
+                            eps.sort(); eps.dedup();
+                            discovered_endpoints = eps;
+                            if !discovered_endpoints.is_empty() {
+                                println!("{} {:?}", "✓ Discovered endpoints:".green(), discovered_endpoints);
                             }
-                            Err(e) => println!("{} {}", "⚠ Failed to discover endpoints:".yellow(), e),
                         }
+                        Err(e) => println!("{} {}", "⚠ Failed to discover endpoints:".yellow(), e),
                     }
                 }
             }
@@ -378,7 +348,7 @@ pub fn create_config_interactively() -> Result<PorterConfig> {
     let mut add_more = true;
 
     // If we have discovered endpoints, walk the wizard over them first
-    let mut discovered: Vec<String> = config.metadata.as_ref()
+    let discovered: Vec<String> = config.metadata.as_ref()
         .and_then(|m| m.get("_wp_discovered_endpoints").cloned())
         .map(|s| s.split(',').map(|v| v.to_string()).collect())
         .unwrap_or_else(|| Vec::new());

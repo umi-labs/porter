@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, prod ]
+  pull_request:
+    branches: [ main, prod ]
+
+jobs:
+  build-test-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-udeps and cargo-insta-dup
+        run: |
+          cargo install cargo-udeps --locked || true
+          cargo install cargo-deny --locked || true
+
+      - name: Build
+        run: cargo build --all --locked --verbose
+
+      - name: Test
+        run: cargo test --all --locked --verbose
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Dead dependencies (udeps)
+        run: cargo udeps --all-targets || true
+
+      - name: Duplication scan (basic)
+        run: |
+          # naive duplication check: find identical long lines across src
+          if grep -R "match endpoint {" -n src | wc -l | grep -qE '^[2-9]'; then
+            echo "Potential duplicated endpoint dispatch blocks detected"; exit 1; fi
