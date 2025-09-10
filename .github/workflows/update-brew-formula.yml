@@ -1,0 +1,60 @@
+name: Update Brew Formula
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-brew-formula:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout porter repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Get version from release
+      id: get_version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/v}
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+    
+    - name: Download release tarball
+      run: |
+        VERSION=${{ steps.get_version.outputs.version }}
+        wget -O "porter-${VERSION}.tar.gz" "https://github.com/umi-labs/porter/archive/v${VERSION}.tar.gz"
+    
+    - name: Calculate SHA256
+      id: calculate_sha256
+      run: |
+        VERSION=${{ steps.get_version.outputs.version }}
+        SHA256=$(shasum -a 256 "porter-${VERSION}.tar.gz" | cut -d' ' -f1)
+        echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+        echo "SHA256: $SHA256"
+    
+    - name: Update brew formula
+      run: |
+        VERSION=${{ steps.get_version.outputs.version }}
+        SHA256=${{ steps.calculate_sha256.outputs.sha256 }}
+        
+        # Update the formula file
+        sed -i "s/url \"https:\/\/github\.com\/umi-labs\/porter\/archive\/v.*\.tar\.gz\"/url \"https:\/\/github.com\/umi-labs\/porter\/archive\/v${VERSION}.tar.gz\"/" porter.rb
+        sed -i "s/sha256 \".*\"/sha256 \"${SHA256}\"/" porter.rb
+        
+        echo "Updated porter.rb with version $VERSION and SHA256 $SHA256"
+    
+    - name: Commit and push changes
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add porter.rb
+        git commit -m "Update brew formula to version ${{ steps.get_version.outputs.version }}"
+        git push
+    
+    - name: Create PR to homebrew tap (if applicable)
+      if: false  # Set to true if you have a separate homebrew tap repository
+      run: |
+        echo "This step would create a PR to your homebrew tap repository"
+        echo "You would need to configure the homebrew tap repository and token"

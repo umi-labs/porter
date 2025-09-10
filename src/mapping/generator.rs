@@ -1,4 +1,5 @@
 use crate::config::PorterConfig;
+use crate::mapping;
 use crate::sources::wordpress::WordPressApiConnector;
 use crate::sources::wordpress::config::WordPressConfig;
 use anyhow::{Context, Result};
@@ -110,7 +111,7 @@ impl MappingGenerator {
 
         // Create WordPress API connector
         let wp_config = WordPressConfig::default();
-        let connector = WordPressApiConnector::new(api_url.to_string(), wp_config)
+        let connector = WordPressApiConnector::new(api_url.to_string(), wp_config, None)
             .context("Failed to create WordPress API connector")?;
 
         // Test connection
@@ -119,21 +120,20 @@ impl MappingGenerator {
             .context("Failed to connect to WordPress API")?;
         println!("{}", "✓ API connection successful".green());
 
-        // Fetch sample data from the endpoint
-        println!("{}", "📥 Fetching sample data...".yellow());
-        let sample_data = connector.test_endpoint(&collection.source_data).await
-            .context("Failed to fetch sample data from WordPress API")?;
-        
-        let sample_docs = if let Some(array) = sample_data.as_array() {
-            if array.is_empty() {
-                return Err(anyhow::anyhow!("No data found in endpoint '{}'", collection.source_data));
-            }
-            array.clone()
-        } else {
-            vec![sample_data]
+        // Fetch endpoint data and write porter-format file
+        println!("{}", "📥 Fetching endpoint data for normalization...".yellow());
+        let porter_docs: Vec<Value> = match collection.source_data.as_str() {
+            "posts" => connector.fetch_posts().await?,
+            "pages" => connector.fetch_pages().await?,
+            "media" => connector.fetch_media().await?,
+            other => connector.fetch_custom_endpoint(other).await?,
         };
+        println!("{}", format!("✓ Retrieved {} document(s)", porter_docs.len()).green());
 
-        println!("{}", format!("✓ Fetched {} sample document(s)", sample_docs.len()).green());
+        self.write_porter_format(&collection.name, &porter_docs)?;
+        println!("{}", format!("✓ Wrote porter-format: ./porter-format/{}.json", collection.name).green());
+
+        let sample_docs: Vec<Value> = if porter_docs.is_empty() { vec![] } else { porter_docs.iter().take(50).cloned().collect() };
 
         // Analyze WordPress data structure
         let wp_fields = self.analyze_wordpress_fields(&sample_docs)?;
@@ -151,15 +151,27 @@ impl MappingGenerator {
             println!("{}", format!("✓ Analyzed {} Payload fields", payload_fields.len()).green());
         }
 
-        // Generate field mappings
-        let mappings = self.generate_field_mappings(&wp_fields, &payload_fields, collection)?;
-        println!("{}", format!("✓ Generated {} field mappings", mappings.len()).green());
+        if self.config.interactive {
+            println!("{}", "🧭 Starting interactive mapping...".yellow());
+            let _mapping = mapping::load_or_create_mapping(
+                &collection.name,
+                &self.config.source,
+                &self.config.target,
+                &sample_docs,
+                collection.collection_path.as_deref(),
+                true,
+                None,
+            )?;
+            println!("{}", "✓ Interactive mapping completed".green());
+        } else {
+            let mappings = self.generate_field_mappings(&wp_fields, &payload_fields, collection)?;
+            println!("{}", format!("✓ Generated {} field mappings", mappings.len()).green());
 
-        // Save mapping file
-        let mapping_file = format!("./mappings/{}.{}-to-{}.json", 
-            collection.name, self.config.source, self.config.target);
-        self.save_mapping_file(&mapping_file, &mappings, collection)?;
-        println!("{}", format!("✓ Saved mapping to {}", mapping_file).green());
+            let mapping_file = format!("./mappings/{}.{}-to-{}.json", 
+                collection.name, self.config.source, self.config.target);
+            self.save_mapping_file(&mapping_file, &mappings, collection)?;
+            println!("{}", format!("✓ Saved mapping to {}", mapping_file).green());
+        }
 
         Ok(())
     }

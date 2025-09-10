@@ -10,17 +10,9 @@
       "fallback": null
     },
     {
-      "to": "coordinates",
-      "from": "rcasLatitude",
-      "transforms": [
-        {
-          "params": {
-            "lat_field": "rcasLatitude",
-            "lng_field": "rcasLongitude"
-          },
-          "type": "combine_coordinates"
-        }
-      ],
+      "to": "body",
+      "from": "content",
+      "transforms": [],
       "fallback": null
     }
   ],

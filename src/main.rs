@@ -16,6 +16,7 @@ use porter::performance::{OptimizedBatchProcessor, PerformanceConfig, Performanc
 use porter::plugin::{PluginManager, get_default_plugin_dir};
 use porter::sources::umbraco::UmbracoSource;
 use porter::targets::payload::PayloadTarget;
+use porter::adapters::{SourceAdapter, ApiSourceAdapter, AuthConfig, AuthType, ConnectionMethod};
 use std::path::Path;
 
 #[tokio::main]
@@ -58,18 +59,84 @@ async fn main() -> Result<()> {
             }
             Commands::Migrate { config: config_file, collection: _collection } => {
                 println!("{}", "🚀 Starting Migration".cyan().bold());
-                
-                let _config = if let Some(config_path) = config_file {
+
+                let mut config = if let Some(config_path) = config_file {
                     PorterConfig::load_from_file(&config_path)?
                 } else if let Some(file_config) = find_and_load_config()? {
                     file_config
                 } else {
                     return Err(anyhow!("No configuration file found. Run 'porter init' first."));
                 };
-                
-                // TODO: Implement migration logic
-                println!("{}", "⚠️  Migration will be implemented in the next phase".yellow());
-                println!("This will migrate data from WordPress API to Payload CMS using generated mappings");
+
+                // Initialize plugin manager
+                let mut plugin_manager = PluginManager::new();
+                plugin_manager.register_source("umbraco", Box::new(UmbracoSource::new()));
+                plugin_manager.register_source(
+                    "wordpress",
+                    Box::new(porter::sources::wordpress::WordPressSource::new()),
+                );
+                plugin_manager.register_target("payload", Box::new(PayloadTarget::new()));
+
+                // Iterate collections
+                let total_collections = config.collections.len();
+                for (index, collection) in config.collections.iter().enumerate() {
+                    let current = index + 1;
+                    println!("\n{}", format!("🔄 Migrating Collection: {}/{} - {}", current, total_collections, collection.name).cyan().bold());
+                    println!("{}", "─".repeat(80));
+
+                    // Read porter-format docs
+                    let porter_path = format!("./porter-format/{}.json", collection.name);
+                    if !std::path::Path::new(&porter_path).exists() {
+                        return Err(anyhow!(
+                            "Porter-format file not found for collection '{}': {}. Run 'porter generate' first.",
+                            collection.name, porter_path
+                        ));
+                    }
+                    let porter_content = std::fs::read_to_string(&porter_path)?;
+                    let docs: Vec<serde_json::Value> = serde_json::from_str(&porter_content)
+                        .map_err(|e| anyhow!("Failed to parse porter-format JSON for '{}': {}", collection.name, e))?;
+
+                    // Load existing mapping (non-interactive)
+                    let mapping = mapping::load_or_create_mapping(
+                        &collection.name,
+                        &config.source,
+                        &config.target,
+                        &docs,
+                        collection.collection_path.as_deref(),
+                        false,
+                        Some((current, total_collections)),
+                    )?;
+
+                    // Transform docs
+                    let mut transformed_docs = Vec::new();
+                    for doc in &docs {
+                        let transformed = mapping::apply_mapping(doc, &mapping)?;
+                        transformed_docs.push(transformed);
+                    }
+
+                    // Emit seed files (Payload MVP)
+                    let target_adapter = plugin_manager
+                        .get_target(&config.target)
+                        .ok_or_else(|| anyhow!("Unsupported target: {}", config.target))?;
+
+                    let opts = TargetOptions {
+                        collection: Some(collection.name.clone()),
+                        locale: collection.locale.clone(),
+                        related_collections: collection.related_collections.clone(),
+                        ..Default::default()
+                    };
+
+                    let output_path = format!("{}/{}", config.output, collection.name);
+                    info!("Writing seed file to {}", output_path);
+                    target_adapter.emit_seed(&transformed_docs, &output_path, &opts)?;
+
+                    println!("{}", format!("✓ Migration completed for '{}'", collection.name).green());
+                    println!("  Documents: {}", transformed_docs.len());
+                    println!("  Output: {}", output_path);
+                }
+
+                println!("\n{}", "🎉 Migration Finished".green().bold());
+                println!("{}", format!("Processed {} collections", config.collections.len()).cyan());
                 return Ok(());
             }
             Commands::Explain { config: config_file } => {
@@ -267,10 +334,84 @@ async fn main() -> Result<()> {
             // For WordPress API, we need to fetch from the API
             info!("Fetching data from WordPress API endpoint: {}", collection_config.source_data);
             
-            // TODO: Implement API-based document fetching
-            // For now, return empty docs as placeholder
-            println!("{}", "⚠️  WordPress API fetching will be implemented in the next phase".yellow());
-            vec![]
+            // Get WordPress API URL from config
+            let api_url = config.metadata.as_ref()
+                .and_then(|m| m.get("wordpress_api_url"))
+                .ok_or_else(|| anyhow!("WordPress API URL not found in configuration. Run 'porter init' to configure."))?;
+            
+            // Initialize WordPress source with API configuration
+            let mut wp_source = porter::sources::wordpress::WordPressSource::new();
+            let wp_config = porter::sources::wordpress::WordPressConfig {
+                format: porter::sources::wordpress::WordPressFormat::WXR, // API mode
+                content_types: vec![collection_config.source_data.clone()],
+                include_drafts: false,
+                include_private: false,
+                include_media: true,
+                include_comments: false,
+                include_users: true,
+                include_taxonomies: true,
+                include_acf_fields: true,
+                field_mappings: std::collections::HashMap::new(),
+                custom_field_processors: std::collections::HashMap::new(),
+                shortcode_processing: true,
+                media_processing_config: porter::sources::wordpress::MediaProcessingConfig::default(),
+            };
+            wp_source.set_wp_config(wp_config);
+            
+            // Initialize the source adapter
+            // Build auth_config from metadata if present
+            let auth_config = config.metadata.as_ref().and_then(|m| m.get("wordpress_auth_type")).map(|t| t.as_str()).and_then(|auth_type| {
+                let mut credentials = std::collections::HashMap::new();
+                match auth_type {
+                    "bearer" => {
+                        if let Some(token) = config.metadata.as_ref().and_then(|m| m.get("wordpress_bearer_token")) {
+                            credentials.insert("token".to_string(), token.clone());
+                            Some(AuthConfig { auth_type: AuthType::Bearer, credentials })
+                        } else { None }
+                    }
+                    "basic" => {
+                        let user = config.metadata.as_ref().and_then(|m| m.get("wordpress_basic_username"));
+                        let pass = config.metadata.as_ref().and_then(|m| m.get("wordpress_basic_password"));
+                        if let (Some(u), Some(p)) = (user, pass) {
+                            credentials.insert("username".to_string(), u.clone());
+                            credentials.insert("password".to_string(), p.clone());
+                            Some(AuthConfig { auth_type: AuthType::Basic, credentials })
+                        } else { None }
+                    }
+                    "apikey" => {
+                        let header = config.metadata.as_ref().and_then(|m| m.get("wordpress_api_key_header"));
+                        let key = config.metadata.as_ref().and_then(|m| m.get("wordpress_api_key"));
+                        if let Some(k) = key { 
+                            credentials.insert("key".to_string(), k.clone());
+                            credentials.insert("header".to_string(), header.cloned().unwrap_or_else(|| "X-API-Key".to_string()));
+                            Some(AuthConfig { auth_type: AuthType::ApiKey, credentials })
+                        } else { None }
+                    }
+                    _ => None,
+                }
+            });
+
+            let source_config = porter::adapters::SourceConfig {
+                adapter_type: "wordpress".to_string(),
+                connection_method: ConnectionMethod::Api {
+                    endpoint: api_url.clone(),
+                    auth_config,
+                },
+                adapter_config: serde_json::Value::Object(serde_json::Map::new()),
+            };
+            wp_source.init(&source_config)?;
+            
+            // Fetch documents from API
+            let query = porter::adapters::SourceQuery {
+                query: Some(collection_config.source_data.clone()),
+                parameters: std::collections::HashMap::new(),
+                limit: None,
+                offset: None,
+                filters: std::collections::HashMap::new(),
+            };
+            
+            // Use the async fetch_documents method directly (already in #[tokio::main])
+            wp_source.fetch_documents(&query).await?
         } else {
             // For file-based sources, read from files
             source_adapter.read_documents(&[collection_config.source_data.clone()])?
@@ -281,7 +422,10 @@ async fn main() -> Result<()> {
             collection_config.name
         );
 
-        // 2) Load/create mapping for this collection
+        // 2) Optionally write porter-format normalized files (future: move to generate path)
+        // Skipping write here to avoid side-effects; generator now writes porter-format.
+
+        // 3) Load/create mapping for this collection
         info!(
             "Loading or creating mapping for collection '{}'",
             collection_config.name
@@ -300,7 +444,7 @@ async fn main() -> Result<()> {
             mapping.field_mappings.len()
         );
 
-        // 3) Transform docs using mapping (with batch processing for large datasets)
+        // 4) Transform docs using mapping (with batch processing for large datasets)
         let target_adapter = plugin_manager
             .get_target(target)
             .ok_or_else(|| anyhow!("Unsupported target: {}", target))?;

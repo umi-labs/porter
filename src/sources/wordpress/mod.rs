@@ -3,6 +3,7 @@ use crate::adapters::{
     SourceConfig, SourceMetadata, SourceQuery,
 };
 use anyhow::{Context, Result};
+use crate::adapters::{AuthConfig};
 use futures::future::BoxFuture;
 use futures::stream::{BoxStream, Stream};
 use log::info;
@@ -121,10 +122,10 @@ impl SourceAdapter for WordPressSource {
                 // Initialize WXR parser with configuration
                 self.wxr_parser = Some(WXRParser::new(self.wp_config.clone()));
             }
-            ConnectionMethod::Api { endpoint, .. } => {
+            ConnectionMethod::Api { endpoint, auth_config } => {
                 // Initialize API connector with configuration
                 self.api_connector = Some(
-                    WordPressApiConnector::new(endpoint.clone(), self.wp_config.clone())
+                    WordPressApiConnector::new(endpoint.clone(), self.wp_config.clone(), auth_config.clone())
                         .context("Failed to create WordPressApiConnector")?,
                 );
             }

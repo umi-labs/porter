@@ -1,12 +1,12 @@
 # Porter Documentation
 
-Welcome to the Porter documentation! This directory contains comprehensive documentation for both users and developers of the Porter data migration tool.
+Welcome to the Porter documentation! Porter is a CLI-first internal tool for developers to migrate client sites from varied sources (e.g., WordPress, Umbraco) to targets (MVP: Payload). This directory contains comprehensive documentation for using and developing Porter.
 
 ## 📚 Documentation Overview
 
-### For Users
+### For Users (CLI-first)
 
-- **[User Guide](user-guide.md)** - Complete guide for using Porter
+- **[User Guide](user-guide.md)** - Complete guide for using Porter (init → generate → migrate)
   - Installation and setup
   - Configuration management
   - Interactive mapping
@@ -19,9 +19,9 @@ Welcome to the Porter documentation! This directory contains comprehensive docum
   - Error handling patterns
   - Version compatibility
 
-### For Developers
+### For Developers (Plugins)
 
-- **[Maintainer Guide](maintainer-guide.md)** - Development and contribution guide
+- **[Maintainer Guide](maintainer-guide.md)** - Development and contribution guide (source/target plugins)
   - Architecture overview
   - Development setup
   - Testing strategies

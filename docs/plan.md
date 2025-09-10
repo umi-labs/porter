@@ -1,8 +1,8 @@
-# Porter Next-Level Strategic Plan
+# Porter CLI Strategic Plan (Internal Dev Tool)
 
 ## Executive Summary
 
-Porter has achieved significant milestones with 79% of core features completed, establishing a solid foundation for enterprise-grade data migration. This strategic plan outlines the roadmap for transforming Porter from a specialized migration tool into a comprehensive, production-ready platform that serves enterprise customers, developers, and the broader data migration ecosystem.
+Porter is a Rust-based CLI tool used internally to migrate client content from legacy sites to new builds. This plan refocuses on a CLI-first workflow with a plugin-based architecture for sources and targets, an opinionated normalization layer (the "porter format"), and an MVP target of Payload seed files. The web UI/platform aspirations remain future backlog.
 
 ## Strategic Vision
 
@@ -32,10 +32,10 @@ Porter has achieved significant milestones with 79% of core features completed, 
 - **Target Position**: Enterprise platform with comprehensive features
 - **Differentiators**: Rust performance, comprehensive mapping, extensibility
 
-## Strategic Pillars
+## Strategic Pillars (CLI-First)
 
-### 1. Enterprise Readiness
-Transform Porter into a production-ready platform suitable for enterprise deployment.
+### 1. CLI Readiness & Reliability
+Harden the CLI for repeatable internal migrations with clear flows and robust validation.
 
 #### 1.1 Security & Compliance
 - **Encryption**: AES-256 encryption for sensitive data
@@ -55,8 +55,8 @@ Transform Porter into a production-ready platform suitable for enterprise deploy
 - **Logging**: Structured logging with correlation IDs
 - **Alerting**: Proactive monitoring and alerting
 
-### 2. Platform Expansion
-Extend Porter's capabilities beyond basic migration to a comprehensive data platform.
+### 2. Source/Target Plugin Architecture
+Deliver a maintainable plugin system. MVP sources: WordPress (API + WXR), Umbraco (clean JSON). MVP target: Payload (seed files).
 
 #### 2.1 Multi-Platform Support
 - **Cloud Providers**: AWS, Azure, Google Cloud integration
@@ -76,8 +76,8 @@ Extend Porter's capabilities beyond basic migration to a comprehensive data plat
 - **Predictive Analytics**: Migration performance prediction
 - **Smart Recommendations**: Best practice suggestions
 
-### 3. Developer Ecosystem
-Build a thriving community of developers and partners.
+### 3. Developer Velocity
+Improve init/generate/migrate UX, interactive mapping, and testing/tools to keep migrations fast, safe, and predictable.
 
 #### 3.1 Plugin Marketplace
 - **Community Plugins**: User-contributed adapters
@@ -97,8 +97,8 @@ Build a thriving community of developers and partners.
 - **Documentation**: Comprehensive API docs
 - **Examples**: Sample implementations and templates
 
-### 4. Community & Growth
-Foster a vibrant community and drive adoption.
+### 4. Future Backlog (Platform/UI)
+Marketplace, web UI, and hosted services moved to backlog; architecture remains extensible.
 
 #### 4.1 Education & Training
 - **Documentation**: Interactive tutorials and guides
@@ -112,67 +112,50 @@ Foster a vibrant community and drive adoption.
 - **Contributions**: Open source collaboration
 - **Recognition**: Contributor recognition program
 
-## Implementation Roadmap
+## Implementation Roadmap (MVP → Robust CLI)
 
-### Phase 1: Enterprise Foundation (Q1 2024)
+### Phase 1: MVP CLI (Current)
 
-#### Month 1: Security & Compliance
-- Implement AES-256 encryption for mapping files
-- Add role-based access control
-- Establish audit logging system
-- Begin SOC 2 compliance preparation
+#### Month 1: Init Flow & Config
+- CLI init to collect source/format details and target/format
+- porter.config.toml schema and validation
+- Collection alignment (endpoint discovery → target collection config path)
 
-#### Month 2: Scalability & Reliability
-- Implement horizontal scaling with Redis
-- Add circuit breakers and retry mechanisms
-- Establish monitoring and alerting
-- Performance optimization and benchmarking
+#### Month 2: Generate Flow
+- Porter format specification
+- Source normalization per collection (write cleaned JSON)
+- Interactive mapping (default ON) and mapping file output
 
-#### Month 3: Production Readiness
-- Complete CI/CD pipeline with security scanning
-- Implement health checks and readiness probes
-- Add comprehensive error handling
-- Production deployment testing
+See also: [Porter Format](./porter-format.md)
 
-### Phase 2: Platform Expansion (Q2 2024)
+#### Month 3: Migrate Flow (Payload Seed Files)
+- Generate seed files per collection from porter format + mappings
+- Validate outputs; helpful summaries
+- Add 75%+ test coverage across flows
 
-#### Month 4: Multi-Platform Support
-- WordPress adapter implementation
-- Database connector development
-- Cloud provider integrations
-- API adapter framework
+### Phase 2: Robustness & Extensibility
 
-#### Month 5: Advanced Features
-- Streaming data processing
-- Data quality and validation
-- Intelligent mapping suggestions
-- Performance analytics
+#### Month 4: Source/Target Enhancements
+- Add WordPress endpoints (users/categories/tags)
+- Improve relationship handling and schema validation via TS parser
+- Add streaming and robust pagination/backoff
 
-#### Month 6: Developer Tools
-- Plugin marketplace foundation
-- REST API development
-- SDK creation (Python, Node.js)
-- Developer documentation
+#### Month 5: Mapping & Performance
+- Enhance interactive mapping UX and transform catalog
+- Performance tuning and batch strategies
+- Resilience and retries
 
-### Phase 3: Ecosystem Growth (Q3 2024)
+#### Month 6: Tooling & Docs
+- CLI UX polish and help text
+- Documentation for porter format and examples
+- Matrix tests across sources×targets
 
-#### Month 7: Community Launch
-- Plugin marketplace launch
-- Community forums and Q&A
-- Training and certification program
-- Partner program establishment
+### Phase 3: Backlog Items (Optional)
 
-#### Month 8: Enterprise Features
-- Advanced security features
-- Enterprise support tiers
-- Compliance certifications
-- Performance optimization
-
-#### Month 9: Market Expansion
-- International market entry
-- Strategic partnerships
-- Enterprise sales enablement
-- Thought leadership content
+#### Month 7-9: Optional Platform/UI
+- Plugin marketplace (backlog)
+- Hosted web UI (backlog)
+- Public APIs/SDKs (backlog)
 
 ### Phase 4: Market Leadership (Q4 2024)
 
@@ -194,31 +177,21 @@ Foster a vibrant community and drive adoption.
 - Global expansion planning
 - Strategic partnerships
 
-## Success Metrics & KPIs
+## Success Metrics & KPIs (Internal)
 
 ### Technical Metrics
-- **Performance**: <100ms response time, 99.9% uptime
-- **Reliability**: 99.9% migration success rate
-- **Scalability**: Support for 1M+ records per migration
-- **Security**: Zero security incidents, SOC 2 compliance
+- **Repeatability**: Zero manual edits to normalized data on reruns
+- **Reliability**: 99% migration success rate end-to-end
+- **Throughput**: Support for 100k+ records per migration
+- **Coverage**: ≥ 75% combined unit + integration coverage
 
-### Business Metrics
-- **Revenue**: $1M+ ARR by end of 2024
-- **Customers**: 100+ enterprise customers
-- **Growth**: 50% month-over-month growth
-- **Satisfaction**: 95% customer satisfaction score
+### Operational Metrics
+- **Duration**: Typical migration completed within target hours per client
+- **Interactivity**: Mapping confirm time per collection within target bounds
 
-### Community Metrics
-- **Adoption**: 10,000+ downloads/month
-- **Contributors**: 100+ active contributors
-- **Plugins**: 500+ community plugins
-- **Stars**: 1000+ GitHub stars
-
-### Innovation Metrics
-- **Patents**: 10+ filed patents
-- **Awards**: Industry recognition and awards
-- **Research**: Published papers and presentations
-- **Partnerships**: 50+ strategic partnerships
+### Team Metrics
+- **Docs Freshness**: Init/generate/migrate guides updated per release
+- **Defects**: Low regression rate across sources/targets matrix tests
 
 ## Risk Assessment & Mitigation
 
@@ -228,42 +201,7 @@ Foster a vibrant community and drive adoption.
 - **Scalability**: Load testing and capacity planning
 - **Compatibility**: Comprehensive testing matrix
 
-### Business Risks
-- **Competition**: Continuous innovation and differentiation
-- **Market**: Diversified customer base and use cases
-- **Regulation**: Proactive compliance and legal review
-- **Talent**: Competitive compensation and culture
 
 ### Operational Risks
-- **Infrastructure**: Multi-region deployment and redundancy
-- **Support**: 24/7 support and escalation procedures
 - **Documentation**: Comprehensive guides and training
 - **Processes**: Standardized procedures and automation
-
-## Resource Requirements
-
-### Team Structure
-- **Engineering**: 8-10 developers (Rust, Python, DevOps)
-- **Product**: 2-3 product managers and designers
-- **Sales**: 3-5 enterprise sales representatives
-- **Support**: 2-3 customer success managers
-- **Marketing**: 2-3 marketing and community managers
-
-### Technology Stack
-- **Backend**: Rust, PostgreSQL, Redis, Kubernetes
-- **Frontend**: React, TypeScript, Tailwind CSS
-- **Infrastructure**: AWS/Azure, Terraform, Docker
-- **Monitoring**: Prometheus, Grafana, Jaeger
-- **Security**: Vault, OAuth2, encryption
-
-### Budget Allocation
-- **Engineering**: 60% (development, infrastructure)
-- **Sales & Marketing**: 25% (go-to-market, growth)
-- **Operations**: 10% (support, compliance)
-- **Innovation**: 5% (R&D, partnerships)
-
-## Conclusion
-
-This strategic plan provides a comprehensive roadmap for transforming Porter into a market-leading data migration platform. By focusing on enterprise readiness, platform expansion, developer ecosystem, and community growth, Porter can achieve significant market impact and establish itself as the go-to solution for data migration challenges.
-
-The plan balances technical excellence with business value, ensuring that Porter not only meets current needs but anticipates future requirements. With strong execution and continued innovation, Porter has the potential to become a foundational technology in the data migration ecosystem.

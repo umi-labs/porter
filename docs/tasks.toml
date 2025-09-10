@@ -1,6 +1,6 @@
 [project]
 name = "Porter Next-Level Strategic Tasks"
-description = "Strategic tasks for transforming Porter into an enterprise-grade data migration platform"
+description = "Strategic tasks for transforming Porter into an enterprise-grade data migration cli tool"
 version = "2.0.0"
 status = "next-level-development"
 
@@ -11,42 +11,18 @@ name = "Enterprise Readiness"
 description = "Features required for enterprise deployment and production use"
 
 [[categories.enterprise_readiness.tasks]]
-id = "ENT-001"
-title = "Encrypted Mappings"
-description = "Implement AES-256 encryption for mapping files with key management and enterprise key store integration"
+id = "ENT-006"
+title = "WordPress API Authentication"
+description = "Add Basic/Bearer/OAuth auth via ConnectionMethod::Api auth_config and propagate headers in WordPressApiConnector"
 priority = 1
-status = "todo"
-complexity = "high"
-
-[[categories.enterprise_readiness.tasks]]
-id = "ENT-002"
-title = "Role-Based Access Control"
-description = "Implement RBAC system with user roles, permissions, and audit logging"
-priority = 1
-status = "todo"
-complexity = "high"
-
-[[categories.enterprise_readiness.tasks]]
-id = "ENT-003"
-title = "Audit Logging & Compliance"
-description = "Comprehensive audit trails, SOC 2 compliance, and GDPR/CCPA compliance tools"
-priority = 2
-status = "todo"
+status = "completed"
 complexity = "medium"
 
 [[categories.enterprise_readiness.tasks]]
-id = "ENT-004"
-title = "Horizontal Scaling"
-description = "Multi-instance deployment with Redis coordination and load balancing"
+id = "ENT-007"
+title = "DRY Policy & Dead Code Removal"
+description = "Enforce DRY principles, remove unused code, and add CI guardrails for dead code detection and duplication checks"
 priority = 1
-status = "todo"
-complexity = "high"
-
-[[categories.enterprise_readiness.tasks]]
-id = "ENT-005"
-title = "Monitoring & Observability"
-description = "Prometheus metrics, distributed tracing with Jaeger, and structured logging"
-priority = 2
 status = "todo"
 complexity = "medium"
 
@@ -79,19 +55,51 @@ status = "todo"
 complexity = "high"
 
 [[categories.platform_expansion.tasks]]
-id = "PLAT-004"
-title = "Streaming Data Processing"
-description = "Real-time data processing pipelines with event-driven architecture"
-priority = 3
-status = "todo"
-complexity = "high"
+id = "PLAT-006"
+title = "Interactive Mapping for WP API → Payload"
+description = "Wire and enhance interactive field mapping in generate/runtime when interactive=true or --interactive is passed; ensure prompts for transforms, fallbacks, nested fields"
+priority = 1
+status = "completed"
+complexity = "medium"
 
 [[categories.platform_expansion.tasks]]
-id = "PLAT-005"
-title = "Data Quality & Governance"
-description = "Data validation rules engine, lineage tracking, and quality metrics"
+id = "PLAT-007"
+title = "ACF/Custom Fields & Shortcodes (API)"
+description = "Support ACF/custom fields and shortcode expansion in API responses based on WordPressConfig flags"
 priority = 2
 status = "todo"
+complexity = "medium"
+
+[[categories.platform_expansion.tasks]]
+id = "PLAT-008"
+title = "Media Lifecycle for Payload Uploads"
+description = "Optional download, file linking, and alignment with Payload upload collections during seed generation"
+priority = 2
+status = "todo"
+complexity = "medium"
+
+[[categories.platform_expansion.tasks]]
+id = "PLAT-009"
+title = "Clarify WordPress API Config Semantics"
+description = "Make API mode explicit in WordPressConfig (avoid WXR placeholder) and update usage in main flow"
+priority = 3
+status = "todo"
+complexity = "low"
+
+[[categories.platform_expansion.tasks]]
+id = "PLAT-010"
+title = "Additional WordPress Endpoints"
+description = "Add fetch + processing for users, categories, and tags in the API connector and source adapter"
+priority = 3
+status = "todo"
+complexity = "low"
+
+[[categories.platform_expansion.tasks]]
+id = "PLAT-011"
+title = "WP API Pagination/Backoff/429 Handling"
+description = "Use X-WP-TotalPages, implement retries/backoff, and handle 429/HTTP errors gracefully in API connector"
+priority = 1
+status = "completed"
 complexity = "medium"
 
 [categories.intelligence_automation]
@@ -127,170 +135,198 @@ name = "Developer Ecosystem"
 description = "Building a thriving developer community and plugin ecosystem"
 
 [[categories.developer_ecosystem.tasks]]
-id = "ECO-001"
-title = "REST API Development"
-description = "RESTful API with OpenAPI/Swagger documentation and authentication"
-priority = 1
-status = "todo"
-complexity = "medium"
-
-[[categories.developer_ecosystem.tasks]]
-id = "ECO-002"
-title = "Plugin Marketplace"
-description = "Community plugin repository with validation and distribution"
-priority = 2
-status = "todo"
-complexity = "high"
-
-[[categories.developer_ecosystem.tasks]]
-id = "ECO-003"
-title = "SDK Development"
-description = "SDKs for Python, Node.js, Go, and Java with comprehensive examples"
+id = "ECO-005"
+title = "Schema Validation Against Payload TS"
+description = "Validate mapped documents against Payload collection schemas using the TypeScript AST parser"
 priority = 2
 status = "todo"
 complexity = "medium"
 
 [[categories.developer_ecosystem.tasks]]
-id = "ECO-004"
-title = "Developer Tools"
-description = "Plugin development tools, testing framework, and CLI extensions"
+id = "ECO-006"
+title = "Unify Schema Analysis via TS Parser"
+description = "Replace heuristic parsing in mapping generator with the robust TS parser for field extraction"
+priority = 2
+status = "todo"
+complexity = "medium"
+
+[[categories.developer_ecosystem.tasks]]
+id = "ECO-007"
+title = "Implement porter migrate Orchestration"
+description = "Finalize migrate subcommand to match default run flow with clear progress, error handling, and resume"
+priority = 2
+status = "todo"
+complexity = "medium"
+
+[[categories.developer_ecosystem.tasks]]
+id = "ECO-008"
+title = "Remove Legacy Adapter Bridging"
+description = "Eliminate temporary legacy/new adapter bridges and consolidate on the new trait system"
 priority = 3
 status = "todo"
-complexity = "medium"
+complexity = "low"
 
 [categories.ci_cd_devops]
 name = "CI/CD & DevOps"
 description = "Production deployment and operational excellence"
 
 [[categories.ci_cd_devops.tasks]]
-id = "DEV-001"
-title = "CI/CD Pipeline"
-description = "GitHub Actions with automated testing, Docker builds, and security scanning"
+id = "DEV-005"
+title = "Test Coverage ≥ 75%"
+description = "Achieve and enforce at least 75% combined unit + integration test coverage across all modules"
 priority = 1
 status = "todo"
 complexity = "medium"
 
 [[categories.ci_cd_devops.tasks]]
-id = "DEV-002"
-title = "Containerization"
-description = "Docker images with multi-stage builds and Kubernetes manifests"
-priority = 1
-status = "todo"
-complexity = "medium"
-
-[[categories.ci_cd_devops.tasks]]
-id = "DEV-003"
-title = "Infrastructure as Code"
-description = "Terraform configurations for multi-cloud deployment"
-priority = 2
-status = "todo"
-complexity = "high"
-
-[[categories.ci_cd_devops.tasks]]
-id = "DEV-004"
-title = "Security Scanning"
-description = "Automated security scanning with vulnerability assessment"
-priority = 1
-status = "todo"
-complexity = "medium"
-
-[categories.community_growth]
-name = "Community & Growth"
-description = "Building community and driving adoption"
-
-[[categories.community_growth.tasks]]
-id = "COM-001"
-title = "Interactive Documentation"
-description = "Live examples, video tutorials, and interactive guides"
-priority = 2
-status = "todo"
-complexity = "medium"
-
-[[categories.community_growth.tasks]]
-id = "COM-002"
-title = "Training & Certification"
-description = "Professional certification program and training materials"
-priority = 3
-status = "todo"
-complexity = "medium"
-
-[[categories.community_growth.tasks]]
-id = "COM-003"
-title = "Community Forums"
-description = "Q&A platform, discussion forums, and community support"
+id = "DEV-006"
+title = "Dead Code & Duplication Checks in CI"
+description = "Add CI jobs to detect dead code and duplication; fail builds on regressions"
 priority = 2
 status = "todo"
 complexity = "low"
 
-[[categories.community_growth.tasks]]
-id = "COM-004"
-title = "Partner Program"
-description = "Strategic partnerships and integration ecosystem"
-priority = 3
+[categories.core_architecture]
+name = "Core Architecture"
+description = "Multi-source/multi-target plugin system, adapters, and CLI foundations"
+
+[[categories.core_architecture.tasks]]
+id = "CORE-001"
+title = "Plugin Registry & Discovery"
+description = "Finalize source/target plugin registry with discovery, versioning, and compatibility checks"
+priority = 1
+status = "todo"
+complexity = "high"
+
+[[categories.core_architecture.tasks]]
+id = "CORE-002"
+title = "Adapter Interfaces Stabilization"
+description = "Stabilize Source/Target adapter traits, document contracts, and provide migration guides for plugin authors"
+priority = 1
 status = "todo"
 complexity = "medium"
 
-[categories.performance_optimization]
-name = "Performance & Optimization"
-description = "Advanced performance features and optimization"
-
-[[categories.performance_optimization.tasks]]
-id = "PERF-003"
-title = "Advanced Performance Optimization"
-description = "Memory usage optimization, CPU profiling, and network I/O optimization"
+[[categories.core_architecture.tasks]]
+id = "CORE-003"
+title = "Plugin CLI Lifecycle"
+description = "Add commands for listing/installing/updating plugins and verifying signatures"
 priority = 2
 status = "todo"
 complexity = "medium"
 
-[[categories.performance_optimization.tasks]]
-id = "PERF-004"
-title = "Performance Analytics"
-description = "Migration performance benchmarking and resource utilization optimization"
-priority = 3
-status = "todo"
-complexity = "medium"
-
-[[categories.performance_optimization.tasks]]
-id = "PERF-005"
-title = "Cost Optimization"
-description = "Cost analysis and optimization for cloud deployments"
-priority = 3
-status = "todo"
-complexity = "low"
-
-[categories.ui_ux_enhancement]
-name = "UI/UX Enhancement"
-description = "Advanced user interface and experience improvements"
-
-[[categories.ui_ux_enhancement.tasks]]
-id = "UX-005"
-title = "Web-Based Interface"
-description = "Web-based configuration interface with real-time monitoring dashboard"
-priority = 3
+[[categories.core_architecture.tasks]]
+id = "CORE-004"
+title = "Matrix Testing (Sources × Targets)"
+description = "Automated matrix tests across supported sources/targets to catch integration regressions"
+priority = 2
 status = "todo"
 complexity = "high"
 
-[[categories.ui_ux_enhancement.tasks]]
-id = "UX-006"
-title = "Mobile Responsive Design"
-description = "Mobile-responsive design for configuration and monitoring"
-priority = 3
+[[categories.core_architecture.tasks]]
+id = "CORE-005"
+title = "CLI Command Set Finalization"
+description = "Solidify and document generate, migrate, explain, and list-adapters commands with UX polish"
+priority = 2
 status = "todo"
 complexity = "medium"
 
-[[categories.ui_ux_enhancement.tasks]]
-id = "UX-007"
-title = "Advanced Visualizations"
-description = "Data flow visualization and migration progress analytics"
-priority = 3
+[categories.cli_tool]
+name = "CLI Tooling (Primary)"
+description = "CLI-first internal tool flows, porter format, and MVP targets"
+
+[[categories.cli_tool.tasks]]
+id = "CLI-INIT-001"
+title = "Init Flow: Source/Target Selection & Details"
+description = "Collect source (e.g., wordpress/umbraco) + format (api/wxr/json), target (payload) + format (seed files), capture required details, and write porter.config.toml at repo root"
+priority = 1
 status = "todo"
 complexity = "medium"
+
+[[categories.cli_tool.tasks]]
+id = "CLI-INIT-002"
+title = "Init Flow: Collection Alignment"
+description = "Discover source endpoints, prompt for collection names with suggestions, map each to a source endpoint and a target collection config path"
+priority = 1
+status = "todo"
+complexity = "medium"
+
+[[categories.cli_tool.tasks]]
+id = "CLI-CONF-001"
+title = "porter.config.toml Schema"
+description = "Define and validate config schema (sources, formats, metadata, collections, target formats, output directories); resolve paths relative to CWD"
+priority = 1
+status = "todo"
+complexity = "low"
+
+[[categories.cli_tool.tasks]]
+id = "CLI-GEN-001"
+title = "Porter Format Spec & Generator"
+description = "Normalize source data into a consistent 'porter format' per collection and write cleaned JSON into configured directory (see docs/porter-format.md)"
+priority = 1
+status = "completed"
+complexity = "medium"
+
+[[categories.cli_tool.tasks]]
+id = "CLI-GEN-002"
+title = "Interactive Mapping (Default On)"
+description = "Run interactive mapping over porter-formatted data vs target schema; support transforms, fallbacks, nested paths; write mapping files per collection to configured directory"
+priority = 1
+status = "todo"
+complexity = "medium"
+
+[[categories.cli_tool.tasks]]
+id = "CLI-GEN-003"
+title = "Generate: End-to-End Orchestration"
+description = "Read porter.config.toml, fetch source data per collection, produce porter format files, run interactive mapping, persist mappings"
+priority = 1
+status = "completed"
+complexity = "medium"
+
+[[categories.cli_tool.tasks]]
+id = "CLI-MIG-001"
+title = "Migrate: Payload Seed Files (MVP)"
+description = "Use porter format + mappings to generate Payload seed files for each collection in the configured output directory"
+priority = 1
+status = "completed"
+complexity = "medium"
+
+[[categories.cli_tool.tasks]]
+id = "CLI-INIT-003"
+title = "Init: WordPress API Auth Prompts"
+description = "Collect wordpress_auth_type and credentials (bearer/basic/apikey) and write to porter.config.toml metadata"
+priority = 1
+status = "completed"
+complexity = "low"
+
+[[categories.cli_tool.tasks]]
+id = "CLI-ARCH-001"
+title = "Source Plugins (WordPress, Umbraco)"
+description = "Pluginized sources: WordPress (API + WXR) and Umbraco (cleaned JSON); ensure consistent porter format output"
+priority = 1
+status = "todo"
+complexity = "medium"
+
+[[categories.cli_tool.tasks]]
+id = "CLI-ARCH-002"
+title = "Target Plugins (Payload MVP)"
+description = "Target plugin system starting with Payload (seed files format); architecture ready for future DB/direct targets"
+priority = 1
+status = "todo"
+complexity = "medium"
+
+[[categories.cli_tool.tasks]]
+id = "CLI-UX-001"
+title = "CLI Prompt UX"
+description = "Space-select single endpoint, suggestions for names, clear step counters (e.g., Endpoint 1/5), and helpful defaults"
+priority = 2
+status = "todo"
+complexity = "low"
 
 [progress_summary]
-total_tasks = 35
-completed_tasks = 19
-remaining_tasks = 16
-completion_percentage = 54
+total_tasks = 56
+completed_tasks = 26
+remaining_tasks = 30
+completion_percentage = 46
 
 [recent_achievements]
 achievement_1 = "Implemented comprehensive nested mapping system with dot notation, array indexing, and wildcards"
@@ -310,3 +346,10 @@ mission = "Enable organizations to seamlessly transform and migrate data between
 target_market = "Enterprise customers, developers, and data migration professionals"
 competitive_advantage = "Rust performance, comprehensive features, and extensible architecture"
 success_metrics = "100+ enterprise customers, $1M+ ARR, 1000+ GitHub stars by end of 2024"
+
+[engineering_policies]
+dry_principle = "All code must follow DRY. Factor shared logic into modules, avoid duplication, and delete unused code promptly."
+dead_code_policy = "Unused functions, types, and modules must be removed; CI enforces dead-code checks."
+testing_policy = "Unit and integration tests are required for all areas. Maintain ≥ 75% combined coverage."
+coverage_enforcement = "CI fails if coverage drops below threshold or new/changed code lacks tests."
+style_guidelines = "Prefer clear, idiomatic Rust; async via tokio; structured concurrency; bounded channels; error handling with anyhow/thiserror."

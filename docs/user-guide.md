@@ -274,6 +274,59 @@ porter init
 # This will guide you through setting up your first collection
 ```
 
+#### Init Flow (Example Prompts)
+
+Porter will prompt you to select your source/format, target/format, and align collections.
+
+Example (WordPress API → Payload seed files):
+
+```
+Source System:
+(use arrow keys)
+• wordpress (selected)
+  umbraco
+  custom
+
+WordPress Input Type:
+(use arrow keys)
+• api (selected)
+  file (wxr export)
+
+Enter WordPress API URL (e.g., https://example.com/wp-json/wp/v2):
+https://example.com/wp-json/wp/v2
+
+Target System:
+(use arrow keys)
+• payload (selected)
+  custom
+
+Target Format:
+(use arrow keys)
+• seed files (selected)
+
+Output directory (default: ./seed):
+./seed
+
+--- Collection Alignment ---
+
+Endpoint (1/5):
+What would you like to name this collection
+(suggested: pages): pages
+
+Which endpoint does this match up to on your source?
+(please use space to select, one selection only)
+- /pages (selected)
+- /posts
+- /locations
+- /hotels
+- /team-members
+
+Which collection config does this match up to on your target?
+./src/collections/pages
+
+(repeats for remaining endpoints)
+```
+
 ### 2. Run Migration
 
 ```bash
@@ -287,6 +340,8 @@ porter
 ## Configuration
 
 Porter uses a TOML configuration file (`porter.config.toml`) to define your migration settings.
+
+See also: [Porter Format](./porter-format.md) for how data is normalized during `generate`.
 
 ### Configuration Structure
 
@@ -327,7 +382,6 @@ locale = "en"
 | `interactive` | boolean | `true` | Enable interactive mapping mode |
 | `verbose` | boolean | `true` | Enable verbose logging |
 | `dry_run` | boolean | `false` | Validate mappings without generating output |
-| `plugin_dir` | string | - | Directory containing custom plugins |
 
 ### Collection Configuration
 
@@ -360,6 +414,9 @@ porter --list-adapters
 
 # Run migration with specific options
 porter --source=umbraco --target=payload --interactive
+
+# Explanation of either the default general flow or if there is a config the specific flow they have decided on
+porter explain
 ```
 
 ### Command Line Options
