@@ -116,7 +116,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add Cargo.toml
+          git add Cargo.toml Cargo.lock
           git commit -m "release: bump version to ${{ steps.new_version.outputs.new_version }}"
 
       - name: Create and push tag
