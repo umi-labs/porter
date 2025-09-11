@@ -111,13 +111,17 @@ fn flatten_fields_value(value: &Value, base: &str, out: &mut Vec<FieldNode>) -> 
                     let name = map.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     let ftype = map.get("type").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
                     if name.is_empty() || ftype.is_empty() { continue; }
+                    let mut properties: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+                    for (k, v) in map.iter() {
+                        properties.insert(k.clone(), v.clone());
+                    }
                     let mut def = FieldDefinition {
                         name,
                         field_type: ftype.clone(),
                         required: map.get("required").and_then(|v| v.as_bool()).unwrap_or(false),
                         validations: Vec::new(),
                         relationship: None,
-                        properties: map.clone(),
+                        properties,
                     };
                     // For nested objects, properties map already contains nested JSON
                     flatten_field_definition(&def, base, out)?;
