@@ -15,3 +15,19 @@ targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-da
 tap = "umi-labs/homebrew-tap"
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
+
+# Custom GitHub runners configuration
+[dist.github-custom-runners]
+# For Linux builds - use faster Blacksmith runners
+"aarch64-unknown-linux-gnu" = "blacksmith-4vcpu-ubuntu-2204"
+"x86_64-unknown-linux-gnu" = "blacksmith-4vcpu-ubuntu-2204"
+
+# For macOS builds - Blacksmith also offers macOS runners
+"aarch64-apple-darwin" = "blacksmith-4vcpu-macos-14"
+"x86_64-apple-darwin" = "blacksmith-4vcpu-macos-13"
+
+# For Windows builds - you can use Blacksmith Windows runners too
+"x86_64-pc-windows-msvc" = "blacksmith-4vcpu-windows-2022"
+
+# Set a default for any jobs not tied to specific targets
+global-task-runner = "blacksmith-4vcpu-ubuntu-2204"
