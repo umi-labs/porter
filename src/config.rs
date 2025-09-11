@@ -704,6 +704,19 @@ mod tests {
         let config = PorterConfig {
             source: "umbraco".to_string(),
             target: "payload".to_string(),
+            payload: Some(PayloadSection {
+                config_entry: "./src/payload.config.ts".to_string(),
+                module_system: "esm".to_string(),
+            }),
+            typescript: Some(TypescriptSection {
+                tsconfig_path: "./tsconfig.json".to_string(),
+                path_aliases: None,
+            }),
+            io: Some(IoSection {
+                graphs_dir: "./mapping/graphs".to_string(),
+                templates_dir: "./mapping/templates".to_string(),
+                seeds_dir: "./seed".to_string(),
+            }),
             collections: vec![
                 CollectionConfig {
                     name: "hotels".to_string(),
