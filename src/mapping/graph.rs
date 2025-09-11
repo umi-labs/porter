@@ -144,7 +144,14 @@ fn flatten_fields_value(value: &Value, base: &str, out: &mut Vec<FieldNode>) -> 
                         if name.is_empty() && ftype != "tabs" {
                             // Without a name, we cannot place scalar/group/array/blocks on a path; skip
                             // (tabs handled above)
-                            continue;
+                            // But allow top-level field objects (like hero group) passed by reference with name inside
+                            if let Some(Value::Array(fields)) = map.get("fields") {
+                                // Inline unnamed group by recursing with current base
+                                flatten_fields_value(&Value::Array(fields.clone()), base, out)?;
+                                continue;
+                            } else {
+                                continue;
+                            }
                         }
                         let mut properties: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
                         for (k, v) in map.iter() {

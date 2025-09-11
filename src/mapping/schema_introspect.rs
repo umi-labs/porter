@@ -38,12 +38,16 @@ fn resolve_import_path(current_file: &str, source: &str) -> Option<String> {
     }
     // Simple alias '@/'
     if source.starts_with("@/") {
-        // Try to resolve relative to nearest ancestor containing 'src'
+        // Find the nearest ancestor that IS the 'src' directory and resolve from there
         let mut dir = Path::new(current_file).parent();
         while let Some(d) = dir {
-            let candidate = d.join("src").join(&source[2..]);
-            if let Some(res) = try_with_extensions(&candidate) {
-                return Some(res.to_string_lossy().to_string());
+            if let Some(name) = d.file_name().and_then(|s| s.to_str()) {
+                if name == "src" {
+                    let candidate = d.join(&source[2..]);
+                    if let Some(res) = try_with_extensions(&candidate) {
+                        return Some(res.to_string_lossy().to_string());
+                    }
+                }
             }
             dir = d.parent();
         }
@@ -263,8 +267,7 @@ pub fn extract_fields_json(schema_path: &str) -> Result<Vec<Value>> {
     let module = parse_module(schema_path)?;
     let import_map = build_import_map(&module, schema_path);
 
-    // Find a top-level object with a 'fields' property
-    // Naively scan ExportDecls/VarDecls
+    // 1) Find a top-level object with a 'fields' property (collection or field config)
     for item in &module.body {
         if let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(ed)) = item {
             if let Decl::Var(var) = &ed.decl {
@@ -288,6 +291,47 @@ pub fn extract_fields_json(schema_path: &str) -> Result<Vec<Value>> {
                                                         }
                                                     }
                                                     return Ok(out);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2) If no direct export found, scan imports used in this file's fields arrays references
+    // Look for array literals assigned to local identifiers used in export as 'fields: [hero]' etc.
+    for item in &module.body {
+        if let ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(ed)) = item {
+            if let Decl::Var(var) = &ed.decl {
+                for d in &var.decls {
+                    if let Some(init) = &d.init {
+                        if let Expr::Object(obj) = &**init {
+                            // find 'fields: [<ident or call>]' and resolve each
+                            for prop in &obj.props {
+                                if let PropOrSpread::Prop(p) = prop {
+                                    if let Prop::KeyValue(kv) = &**p {
+                                        if let PropName::Ident(id) = &kv.key {
+                                            if id.sym == *"fields" {
+                                                if let Expr::Array(arr) = &*kv.value {
+                                                    let mut out = Vec::new();
+                                                    for el in &arr.elems {
+                                                        if let Some(e) = el {
+                                                            if let Some(v) = resolve_expr(&e.expr, schema_path, &import_map) {
+                                                                match v {
+                                                                    Value::Array(items) => out.extend(items),
+                                                                    Value::Object(_) => out.push(v),
+                                                                    _ => {}
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    if !out.is_empty() { return Ok(out); }
                                                 }
                                             }
                                         }
