@@ -251,6 +251,54 @@ status = "completed"
 complexity = "medium"
 
 [[categories.cli_tool.tasks]]
+id = "CLI-CONF-002"
+title = "Config Schema: payload/typescript/io/media sections"
+description = "Add nested sections to PorterConfig: payload (config_entry, module_system), typescript (tsconfig_path, path_aliases), io (graphs_dir, templates_dir, seeds_dir), media (policy)"
+priority = 1
+status = "in_progress"
+complexity = "low"
+
+[[categories.cli_tool.tasks]]
+id = "CLI-INIT-004"
+title = "Init Wizard: collect payload, tsconfig, aliases, output dirs, media"
+description = "Extend interactive init to prompt for Payload config entry + module system, tsconfig path + path aliases, output directories for graphs/templates/seeds, and set media policy"
+priority = 1
+status = "todo"
+complexity = "medium"
+
+[[categories.cli_tool.tasks]]
+id = "CLI-CONF-003"
+title = "Validation & Display: new sections"
+description = "Extend validate() to require payload.config_entry, typescript.tsconfig_path, io.seeds_dir (when target=payload). Update display() to show new sections"
+priority = 1
+status = "todo"
+complexity = "low"
+
+[[categories.cli_tool.tasks]]
+id = "CLI-WIRE-001"
+title = "Wire minimal usage for new paths"
+description = "Keep generate/migrate behavior unchanged; leave placeholders to use io.seeds_dir later and to pass payload/typescript values to introspection"
+priority = 2
+status = "todo"
+complexity = "low"
+
+[[categories.cli_tool.tasks]]
+id = "CLI-CONF-004"
+title = "TOML Layout: nested tables for new sections"
+description = "Emit nested TOML tables [payload], [typescript], [io], [media] with DRY layout"
+priority = 2
+status = "todo"
+complexity = "low"
+
+[[categories.cli_tool.tasks]]
+id = "DOC-CLI-001"
+title = "Docs: update README and user-guide for new config"
+description = "Document new init prompts and porter.config.toml keys with examples"
+priority = 2
+status = "todo"
+complexity = "low"
+
+[[categories.cli_tool.tasks]]
 id = "CLI-CONF-001"
 title = "porter.config.toml Schema"
 description = "Define and validate config schema (sources, formats, metadata, collections, target formats, output directories); resolve paths relative to CWD"

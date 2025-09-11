@@ -57,6 +57,19 @@ async fn main() -> Result<()> {
                 generator.generate_mappings(collection.as_deref()).await?;
                 return Ok(());
             }
+            Commands::Template { config: config_file, collection } => {
+                println!("{}", "🧩 Generating Templates".cyan().bold());
+                let config = if let Some(config_path) = config_file {
+                    PorterConfig::load_from_file(&config_path)?
+                } else if let Some(file_config) = find_and_load_config()? {
+                    file_config
+                } else {
+                    return Err(anyhow!("No configuration file found. Run 'porter init' first."));
+                };
+                let generator = MappingGenerator::new(config);
+                generator.generate_templates(collection.as_deref())?;
+                return Ok(());
+            }
             Commands::Migrate { config: config_file, collection: _collection } => {
                 println!("{}", "🚀 Starting Migration".cyan().bold());
 

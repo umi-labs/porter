@@ -51,6 +51,15 @@ pub enum Commands {
         #[arg(long)]
         collection: Option<String>,
     },
+    /// Generate target field graphs and mapping templates only
+    Template {
+        /// Configuration file to use
+        #[arg(short, long)]
+        config: Option<String>,
+        /// Collection name to generate template for
+        #[arg(long)]
+        collection: Option<String>,
+    },
     /// Migrate data using existing mappings
     Migrate {
         /// Configuration file to use

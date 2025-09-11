@@ -160,6 +160,40 @@ porter explain --config porter.config.toml
 porter config
 ```
 
+## Extended Configuration Sections
+
+When targeting Payload with seed files, `porter init` now collects and writes additional nested config to `porter.config.toml`.
+
+```toml
+# Existing top-level keys remain
+source = "wordpress"
+target = "payload"
+output = "./seed"
+
+[payload]
+config_entry = "./src/payload.config.ts"
+module_system = "esm" # or "cjs"
+
+[typescript]
+tsconfig_path = "./tsconfig.json"
+path_aliases = ["@"]
+
+[io]
+graphs_dir = "./mapping/graphs"
+templates_dir = "./mapping/templates"
+seeds_dir = "./seeds"
+
+[media]
+policy = "ignore"
+
+[[collections]]
+name = "pages"
+source_data = "pages"
+collection_path = "./src/collections/pages.ts"
+```
+
+These values are prompted during `porter init` and used by future commands for schema introspection and template generation.
+
 ## 📖 Usage
 
 Porter is designed to be run from within your target project repository.
