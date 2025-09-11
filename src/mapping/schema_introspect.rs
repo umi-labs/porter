@@ -38,11 +38,22 @@ fn resolve_import_path(current_file: &str, source: &str) -> Option<String> {
     }
     // Simple alias '@/'
     if source.starts_with("@/") {
-        // Assume project root has ./src
-        let root = std::env::current_dir().ok()?;
-        let p = root.join("src").join(&source[2..]);
-        let with_ts = try_with_extensions(&p);
-        return with_ts.map(|pb| pb.to_string_lossy().to_string());
+        // Try to resolve relative to nearest ancestor containing 'src'
+        let mut dir = Path::new(current_file).parent();
+        while let Some(d) = dir {
+            let candidate = d.join("src").join(&source[2..]);
+            if let Some(res) = try_with_extensions(&candidate) {
+                return Some(res.to_string_lossy().to_string());
+            }
+            dir = d.parent();
+        }
+        // Fallback to CWD/src
+        if let Ok(root) = std::env::current_dir() {
+            let p = root.join("src").join(&source[2..]);
+            if let Some(res) = try_with_extensions(&p) {
+                return Some(res.to_string_lossy().to_string());
+            }
+        }
     }
     None
 }
@@ -67,7 +78,9 @@ fn try_with_extensions(path: &Path) -> Option<PathBuf> {
     None
 }
 
-fn expr_to_json(expr: &Expr) -> Option<Value> {
+fn expr_to_json(expr: &Expr) -> Option<Value> { expr_to_json_ctx(expr, None, None) }
+
+fn expr_to_json_ctx(expr: &Expr, current_file: Option<&str>, import_map: Option<&HashMap<String, String>>) -> Option<Value> {
     match expr {
         Expr::Lit(lit) => match lit {
             Lit::Str(s) => Some(Value::String(s.value.to_string())),
@@ -80,7 +93,7 @@ fn expr_to_json(expr: &Expr) -> Option<Value> {
             let mut out = Vec::new();
             for el in &arr.elems {
                 if let Some(e) = el {
-                    if let Some(v) = expr_to_json(&e.expr) { out.push(v); }
+                    if let Some(v) = expr_to_json_ctx(&e.expr, current_file, import_map) { out.push(v); }
                 }
             }
             Some(Value::Array(out))
@@ -91,11 +104,25 @@ fn expr_to_json(expr: &Expr) -> Option<Value> {
                 if let PropOrSpread::Prop(p) = prop {
                     if let Prop::KeyValue(kv) = &**p {
                         let key = match &kv.key { PropName::Ident(i) => i.sym.to_string(), PropName::Str(s) => s.value.to_string(), _ => continue };
-                        if let Some(v) = expr_to_json(&kv.value) { map.insert(key, v); }
+                        if let Some(v) = expr_to_json_ctx(&kv.value, current_file, import_map) { map.insert(key, v); }
                     }
                 }
             }
             Some(Value::Object(map))
+        }
+        Expr::Ident(id) => {
+            if let (Some(file), Some(map)) = (current_file, import_map) {
+                let name = id.sym.to_string();
+                if let Some(path) = map.get(&name) {
+                    if let Ok(m) = parse_module(path) {
+                        if let Some(e) = find_export_expr_by_name(&m, &name).or_else(|| find_default_export_expr(&m)) {
+                            let next_map = build_import_map(&m, path);
+                            return expr_to_json_ctx(&e, Some(path), Some(&next_map));
+                        }
+                    }
+                }
+            }
+            None
         }
         _ => None,
     }
@@ -224,7 +251,7 @@ fn resolve_expr(expr: &Expr, current_file: &str, import_map: &HashMap<String, St
             }
             // Also resolve inline object literal returns
             if let Some(arg0) = call.args.get(0) {
-                if let Some(v) = expr_to_json(&arg0.expr) { return Some(v); }
+                if let Some(v) = expr_to_json_ctx(&arg0.expr, Some(current_file), Some(import_map)) { return Some(v); }
             }
             None
         }
@@ -252,7 +279,13 @@ pub fn extract_fields_json(schema_path: &str) -> Result<Vec<Value>> {
                                                 if let Expr::Array(arr) = &*kv.value {
                                                     let mut out = Vec::new();
                                                     for el in &arr.elems {
-                                                        if let Some(e) = el { if let Some(v) = resolve_expr(&e.expr, schema_path, &import_map) { out.push(v); } }
+                                                        if let Some(e) = el {
+                                                            // Resolve identifiers/calls; otherwise attempt JSON fallback
+                                                            if let Some(v) = resolve_expr(&e.expr, schema_path, &import_map)
+                                                                .or_else(|| expr_to_json_ctx(&e.expr, Some(schema_path), Some(&import_map))) {
+                                                                out.push(v);
+                                                            }
+                                                        }
                                                     }
                                                     return Ok(out);
                                                 }
