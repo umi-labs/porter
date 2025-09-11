@@ -463,24 +463,36 @@ pub async fn create_config_interactively() -> Result<PorterConfig> {
         println!("{}", "📦 Output Directories".cyan().bold());
     }
 
-    // Output directory (legacy top-level; keep for compatibility)
-    let default_output = if config.source == "wordpress" {
-        "./test-data/ya/seed"
-    } else {
-        "./seed"
-    };
-    let output = interact::prompt_with_default("Enter output directory:", default_output)?;
+    // Ask for base migrations directory and derive sensible defaults
+    let default_migrations_dir = "./migrations";
+    let migrations_dir = interact::prompt_with_default(
+        "Enter migrations directory:",
+        default_migrations_dir,
+    )?;
+
+    // Output directory (defaults to <migrations>/output)
+    let default_output = format!("{}/output", migrations_dir);
+    let output = interact::prompt_with_default("Enter output directory:", &default_output)?;
     config.output = output;
     println!("{}", format!("✓ Output: {}", config.output).green());
 
-    // IO directories (graphs/templates/seeds)
-    let default_graphs = "./mapping/graphs";
-    let default_templates = "./mapping/templates";
-    let default_seeds = if !config.output.is_empty() { config.output.clone() } else { "./seeds".to_string() };
-    let graphs_dir = interact::prompt_with_default("Enter graphs directory:", default_graphs)?;
-    let templates_dir = interact::prompt_with_default("Enter templates directory:", default_templates)?;
+    // IO directories (graphs/templates/seeds) default under output
+    let default_graphs = format!("{}/graphs", config.output);
+    let default_templates = format!("{}/templates", config.output);
+    let default_seeds = format!("{}/seed", config.output);
+    let graphs_dir = interact::prompt_with_default("Enter graphs directory:", &default_graphs)?;
+    let templates_dir = interact::prompt_with_default("Enter templates directory:", &default_templates)?;
     let seeds_dir = interact::prompt_with_default("Enter seeds directory:", &default_seeds)?;
     config.io = Some(IoSection { graphs_dir, templates_dir, seeds_dir: seeds_dir.clone() });
+
+    // Porter-format directory (defaults to <migrations>/format)
+    let default_porter_format = format!("{}/format", migrations_dir);
+    let porter_format_dir = interact::prompt_with_default(
+        "Enter porter-format directory:",
+        &default_porter_format,
+    )?;
+    if config.metadata.is_none() { config.metadata = Some(HashMap::new()); }
+    config.metadata.as_mut().unwrap().insert("porter_format_dir".to_string(), porter_format_dir);
 
     // Media policy (MVP: ignore)
     config.media = Some(MediaSection { policy: "ignore".to_string() });
