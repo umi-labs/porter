@@ -35,9 +35,15 @@ impl MappingGenerator {
                 .context("Failed to create mappings directory")?;
             println!("{}", "✓ Created mappings directory".green());
         }
-        let graphs_dir = Path::new("./mapping/graphs");
+        // Resolve graphs/templates dirs from config.io, falling back to legacy defaults
+        let (graphs_dir_path, templates_dir_path) = if let Some(io) = &self.config.io {
+            (io.graphs_dir.clone(), io.templates_dir.clone())
+        } else {
+            ("./mapping/graphs".to_string(), "./mapping/templates".to_string())
+        };
+        let graphs_dir = Path::new(&graphs_dir_path);
         if !graphs_dir.exists() { let _ = fs::create_dir_all(graphs_dir); }
-        let templates_dir = Path::new("./mapping/templates");
+        let templates_dir = Path::new(&templates_dir_path);
         if !templates_dir.exists() { let _ = fs::create_dir_all(templates_dir); }
 
         let collections_to_process = if let Some(name) = collection_name {
@@ -74,8 +80,8 @@ impl MappingGenerator {
             if let Some(schema_path) = &collection.collection_path {
                 if Path::new(schema_path).exists() {
                     if let Ok(graph) = build_field_graph_from_ts(schema_path) {
-                        let graph_path = format!("./mapping/graphs/{}.json", collection.name);
-                        let tpl_path = format!("./mapping/templates/{}.template.json", collection.name);
+                        let graph_path = format!("{}/{}.json", graphs_dir_path, collection.name);
+                        let tpl_path = format!("{}/{}.template.json", templates_dir_path, collection.name);
                         let graph_json = serde_json::to_string_pretty(&graph)?;
                         fs::write(&graph_path, graph_json)?;
                         let template = generate_template_from_graph(&graph);
@@ -474,9 +480,14 @@ impl MappingGenerator {
         println!();
 
         // Ensure output dirs
-        let graphs_dir = Path::new("./mapping/graphs");
+        let (graphs_dir_path, templates_dir_path) = if let Some(io) = &self.config.io {
+            (io.graphs_dir.clone(), io.templates_dir.clone())
+        } else {
+            ("./mapping/graphs".to_string(), "./mapping/templates".to_string())
+        };
+        let graphs_dir = Path::new(&graphs_dir_path);
         if !graphs_dir.exists() { std::fs::create_dir_all(graphs_dir).context("Failed to create graphs directory")?; }
-        let templates_dir = Path::new("./mapping/templates");
+        let templates_dir = Path::new(&templates_dir_path);
         if !templates_dir.exists() { std::fs::create_dir_all(templates_dir).context("Failed to create templates directory")?; }
 
         let collections_to_process = if let Some(name) = collection_name {
@@ -508,8 +519,8 @@ impl MappingGenerator {
                 if Path::new(schema_path).exists() {
                     let graph = build_field_graph_from_ts(schema_path)
                         .with_context(|| format!("Failed to build field graph for {}", collection.name))?;
-                    let graph_path = format!("./mapping/graphs/{}.json", collection.name);
-                    let tpl_path = format!("./mapping/templates/{}.template.json", collection.name);
+                    let graph_path = format!("{}/{}.json", graphs_dir_path, collection.name);
+                    let tpl_path = format!("{}/{}.template.json", templates_dir_path, collection.name);
                     let graph_json = serde_json::to_string_pretty(&graph)?;
                     fs::write(&graph_path, graph_json)?;
                     let template = generate_template_from_graph(&graph);
@@ -539,7 +550,11 @@ impl MappingGenerator {
 
 impl MappingGenerator {
     fn write_porter_format(&self, collection_name: &str, docs: &[Value]) -> Result<()> {
-        let out_dir = Path::new("./porter-format");
+        // Resolve porter-format dir from metadata.porter_format_dir, else default ./porter-format
+        let porter_dir = self.config.metadata.as_ref()
+            .and_then(|m| m.get("porter_format_dir")).map(|s| s.clone())
+            .unwrap_or_else(|| "./porter-format".to_string());
+        let out_dir = Path::new(&porter_dir);
         if !out_dir.exists() {
             fs::create_dir_all(out_dir).context("Failed to create porter-format directory")?;
         }

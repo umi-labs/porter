@@ -1,7 +1,0 @@
-{
-  "source": "umbraco",
-  "target": "payload",
-  "collection": "pages",
-  "fieldMappings": [],
-  "blockMappings": null
-}

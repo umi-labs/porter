@@ -98,7 +98,10 @@ async fn main() -> Result<()> {
                     println!("{}", "─".repeat(80));
 
                     // Read porter-format docs
-                    let porter_path = format!("./porter-format/{}.json", collection.name);
+                    let porter_dir = config.metadata.as_ref()
+                        .and_then(|m| m.get("porter_format_dir")).cloned()
+                        .unwrap_or_else(|| "./porter-format".to_string());
+                    let porter_path = format!("{}/{}.json", porter_dir, collection.name);
                     if !std::path::Path::new(&porter_path).exists() {
                         return Err(anyhow!(
                             "Porter-format file not found for collection '{}': {}. Run 'porter generate' first.",
@@ -139,7 +142,9 @@ async fn main() -> Result<()> {
                         ..Default::default()
                     };
 
-                    let output_path = format!("{}/{}", config.output, collection.name);
+                    // Use seeds_dir from [io] if present, fall back to top-level output
+                    let seeds_base = config.io.as_ref().map(|io| io.seeds_dir.clone()).unwrap_or_else(|| config.output.clone());
+                    let output_path = format!("{}/{}", seeds_base, collection.name);
                     info!("Writing seed file to {}", output_path);
                     target_adapter.emit_seed(&transformed_docs, &output_path, &opts)?;
 
@@ -504,7 +509,8 @@ async fn main() -> Result<()> {
                 let transformed_docs =
                     optimized_processor.process_documents_optimized(&docs, &mapping)?;
 
-                let output_path = format!("{}/{}", config.output, collection_config.name);
+                let seeds_base = config.io.as_ref().map(|io| io.seeds_dir.clone()).unwrap_or_else(|| config.output.clone());
+                let output_path = format!("{}/{}", seeds_base, collection_config.name);
                 info!("Writing seed file to {}", output_path);
                 target_adapter.emit_seed(&transformed_docs, &output_path, &opts)?;
 
@@ -543,7 +549,8 @@ async fn main() -> Result<()> {
                 let transformed_docs =
                     perf_processor.process_documents_parallel(&docs, &mapping)?;
 
-                let output_path = format!("{}/{}", config.output, collection_config.name);
+                let seeds_base = config.io.as_ref().map(|io| io.seeds_dir.clone()).unwrap_or_else(|| config.output.clone());
+                let output_path = format!("{}/{}", seeds_base, collection_config.name);
                 info!("Writing seed file to {}", output_path);
                 target_adapter.emit_seed(&transformed_docs, &output_path, &opts)?;
 
@@ -574,7 +581,8 @@ async fn main() -> Result<()> {
                     transformed_docs.push(transformed);
                 }
 
-                let output_path = format!("{}/{}", config.output, collection_config.name);
+                let seeds_base = config.io.as_ref().map(|io| io.seeds_dir.clone()).unwrap_or_else(|| config.output.clone());
+                let output_path = format!("{}/{}", seeds_base, collection_config.name);
                 info!("Writing seed file to {}", output_path);
                 target_adapter.emit_seed(&transformed_docs, &output_path, &opts)?;
                 info!(
