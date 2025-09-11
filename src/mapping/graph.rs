@@ -67,9 +67,13 @@ fn flatten_field_definition(def: &FieldDefinition, base: &str, out: &mut Vec<Fie
             }
         }
         "group" => {
-            out.push(FieldNode { path: path_prefix.clone(), kind: NodeKind::Group, field_type: Some(def.field_type.clone()), block_type: None, relation_to: None, required: Some(def.required) });
+            // If group has no name, inline its fields at current base
+            let next_base = if name.is_empty() { base } else { &path_prefix };
+            if !name.is_empty() {
+                out.push(FieldNode { path: path_prefix.clone(), kind: NodeKind::Group, field_type: Some(def.field_type.clone()), block_type: None, relation_to: None, required: Some(def.required) });
+            }
             if let Some(fields) = def.properties.get("fields") {
-                flatten_fields_value(fields, &path_prefix, out)?;
+                flatten_fields_value(fields, next_base, out)?;
             }
         }
         "array" => {
@@ -120,6 +124,19 @@ fn flatten_fields_value(value: &Value, base: &str, out: &mut Vec<FieldNode>) -> 
                                 }
                             }
                             continue;
+                        }
+
+                        // Recognize SEO helper argument objects and synthesize scalar nodes
+                        if ftype.is_empty() {
+                            let title_path = map.get("titlePath").and_then(|v| v.as_str());
+                            let desc_path = map.get("descriptionPath").and_then(|v| v.as_str());
+                            let image_path = map.get("imagePath").and_then(|v| v.as_str());
+                            if title_path.is_some() || desc_path.is_some() || image_path.is_some() {
+                                if let Some(p) = title_path { out.push(FieldNode { path: p.to_string(), kind: NodeKind::Scalar, field_type: Some("text".to_string()), block_type: None, relation_to: None, required: None }); }
+                                if let Some(p) = desc_path { out.push(FieldNode { path: p.to_string(), kind: NodeKind::Scalar, field_type: Some("textarea".to_string()), block_type: None, relation_to: None, required: None }); }
+                                if let Some(p) = image_path { out.push(FieldNode { path: p.to_string(), kind: NodeKind::Scalar, field_type: Some("upload".to_string()), block_type: None, relation_to: Some(Value::String("media".to_string())), required: None }); }
+                                continue;
+                            }
                         }
 
                         let name = map.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
