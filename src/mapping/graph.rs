@@ -107,24 +107,47 @@ fn flatten_fields_value(value: &Value, base: &str, out: &mut Vec<FieldNode>) -> 
     match value {
         Value::Array(items) => {
             for item in items {
-                if let Value::Object(map) = item {
-                    let name = map.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let ftype = map.get("type").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
-                    if name.is_empty() || ftype.is_empty() { continue; }
-                    let mut properties: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
-                    for (k, v) in map.iter() {
-                        properties.insert(k.clone(), v.clone());
+                match item {
+                    Value::Object(map) => {
+                        let ftype = map.get("type").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                        // Special-case container without name: tabs
+                        if ftype == "tabs" {
+                            if let Some(Value::Array(tabs)) = map.get("tabs") {
+                                for tab in tabs {
+                                    if let Some(fields) = tab.get("fields") {
+                                        flatten_fields_value(fields, base, out)?;
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+
+                        let name = map.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        if ftype.is_empty() { continue; }
+                        if name.is_empty() && ftype != "tabs" {
+                            // Without a name, we cannot place scalar/group/array/blocks on a path; skip
+                            // (tabs handled above)
+                            continue;
+                        }
+                        let mut properties: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+                        for (k, v) in map.iter() {
+                            properties.insert(k.clone(), v.clone());
+                        }
+                        let def = FieldDefinition {
+                            name,
+                            field_type: ftype.clone(),
+                            required: map.get("required").and_then(|v| v.as_bool()).unwrap_or(false),
+                            validations: Vec::new(),
+                            relationship: None,
+                            properties,
+                        };
+                        flatten_field_definition(&def, base, out)?;
                     }
-                    let mut def = FieldDefinition {
-                        name,
-                        field_type: ftype.clone(),
-                        required: map.get("required").and_then(|v| v.as_bool()).unwrap_or(false),
-                        validations: Vec::new(),
-                        relationship: None,
-                        properties,
-                    };
-                    // For nested objects, properties map already contains nested JSON
-                    flatten_field_definition(&def, base, out)?;
+                    Value::Array(inner) => {
+                        // handle spread results like ...slugField() that returned an array of fields
+                        flatten_fields_value(&Value::Array(inner.clone()), base, out)?;
+                    }
+                    _ => {}
                 }
             }
             Ok(())

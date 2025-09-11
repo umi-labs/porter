@@ -214,11 +214,17 @@ fn resolve_expr(expr: &Expr, current_file: &str, import_map: &HashMap<String, St
                     if let Some(path) = import_map.get(&name) {
                         if let Ok(m) = parse_module(path) {
                             if let Some(ret) = find_function_return_object(&m, &name) {
-                                return resolve_expr(&ret, path, &build_import_map(&m, path));
+                                let resolved = resolve_expr(&ret, path, &build_import_map(&m, path));
+                                // If args are provided and return has placeholders, we could merge; for now ignore args
+                                return resolved;
                             }
                         }
                     }
                 }
+            }
+            // Also resolve inline object literal returns
+            if let Some(arg0) = call.args.get(0) {
+                if let Some(v) = expr_to_json(&arg0.expr) { return Some(v); }
             }
             None
         }
