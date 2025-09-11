@@ -1,10 +1,11 @@
 name: CI
 
 on:
-  push:
-    branches: [ main, prod ]
-  pull_request:
-    branches: [ main, prod ]
+  workflow_dispatch:
+  # push:
+  #   branches: [ main, prod ]
+  # pull_request:
+  #   branches: [ main, prod ]
 
 jobs:
   build-test-lint:
