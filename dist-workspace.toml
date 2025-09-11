@@ -23,7 +23,3 @@ runner = "blacksmith-4vcpu-ubuntu-2404"
 
 [dist.github-custom-runners.aarch64-unknown-linux-gnu]
 runner = "blacksmith-4vcpu-ubuntu-2404-arm"
-
-# Global runner for non-target-specific tasks
-[dist.github-custom-runners.global]
-runner = "blacksmith-4vcpu-ubuntu-2404"
