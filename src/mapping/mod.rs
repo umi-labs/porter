@@ -1,4 +1,6 @@
 pub mod generator;
+pub mod graph;
+pub mod template;
 pub mod json_mapping;
 pub mod nested;
 pub mod transforms;

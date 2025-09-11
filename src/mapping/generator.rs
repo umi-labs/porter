@@ -1,5 +1,7 @@
 use crate::config::PorterConfig;
 use crate::mapping;
+use crate::mapping::graph::build_field_graph_from_ts;
+use crate::mapping::template::generate_template_from_graph;
 use crate::sources::wordpress::WordPressApiConnector;
 use crate::sources::wordpress::config::WordPressConfig;
 use anyhow::{Context, Result};
@@ -26,13 +28,17 @@ impl MappingGenerator {
         println!("{}", "─".repeat(50));
         println!();
 
-        // Create mappings directory if it doesn't exist
+        // Create mappings and mapping artifacts directories if they don't exist
         let mappings_dir = Path::new("./mappings");
         if !mappings_dir.exists() {
             fs::create_dir_all(mappings_dir)
                 .context("Failed to create mappings directory")?;
             println!("{}", "✓ Created mappings directory".green());
         }
+        let graphs_dir = Path::new("./mapping/graphs");
+        if !graphs_dir.exists() { let _ = fs::create_dir_all(graphs_dir); }
+        let templates_dir = Path::new("./mapping/templates");
+        if !templates_dir.exists() { let _ = fs::create_dir_all(templates_dir); }
 
         let collections_to_process = if let Some(name) = collection_name {
             self.config.collections.iter()
@@ -63,6 +69,24 @@ impl MappingGenerator {
             println!("{}", "─".repeat(40));
 
             self.generate_collection_mapping(collection).await?;
+
+            // If we have a target schema, build a field graph and template
+            if let Some(schema_path) = &collection.collection_path {
+                if Path::new(schema_path).exists() {
+                    if let Ok(graph) = build_field_graph_from_ts(schema_path) {
+                        let graph_path = format!("./mapping/graphs/{}.json", collection.name);
+                        let tpl_path = format!("./mapping/templates/{}.template.json", collection.name);
+                        let graph_json = serde_json::to_string_pretty(&graph)?;
+                        fs::write(&graph_path, graph_json)?;
+                        let template = generate_template_from_graph(&graph);
+                        let tpl_json = serde_json::to_string_pretty(&template)?;
+                        fs::write(&tpl_path, tpl_json)?;
+                        println!("{} {}\n{} {}",
+                            "✓ Wrote field graph:".green(), graph_path,
+                            "✓ Wrote mapping template:".green(), tpl_path);
+                    }
+                }
+            }
             println!();
         }
 
@@ -440,6 +464,75 @@ impl MappingGenerator {
         fs::write(file_path, content)
             .context("Failed to write mapping file")?;
 
+        Ok(())
+    }
+
+    /// Generate only field graphs and mapping templates from target schemas
+    pub fn generate_templates(&self, collection_name: Option<&str>) -> Result<()> {
+        println!("{}", "🧩 Generating Field Graphs & Templates".cyan().bold());
+        println!("{}", "─".repeat(50));
+        println!();
+
+        // Ensure output dirs
+        let graphs_dir = Path::new("./mapping/graphs");
+        if !graphs_dir.exists() { std::fs::create_dir_all(graphs_dir).context("Failed to create graphs directory")?; }
+        let templates_dir = Path::new("./mapping/templates");
+        if !templates_dir.exists() { std::fs::create_dir_all(templates_dir).context("Failed to create templates directory")?; }
+
+        let collections_to_process = if let Some(name) = collection_name {
+            self.config.collections.iter().filter(|c| c.name == name).collect::<Vec<_>>()
+        } else {
+            self.config.collections.iter().collect::<Vec<_>>()
+        };
+
+        if collections_to_process.is_empty() {
+            if let Some(name) = collection_name {
+                return Err(anyhow::anyhow!("Collection '{}' not found in configuration", name));
+            } else {
+                return Err(anyhow::anyhow!("No collections found in configuration"));
+            }
+        }
+
+        for (i, collection) in collections_to_process.iter().enumerate() {
+            let current = i + 1;
+            let total = collections_to_process.len();
+            println!(
+                "{}",
+                format!("📁 Processing Collection {}/{}: {}", current, total, collection.name)
+                    .cyan()
+                    .bold()
+            );
+            println!("{}", "─".repeat(40));
+
+            if let Some(schema_path) = &collection.collection_path {
+                if Path::new(schema_path).exists() {
+                    let graph = build_field_graph_from_ts(schema_path)
+                        .with_context(|| format!("Failed to build field graph for {}", collection.name))?;
+                    let graph_path = format!("./mapping/graphs/{}.json", collection.name);
+                    let tpl_path = format!("./mapping/templates/{}.template.json", collection.name);
+                    let graph_json = serde_json::to_string_pretty(&graph)?;
+                    fs::write(&graph_path, graph_json)?;
+                    let template = generate_template_from_graph(&graph);
+                    let tpl_json = serde_json::to_string_pretty(&template)?;
+                    fs::write(&tpl_path, tpl_json)?;
+                    println!(
+                        "{} {}\n{} {}",
+                        "✓ Wrote field graph:".green(),
+                        graph_path,
+                        "✓ Wrote mapping template:".green(),
+                        tpl_path
+                    );
+                } else {
+                    warn!("Schema file not found for collection '{}': {}", collection.name, schema_path);
+                }
+            } else {
+                warn!("No collection schema path provided for '{}'", collection.name);
+            }
+
+            println!();
+        }
+
+        println!("{}", "✅ Template generation completed!".green().bold());
         Ok(())
     }
 }

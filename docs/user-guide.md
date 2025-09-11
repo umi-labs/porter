@@ -372,6 +372,30 @@ collection_path = "./schemas/pages.ts"
 locale = "en"
 ```
 
+### Payload Target: Extended Sections
+
+When targeting Payload (seed files), Porter collects additional settings during `porter init` and writes nested sections:
+
+```toml
+[payload]
+config_entry = "./src/payload.config.ts"
+module_system = "esm" # or "cjs"
+
+[typescript]
+tsconfig_path = "./tsconfig.json"
+path_aliases = ["@"]
+
+[io]
+graphs_dir = "./mapping/graphs"
+templates_dir = "./mapping/templates"
+seeds_dir = "./seeds"
+
+[media]
+policy = "ignore"
+```
+
+Validation ensures `payload.config_entry`, `typescript.tsconfig_path`, and `io.seeds_dir` are present when `target="payload"`.
+
 ### Configuration Options
 
 | Option | Type | Default | Description |

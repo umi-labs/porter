@@ -17,6 +17,31 @@ pub struct CollectionConfig {
     pub related_collections: Option<Vec<String>>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct PayloadSection {
+    pub config_entry: String,
+    pub module_system: String, // "esm" | "cjs"
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct TypescriptSection {
+    pub tsconfig_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_aliases: Option<Vec<String>>, // e.g., ["@"]
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct IoSection {
+    pub graphs_dir: String,
+    pub templates_dir: String,
+    pub seeds_dir: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct MediaSection {
+    pub policy: String, // "ignore" (MVP)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PorterConfig {
     pub source: String,
@@ -31,6 +56,14 @@ pub struct PorterConfig {
     pub fixtures: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<PayloadSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub typescript: Option<TypescriptSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub io: Option<IoSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaSection>,
 }
 
 impl Default for PorterConfig {
@@ -47,6 +80,10 @@ impl Default for PorterConfig {
             debug: false,
             fixtures: false,
             metadata: None,
+            payload: None,
+            typescript: None,
+            io: None,
+            media: None,
         }
     }
 }
@@ -115,6 +152,11 @@ impl PorterConfig {
         self.dry_run = other.dry_run;
         self.debug = other.debug;
         self.fixtures = other.fixtures;
+        if other.metadata.is_some() { self.metadata = other.metadata.clone(); }
+        if other.payload.is_some() { self.payload = other.payload.clone(); }
+        if other.typescript.is_some() { self.typescript = other.typescript.clone(); }
+        if other.io.is_some() { self.io = other.io.clone(); }
+        if other.media.is_some() { self.media = other.media.clone(); }
     }
 
     /// Validates that all required fields are present
@@ -139,6 +181,27 @@ impl PorterConfig {
             }
             if self.target == "payload" && collection.collection_path.is_none() {
                 return Err(anyhow!("Collection path is required for Payload CMS collection '{}'", collection.name));
+            }
+        }
+
+        // Additional required keys for target=payload
+        if self.target == "payload" {
+            let payload_cfg = self.payload.as_ref().ok_or_else(|| anyhow!("[payload] section is required when target is 'payload'"))?;
+            if payload_cfg.config_entry.trim().is_empty() {
+                return Err(anyhow!("payload.config_entry is required"));
+            }
+            if payload_cfg.module_system.trim().is_empty() {
+                return Err(anyhow!("payload.module_system is required (esm or cjs)"));
+            }
+
+            let ts_cfg = self.typescript.as_ref().ok_or_else(|| anyhow!("[typescript] section is required when target is 'payload'"))?;
+            if ts_cfg.tsconfig_path.trim().is_empty() {
+                return Err(anyhow!("typescript.tsconfig_path is required"));
+            }
+
+            let io_cfg = self.io.as_ref().ok_or_else(|| anyhow!("[io] section is required when target is 'payload'"))?;
+            if io_cfg.seeds_dir.trim().is_empty() {
+                return Err(anyhow!("io.seeds_dir is required"));
             }
         }
         Ok(())
@@ -168,6 +231,33 @@ impl PorterConfig {
             }
         }
         
+        if let Some(payload) = &self.payload {
+            println!();
+            println!("{}", "[payload]".cyan().bold());
+            println!("  config_entry: {}", payload.config_entry.blue());
+            println!("  module_system: {}", payload.module_system.blue());
+        }
+        if let Some(ts) = &self.typescript {
+            println!();
+            println!("{}", "[typescript]".cyan().bold());
+            println!("  tsconfig_path: {}", ts.tsconfig_path.blue());
+            if let Some(aliases) = &ts.path_aliases {
+                println!("  path_aliases: {}", aliases.join(", ").blue());
+            }
+        }
+        if let Some(io) = &self.io {
+            println!();
+            println!("{}", "[io]".cyan().bold());
+            println!("  graphs_dir: {}", io.graphs_dir.blue());
+            println!("  templates_dir: {}", io.templates_dir.blue());
+            println!("  seeds_dir: {}", io.seeds_dir.blue());
+        }
+        if let Some(media) = &self.media {
+            println!();
+            println!("{}", "[media]".cyan().bold());
+            println!("  policy: {}", media.policy.blue());
+        }
+
         println!();
         println!("Interactive: {}", if self.interactive { "✓".green() } else { "✗".red() });
         println!("Verbose: {}", if self.verbose { "✓".green() } else { "✗".red() });
@@ -329,7 +419,51 @@ pub async fn create_config_interactively() -> Result<PorterConfig> {
     config.target = target_options[target_index].to_string();
     println!("{}", format!("✓ Selected target: {}", config.target).green());
 
-    // Output directory
+    // Payload-specific config (collect now for future commands)
+    if config.target == "payload" {
+        println!();
+        println!("{}", "🔧 Payload Configuration".cyan().bold());
+
+        let default_payload_entry = "./src/payload.config.ts";
+        let payload_entry = interact::prompt_with_default(
+            "Enter Payload config entry path (e.g., ./src/payload.config.ts):",
+            default_payload_entry,
+        )?;
+        let module_system_options = vec!["esm", "cjs"];
+        let module_idx = interact::select_with_arrows(
+            "Select module system:",
+            &module_system_options,
+            "module_system",
+        )?;
+        let module_system = module_system_options[module_idx].to_string();
+        config.payload = Some(PayloadSection {
+            config_entry: payload_entry,
+            module_system,
+        });
+
+        println!();
+        println!("{}", "🧩 TypeScript Configuration".cyan().bold());
+        let tsconfig_path = interact::prompt_with_default(
+            "Enter tsconfig path:",
+            "./tsconfig.json",
+        )?;
+        let use_aliases = interact::confirm_with_default("Use path aliases (e.g., @)?", true)?;
+        let path_aliases = if use_aliases {
+            let aliases_csv = interact::prompt_with_default("Enter alias prefixes (comma-separated)", "@")?;
+            let list = aliases_csv
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>();
+            if list.is_empty() { None } else { Some(list) }
+        } else { None };
+        config.typescript = Some(TypescriptSection { tsconfig_path, path_aliases });
+
+        println!();
+        println!("{}", "📦 Output Directories".cyan().bold());
+    }
+
+    // Output directory (legacy top-level; keep for compatibility)
     let default_output = if config.source == "wordpress" {
         "./test-data/ya/seed"
     } else {
@@ -338,6 +472,18 @@ pub async fn create_config_interactively() -> Result<PorterConfig> {
     let output = interact::prompt_with_default("Enter output directory:", default_output)?;
     config.output = output;
     println!("{}", format!("✓ Output: {}", config.output).green());
+
+    // IO directories (graphs/templates/seeds)
+    let default_graphs = "./mapping/graphs";
+    let default_templates = "./mapping/templates";
+    let default_seeds = if !config.output.is_empty() { config.output.clone() } else { "./seeds".to_string() };
+    let graphs_dir = interact::prompt_with_default("Enter graphs directory:", default_graphs)?;
+    let templates_dir = interact::prompt_with_default("Enter templates directory:", default_templates)?;
+    let seeds_dir = interact::prompt_with_default("Enter seeds directory:", &default_seeds)?;
+    config.io = Some(IoSection { graphs_dir, templates_dir, seeds_dir: seeds_dir.clone() });
+
+    // Media policy (MVP: ignore)
+    config.media = Some(MediaSection { policy: "ignore".to_string() });
 
     // Add collections
     println!();
