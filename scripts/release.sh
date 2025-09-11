@@ -142,7 +142,7 @@ commit_changes() {
         return
     fi
     
-    git add Cargo.toml
+    git add Cargo.toml Cargo.lock
     git commit -m "release: bump version to $version"
     print_success "Committed version bump"
 }
