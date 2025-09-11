@@ -1,6 +1,6 @@
 [package]
 name = "porter"
-version = "1.0.7"
+version = "1.0.8"
 edition = "2024"
 repository = "https://github.com/umi-labs/porter"
 description = "Porter is a high-performance, Rust-based CLI tool for migrating structured content between different systems. It supports complex nested data structures, parallel processing, and provides an intuitive interactive interface for data transformation."
