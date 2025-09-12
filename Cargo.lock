@@ -1204,7 +1204,7 @@ dependencies = [
 
 [[package]]
 name = "porter"
-version = "1.0.23"
+version = "1.0.24"
 dependencies = [
  "anyhow",
  "chrono",
