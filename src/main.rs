@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use clap::Parser;
 use colored::Colorize;
 use log::{debug, info, warn};
- use porter::dlog
+ use porter::dlog;
 use porter::util::debug as dbgutil;
 use porter::adapter::TargetOptions;
 use porter::batch::BatchConfig;
