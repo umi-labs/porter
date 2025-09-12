@@ -165,15 +165,11 @@ async fn main() -> Result<()> {
                     let docs: Vec<serde_json::Value> = serde_json::from_str(&porter_content)
                         .map_err(|e| anyhow!("Failed to parse porter-format JSON for '{}': {}", collection.name, e))?;
 
-                    // Load existing mapping (non-interactive)
-                    let mapping = mapping::load_or_create_mapping(
+                    // Load existing mapping (do not create during migrate)
+                    let mapping = mapping::load_mapping_only(
                         &collection.name,
                         &config.source,
                         &config.target,
-                        &docs,
-                        collection.collection_path.as_deref(),
-                        false,
-                        Some((current, total_collections)),
                     )?;
 
                     // Transform docs
@@ -475,14 +471,11 @@ async fn main() -> Result<()> {
             "Loading or creating mapping for collection '{}'",
             collection_config.name
         );
-        let mapping = mapping::load_or_create_mapping(
+        // Migrate requires a pre-generated mapping
+        let mapping = mapping::load_mapping_only(
             &collection_config.name,
             source,
             target,
-            &docs,
-            collection_config.collection_path.as_deref(),
-            config.interactive,
-            Some((current_collection, total_collections)),
         )?;
         info!(
             "Mapping loaded with {} field mappings",
