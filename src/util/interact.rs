@@ -156,11 +156,12 @@ pub fn confirm_mappings(mappings: &[(String, String, String)]) -> Result<bool> {
 
 /// Prompts the user to multi-select items from a list. Returns the indices selected.
 pub fn multi_select<T: AsRef<str> + std::fmt::Display>(message: &str, options: &[T], preselect_all: bool) -> Result<Vec<usize>> {
-    let mut ms = MultiSelect::new();
-    ms.with_prompt(message).items(options);
-    if preselect_all {
-        let defaults: Vec<bool> = options.iter().map(|_| true).collect();
-        ms.defaults(&defaults);
+    let defaults: Vec<bool> = if preselect_all { options.iter().map(|_| true).collect() } else { vec![] };
+    let mut builder = MultiSelect::new();
+    builder = builder.with_prompt(message);
+    builder = builder.items(options);
+    if !defaults.is_empty() {
+        builder = builder.defaults(&defaults);
     }
-    Ok(ms.interact()?)
+    Ok(builder.interact()?)
 }
