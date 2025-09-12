@@ -26,6 +26,9 @@ use std::path::Path;
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Initialize debug early from CLI so subcommands can emit debug before config is loaded
+    dbgutil::init(cli.debug);
+
     // Handle subcommands first
     if let Some(command) = cli.command {
         match command {
@@ -51,10 +54,15 @@ async fn main() -> Result<()> {
                 // Load config if provided/available to infer output and migrations dir
                 let config_opt = if let Some(config_path) = config_file {
                     dlog!("Loading config from explicit path: {}", config_path);
-                    Some(PorterConfig::load_from_file(&config_path)?)
+                    let cfg = PorterConfig::load_from_file(&config_path)?;
+                    // If debug was not enabled via CLI, enable if config requests it
+                    dbgutil::init(cli.debug || cfg.debug);
+                    Some(cfg)
                 } else {
                     dlog!("Attempting to find and load config from default locations");
-                    find_and_load_config()?
+                    let cfg_opt = find_and_load_config()?;
+                    if let Some(cfg) = &cfg_opt { dbgutil::init(cli.debug || cfg.debug); }
+                    cfg_opt
                 };
 
                 // Determine migrations directory
@@ -117,9 +125,12 @@ async fn main() -> Result<()> {
                 dlog!("Generate command invoked with config={:?} collection={:?}", config_file, collection);
                 let config = if let Some(config_path) = config_file {
                     dlog!("Loading config from explicit path: {}", config_path);
-                    PorterConfig::load_from_file(&config_path)?
+                    let cfg = PorterConfig::load_from_file(&config_path)?;
+                    dbgutil::init(cli.debug || cfg.debug);
+                    cfg
                 } else if let Some(file_config) = find_and_load_config()? {
                     dlog!("Loaded config from default locations");
+                    dbgutil::init(cli.debug || file_config.debug);
                     file_config
                 } else {
                     return Err(anyhow!("No configuration file found. Run 'porter init' first."));
@@ -137,9 +148,12 @@ async fn main() -> Result<()> {
                 dlog!("Template command invoked with config={:?} collection={:?}", config_file, collection);
                 let config = if let Some(config_path) = config_file {
                     dlog!("Loading config from explicit path: {}", config_path);
-                    PorterConfig::load_from_file(&config_path)?
+                    let cfg = PorterConfig::load_from_file(&config_path)?;
+                    dbgutil::init(cli.debug || cfg.debug);
+                    cfg
                 } else if let Some(file_config) = find_and_load_config()? {
                     dlog!("Loaded config from default locations");
+                    dbgutil::init(cli.debug || file_config.debug);
                     file_config
                 } else {
                     return Err(anyhow!("No configuration file found. Run 'porter init' first."));
