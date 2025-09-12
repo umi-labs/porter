@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use crate::mapping::typescript::{parse_typescript_file, FieldDefinition};
 use crate::mapping::schema_introspect::extract_fields_json;
+use crate::parser::{PayloadSchemaParser, FlattenedTemplate};
+use crate::config::PorterConfig;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -32,6 +35,12 @@ pub struct FieldNode {
 /// This performs a best-effort static analysis using SWC to parse object literals
 /// and recursively flatten nested fields/tabs/arrays/blocks.
 pub fn build_field_graph_from_ts(schema_path: &str) -> Result<Vec<FieldNode>> {
+    // Try to use the new parser first if we can determine the project root
+    if let Ok(template) = build_field_graph_with_new_parser(schema_path) {
+        return Ok(template);
+    }
+    
+    // Fallback to the old implementation
     // Prefer JSON extraction that resolves custom field factories/imports; fallback to FieldDefinition
     let mut nodes: Vec<FieldNode> = Vec::new();
     if let Ok(values) = extract_fields_json(schema_path) {
@@ -47,6 +56,119 @@ pub fn build_field_graph_from_ts(schema_path: &str) -> Result<Vec<FieldNode>> {
     nodes.sort_by(|a, b| a.path.cmp(&b.path).then(a.block_type.cmp(&b.block_type)));
     nodes.dedup_by(|a, b| a.path == b.path && a.block_type == b.block_type);
     Ok(nodes)
+}
+
+/// Build field graph using the new parser with full import resolution
+fn build_field_graph_with_new_parser(schema_path: &str) -> Result<Vec<FieldNode>> {
+    use crate::dlog;
+    
+    dlog!("Attempting to use new parser for: {}", schema_path);
+    
+    let config_path = Path::new(schema_path);
+    
+    // Try to find the project root
+    let base_dir = find_project_root(config_path)?;
+    dlog!("Found project root: {:?}", base_dir);
+    
+    // Try to load the Porter config to get TypeScript settings
+    let ts_config = load_typescript_config(&base_dir);
+    
+    // Create the new parser
+    let mut parser = PayloadSchemaParser::new(base_dir, ts_config.as_ref());
+    
+    // Generate the template
+    let template = parser.generate_template(config_path)?;
+    dlog!("Generated template with {} fields", template.fields.len());
+    
+    // Convert FlattenedTemplate to Vec<FieldNode>
+    let mut nodes = Vec::new();
+    
+    for field in &template.fields {
+        let kind = match field.field_type.as_str() {
+            "array" => NodeKind::Array,
+            "group" => NodeKind::Group,
+            "blocks" => NodeKind::Blocks,
+            "block" => NodeKind::Block,
+            _ => NodeKind::Scalar,
+        };
+        
+        nodes.push(FieldNode {
+            path: field.path.clone(),
+            kind,
+            field_type: Some(field.field_type.clone()),
+            block_type: None,
+            relation_to: if field.field_type == "relationship" {
+                field.validation.as_ref().and_then(|v| {
+                    serde_json::to_value(v).ok()
+                })
+            } else {
+                None
+            },
+            required: Some(field.required),
+        });
+    }
+    
+    // Process blocks
+    for block in &template.blocks {
+        for field in &block.fields {
+            nodes.push(FieldNode {
+                path: field.path.clone(),
+                kind: NodeKind::Scalar,
+                field_type: Some(field.field_type.clone()),
+                block_type: Some(block.slug.clone()),
+                relation_to: None,
+                required: Some(field.required),
+            });
+        }
+    }
+    
+    dlog!("Converted to {} field nodes", nodes.len());
+    Ok(nodes)
+}
+
+fn find_project_root(from: &Path) -> Result<PathBuf> {
+    let mut current = from.parent();
+    
+    while let Some(dir) = current {
+        // Look for indicators of project root
+        if dir.join("package.json").exists() 
+            || dir.join("tsconfig.json").exists()
+            || dir.join("payload.config.ts").exists() {
+            return Ok(dir.to_path_buf());
+        }
+        current = dir.parent();
+    }
+    
+    // Fallback to parent of config file
+    from.parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| anyhow!("Could not determine project root"))
+}
+
+fn load_typescript_config(base_dir: &Path) -> Option<crate::config::TypescriptSection> {
+    use crate::dlog;
+    
+    // Look for porter config files
+    let config_names = vec![
+        "porter.config.toml",
+        ".porter.toml",
+        "migration.toml",
+        "migrate.toml",
+    ];
+    
+    for name in config_names {
+        let config_path = base_dir.join(name);
+        if config_path.exists() {
+            dlog!("Found config file: {:?}", config_path);
+            if let Ok(content) = std::fs::read_to_string(&config_path) {
+                if let Ok(config) = toml::from_str::<PorterConfig>(&content) {
+                    return config.typescript;
+                }
+            }
+        }
+    }
+    
+    None
 }
 
 fn flatten_field_definition(def: &FieldDefinition, base: &str, out: &mut Vec<FieldNode>) -> Result<()> {

@@ -27,9 +27,16 @@ rayon = "1.10"
 glob = "0.3"
 walkdir = "2.5"
 libloading = "0.8"
-swc_ecma_parser = "0.141.37"
-swc_ecma_ast = "0.110.15"
-swc_common = { version = "0.33.12", features = ["tty-emitter"] }
+swc_core = { version = "0.90", features = [
+    "ecma_parser",
+    "ecma_ast", 
+    "ecma_visit",
+    "common",
+] }
+swc_ecma_parser = "0.143"
+swc_common = { version = "0.33", features = ["tty-emitter"] }
+swc_ecma_visit = "0.98"
+dashmap = "5.5"
 chrono = { version = "0.4", features = ["serde"] }
 num_cpus = "1.16"
 futures = "0.3"

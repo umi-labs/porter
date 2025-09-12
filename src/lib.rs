@@ -4,6 +4,7 @@ pub mod batch;
 pub mod cli;
 pub mod config;
 pub mod mapping;
+pub mod parser;
 pub mod performance;
 pub mod plugin;
 pub mod sources;
