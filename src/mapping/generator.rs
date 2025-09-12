@@ -530,6 +530,12 @@ impl MappingGenerator {
 
             if let Some(schema_path) = &collection.collection_path {
                 if Path::new(schema_path).exists() {
+                    // Configure tsconfig paths resolution once
+                    if let Some(ts) = &self.config.typescript {
+                        if !ts.tsconfig_path.is_empty() {
+                            let _ = crate::mapping::schema_introspect::configure_ts_paths_from_file(&ts.tsconfig_path);
+                        }
+                    }
                     let graph = build_field_graph_from_ts(schema_path)
                         .with_context(|| format!("Failed to build field graph for {}", collection.name))?;
                     let graph_path = format!("{}/{}.json", graphs_dir_path, collection.name);

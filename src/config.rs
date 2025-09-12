@@ -455,7 +455,9 @@ pub async fn create_config_interactively() -> Result<PorterConfig> {
             let mut discovered: Vec<(String, String)> = Vec::new();
             if std::path::Path::new(&tsconfig_path).exists() {
                 if let Ok(raw) = std::fs::read_to_string(&tsconfig_path) {
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    let parsed: Option<serde_json::Value> = serde_json::from_str::<serde_json::Value>(&raw).ok()
+                        .or_else(|| json5::from_str::<serde_json::Value>(&raw).ok());
+                    if let Some(json) = parsed {
                         if let Some(paths) = json
                             .get("compilerOptions")
                             .and_then(|c| c.get("paths"))
