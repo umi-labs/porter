@@ -20,6 +20,19 @@ use self::json_mapping::{Mapping, FieldMapping};
 use self::nested::{NestedPath, NestedMapping, apply_nested_mapping};
 use self::transforms::{get_path, to_point_from_latlng, combine_coordinates_from_fields};
 use self::validation::{validate_mapping, create_schema_from_documents, ValidationResult};
+use std::sync::OnceLock;
+static MAPPINGS_BASE: OnceLock<String> = OnceLock::new();
+
+/// Initialize the base directory used for mapping files
+pub fn initialize_mappings_base(dir: &str) {
+    let _ = MAPPINGS_BASE.set(dir.to_string());
+}
+
+fn resolve_mappings_base() -> String {
+    if let Some(set) = MAPPINGS_BASE.get() { return set.clone(); }
+    if let Ok(env_dir) = std::env::var("PORTER_MAPPINGS_DIR") { return env_dir; }
+    "./mappings".to_string()
+}
 
 /// Result of coordinate combination operation
 struct CombineCoordinatesResult {
@@ -29,7 +42,7 @@ struct CombineCoordinatesResult {
 
 /// Generates a mapping file path based on the collection name
 pub fn get_mapping_path(collection: &str, source: &str, target: &str) -> String {
-    let base_dir = std::env::var("PORTER_MAPPINGS_DIR").unwrap_or_else(|_| "./mappings".to_string());
+    let base_dir = resolve_mappings_base();
     format!("{}/{}.{}-to-{}.json", base_dir, collection, source, target)
 }
 
@@ -156,7 +169,7 @@ pub fn save_mapping(mapping: &Mapping) -> Result<()> {
     let mapping_path = get_mapping_path(&mapping.collection, &mapping.source, &mapping.target);
 
     // Ensure the mappings directory exists
-    let base_dir = std::env::var("PORTER_MAPPINGS_DIR").unwrap_or_else(|_| "./mappings".to_string());
+    let base_dir = resolve_mappings_base();
     fs::ensure_dir(&base_dir)?;
 
     // Serialize and save the mapping
