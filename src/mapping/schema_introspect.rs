@@ -122,7 +122,7 @@ fn expr_to_json_ctx(expr: &Expr, current_file: Option<&str>, import_map: Option<
             Some(Value::Object(map))
         }
         Expr::Ident(id) => {
-            if let (Some(file), Some(map)) = (current_file, import_map) {
+            if let (Some(_file), Some(map)) = (current_file, import_map) {
                 let name = id.sym.to_string();
                 if let Some(path) = map.get(&name) {
                     if let Ok(m) = parse_module(path) {
@@ -375,8 +375,8 @@ fn extract_return_from_function_expr(expr: &Expr) -> Option<Expr> {
             None
         }
         Expr::Arrow(arrow) => {
-            match &arrow.body {
-                swc_ecma_ast::BlockStmtOrExpr::Expr(e) => Some((***e).clone()),
+            match &*arrow.body {
+                swc_ecma_ast::BlockStmtOrExpr::Expr(e) => Some((**e).clone()),
                 swc_ecma_ast::BlockStmtOrExpr::BlockStmt(block) => {
                     for st in &block.stmts {
                         if let Stmt::Return(ret) = st {
