@@ -29,7 +29,8 @@ struct CombineCoordinatesResult {
 
 /// Generates a mapping file path based on the collection name
 pub fn get_mapping_path(collection: &str, source: &str, target: &str) -> String {
-    format!("./mappings/{}.{}-to-{}.json", collection, source, target)
+    let base_dir = std::env::var("PORTER_MAPPINGS_DIR").unwrap_or_else(|_| "./mappings".to_string());
+    format!("{}/{}.{}-to-{}.json", base_dir, collection, source, target)
 }
 
 /// Loads a mapping from a file, or creates a new one if the file doesn't exist
@@ -155,7 +156,8 @@ pub fn save_mapping(mapping: &Mapping) -> Result<()> {
     let mapping_path = get_mapping_path(&mapping.collection, &mapping.source, &mapping.target);
 
     // Ensure the mappings directory exists
-    fs::ensure_dir("./mappings")?;
+    let base_dir = std::env::var("PORTER_MAPPINGS_DIR").unwrap_or_else(|_| "./mappings".to_string());
+    fs::ensure_dir(&base_dir)?;
 
     // Serialize and save the mapping
     let content = serde_json::to_string_pretty(mapping)?;
