@@ -29,7 +29,9 @@ impl MappingGenerator {
         println!();
 
         // Create mappings and mapping artifacts directories if they don't exist
-        let mappings_dir = Path::new("./mappings");
+        // Mappings default to <output>/mappings if PORTER_MAPPINGS_DIR not set
+        let mappings_base = std::env::var("PORTER_MAPPINGS_DIR").unwrap_or_else(|_| format!("{}/mappings", self.config.output));
+        let mappings_dir = Path::new(&mappings_base);
         if !mappings_dir.exists() {
             fs::create_dir_all(mappings_dir)
                 .context("Failed to create mappings directory")?;
@@ -196,9 +198,9 @@ impl MappingGenerator {
         } else {
             let mappings = self.generate_field_mappings(&wp_fields, &payload_fields, collection)?;
             println!("{}", format!("✓ Generated {} field mappings", mappings.len()).green());
-
-            let mapping_file = format!("./mappings/{}.{}-to-{}.json", 
-                collection.name, self.config.source, self.config.target);
+            let mappings_base = std::env::var("PORTER_MAPPINGS_DIR").unwrap_or_else(|_| format!("{}/mappings", self.config.output));
+            let mapping_file = format!("{}/{}.{}-to-{}.json", 
+                mappings_base, collection.name, self.config.source, self.config.target);
             self.save_mapping_file(&mapping_file, &mappings, collection)?;
             println!("{}", format!("✓ Saved mapping to {}", mapping_file).green());
         }

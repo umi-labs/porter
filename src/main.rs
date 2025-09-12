@@ -270,6 +270,12 @@ async fn main() -> Result<()> {
     let source = &config.source;
     let target = &config.target;
 
+    // Export mappings directory so mapping module resolves under output
+    if std::env::var("PORTER_MAPPINGS_DIR").is_err() {
+        let mappings_base = format!("{}/mappings", config.output);
+        unsafe { std::env::set_var("PORTER_MAPPINGS_DIR", mappings_base); }
+    }
+
     // Initialize plugin manager and register built-in adapters
     let mut plugin_manager = PluginManager::new();
 
