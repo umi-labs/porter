@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use crate::config::PorterConfig;
+use crate::dlog;
 use swc_common::sync::Lrc;
 use swc_common::{errors::ColorConfig, errors::Handler, SourceMap};
 use swc_ecma_ast::*;
@@ -408,6 +409,7 @@ fn resolve_via_ts_paths(cfg: &TsPathsConfig, source: &str) -> Option<String> {
         // Exact match (no wildcard)
         if !alias.contains('*') {
             if alias == source {
+                dlog!("TS alias exact match: {} => {:?}", alias, targets);
                 for t in targets {
                     let candidate = cfg.base_dir.join(t);
                     if let Some(res) = try_with_extensions(&candidate) {
@@ -428,6 +430,7 @@ fn resolve_via_ts_paths(cfg: &TsPathsConfig, source: &str) -> Option<String> {
 
         if source.starts_with(prefix) && source.ends_with(suffix) && source.len() >= prefix.len() + suffix.len() {
             let middle = &source[prefix.len()..source.len() - suffix.len()];
+            dlog!("TS alias wildcard: {} -> middle='{}' targets={:?}", alias, middle, targets);
             for t in targets {
                 let replaced = if t.contains('*') { t.replace('*', middle) } else { t.clone() };
                 let candidate = cfg.base_dir.join(replaced);

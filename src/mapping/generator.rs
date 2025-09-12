@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use crate::dlog;
 
 /// Mapping generator for creating field mappings between source and target systems
 pub struct MappingGenerator {
@@ -30,6 +31,7 @@ impl MappingGenerator {
         println!("{}", "🔄 Generating Field Mappings".cyan().bold());
         println!("{}", "─".repeat(50));
         println!();
+        dlog!("Starting generate_mappings with collection filter: {:?}", collection_name);
 
         // Create mappings and mapping artifacts directories if they don't exist
         // Mappings default to <output>/mappings if PORTER_MAPPINGS_DIR not set
@@ -40,6 +42,8 @@ impl MappingGenerator {
             fs::create_dir_all(mappings_dir)
                 .context("Failed to create mappings directory")?;
             println!("{}", "✓ Created mappings directory".green());
+        } else {
+            dlog!("Mappings directory exists: {}", mappings_dir.display());
         }
         // Resolve graphs/templates dirs from config.io, falling back to legacy defaults
         let (graphs_dir_path, templates_dir_path) = if let Some(io) = &self.config.io {
@@ -59,6 +63,7 @@ impl MappingGenerator {
         } else {
             self.config.collections.iter().collect::<Vec<_>>()
         };
+        dlog!("generate_mappings will process {} collection(s)", collections_to_process.len());
 
         if collections_to_process.is_empty() {
             if let Some(name) = collection_name {
@@ -80,11 +85,13 @@ impl MappingGenerator {
             );
             println!("{}", "─".repeat(40));
 
+            dlog!("Generating mapping for collection '{}'", collection.name);
             self.generate_collection_mapping(collection).await?;
 
             // If we have a target schema, build a field graph and template
             if let Some(schema_path) = &collection.collection_path {
                 if Path::new(schema_path).exists() {
+                    dlog!("Building graph/template for '{}' from {}", collection.name, schema_path);
                     // Prefer precise path mappings from config; else tsconfig
                     crate::mapping::schema_introspect::configure_ts_paths_from_porter(&self.config);
                     if let Some(ts) = &self.config.typescript {
@@ -93,16 +100,20 @@ impl MappingGenerator {
                         }
                     }
                     if let Ok(graph) = build_field_graph_from_ts(schema_path) {
+                        dlog!("Graph nodes: {}", graph.len());
                         let graph_path = format!("{}/{}.json", graphs_dir_path, collection.name);
                         let tpl_path = format!("{}/{}.template.json", templates_dir_path, collection.name);
                         let graph_json = serde_json::to_string_pretty(&graph)?;
                         fs::write(&graph_path, graph_json)?;
                         let template = generate_template_from_graph(&graph);
+                        dlog!("Template rules: {}", template.len());
                         let tpl_json = serde_json::to_string_pretty(&template)?;
                         fs::write(&tpl_path, tpl_json)?;
                         println!("{} {}\n{} {}",
                             "✓ Wrote field graph:".green(), graph_path,
                             "✓ Wrote mapping template:".green(), tpl_path);
+                    } else {
+                        dlog!("Failed to build field graph for '{}'", collection.name);
                     }
                 }
             }
@@ -509,6 +520,7 @@ impl MappingGenerator {
         } else {
             self.config.collections.iter().collect::<Vec<_>>()
         };
+        dlog!("Templates target: graphs={}, templates={} collections={}", graphs_dir_path, templates_dir_path, collections_to_process.len());
 
         if collections_to_process.is_empty() {
             if let Some(name) = collection_name {
@@ -531,19 +543,23 @@ impl MappingGenerator {
 
             if let Some(schema_path) = &collection.collection_path {
                 if Path::new(schema_path).exists() {
+                    dlog!("Configuring TS path resolution for {}", collection.name);
                     // Configure tsconfig paths resolution once
                     if let Some(ts) = &self.config.typescript {
                         if !ts.tsconfig_path.is_empty() {
                             let _ = crate::mapping::schema_introspect::configure_ts_paths_from_file(&ts.tsconfig_path);
                         }
                     }
+                    dlog!("Building field graph for {} at {}", collection.name, schema_path);
                     let graph = build_field_graph_from_ts(schema_path)
                         .with_context(|| format!("Failed to build field graph for {}", collection.name))?;
+                    dlog!("Field graph built: {} nodes", graph.len());
                     let graph_path = format!("{}/{}.json", graphs_dir_path, collection.name);
                     let tpl_path = format!("{}/{}.template.json", templates_dir_path, collection.name);
                     let graph_json = serde_json::to_string_pretty(&graph)?;
                     fs::write(&graph_path, graph_json)?;
                     let template = generate_template_from_graph(&graph);
+                    dlog!("Template generated: {} rules", template.len());
                     let tpl_json = serde_json::to_string_pretty(&template)?;
                     fs::write(&tpl_path, tpl_json)?;
                     println!(
