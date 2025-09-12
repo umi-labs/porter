@@ -4,6 +4,7 @@ use crate::mapping::graph::build_field_graph_from_ts;
 use crate::mapping::template::generate_template_from_graph;
 use crate::sources::wordpress::WordPressApiConnector;
 use crate::sources::wordpress::config::WordPressConfig;
+use crate::mapping::initialize_mappings_base;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use log::warn;
@@ -19,6 +20,8 @@ pub struct MappingGenerator {
 
 impl MappingGenerator {
     pub fn new(config: PorterConfig) -> Self {
+        // Initialize mappings base directory to <output>/mappings
+        initialize_mappings_base(&format!("{}/mappings", config.output));
         Self { config }
     }
 
@@ -30,7 +33,8 @@ impl MappingGenerator {
 
         // Create mappings and mapping artifacts directories if they don't exist
         // Mappings default to <output>/mappings if PORTER_MAPPINGS_DIR not set
-        let mappings_base = std::env::var("PORTER_MAPPINGS_DIR").unwrap_or_else(|_| format!("{}/mappings", self.config.output));
+        let mappings_base = crate::mapping::get_mapping_path("__base__", "", "");
+        let mappings_base = std::path::Path::new(&mappings_base).parent().unwrap().to_string_lossy().to_string();
         let mappings_dir = Path::new(&mappings_base);
         if !mappings_dir.exists() {
             fs::create_dir_all(mappings_dir)
@@ -99,7 +103,8 @@ impl MappingGenerator {
         }
 
         println!("{}", "✅ Mapping generation completed!".green().bold());
-        println!("{}", "📁 Check the ./mappings/ directory for generated mapping files".cyan());
+        let mappings_base = std::env::var("PORTER_MAPPINGS_DIR").unwrap_or_else(|_| format!("{}/mappings", self.config.output));
+        println!("{} {}", "📁 Check the".cyan(), format!("{}", mappings_base).cyan());
         Ok(())
     }
 

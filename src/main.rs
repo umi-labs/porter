@@ -11,6 +11,7 @@ use porter::config::{
     CollectionConfig, PorterConfig, create_config_interactively, find_and_load_config,
 };
 use porter::mapping;
+use porter::mapping::initialize_mappings_base;
 use porter::mapping::generator::MappingGenerator;
 use porter::performance::{OptimizedBatchProcessor, PerformanceConfig, PerformanceProcessor};
 use porter::plugin::{PluginManager, get_default_plugin_dir};
@@ -270,11 +271,8 @@ async fn main() -> Result<()> {
     let source = &config.source;
     let target = &config.target;
 
-    // Export mappings directory so mapping module resolves under output
-    if std::env::var("PORTER_MAPPINGS_DIR").is_err() {
-        let mappings_base = format!("{}/mappings", config.output);
-        unsafe { std::env::set_var("PORTER_MAPPINGS_DIR", mappings_base); }
-    }
+    // Initialize mappings base directory to <output>/mappings
+    initialize_mappings_base(&format!("{}/mappings", config.output));
 
     // Initialize plugin manager and register built-in adapters
     let mut plugin_manager = PluginManager::new();
