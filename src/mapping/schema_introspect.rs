@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use swc_common::sync::Lrc;
 use swc_common::{errors::ColorConfig, errors::Handler, SourceMap};
 use swc_ecma_ast::*;
@@ -57,6 +58,12 @@ fn resolve_import_path(current_file: &str, source: &str) -> Option<String> {
             if let Some(res) = try_with_extensions(&p) {
                 return Some(res.to_string_lossy().to_string());
             }
+        }
+    }
+    // Resolve via configured tsconfig paths aliases if available
+    if let Some(cfg) = TS_PATHS.get() {
+        if let Some(resolved) = resolve_via_ts_paths(cfg, source) {
+            return Some(resolved);
         }
     }
     None
@@ -244,10 +251,17 @@ fn resolve_expr(expr: &Expr, current_file: &str, import_map: &HashMap<String, St
                     let name = id.sym.to_string();
                     if let Some(path) = import_map.get(&name) {
                         if let Ok(m) = parse_module(path) {
+                            // 1) Try function declaration matching the name
                             if let Some(ret) = find_function_return_object(&m, &name) {
                                 let resolved = resolve_expr(&ret, path, &build_import_map(&m, path));
-                                // If args are provided and return has placeholders, we could merge; for now ignore args
                                 return resolved;
+                            }
+                            // 2) Try exported const/let with arrow/fn expression and extract return
+                            if let Some(init_expr) = find_export_expr_by_name(&m, &name).or_else(|| find_default_export_expr(&m)) {
+                                if let Some(ret_expr) = extract_return_from_function_expr(&init_expr) {
+                                    let resolved = resolve_expr(&ret_expr, path, &build_import_map(&m, path));
+                                    return resolved;
+                                }
                             }
                         }
                     }
@@ -346,6 +360,116 @@ pub fn extract_fields_json(schema_path: &str) -> Result<Vec<Value>> {
     }
 
     Err(anyhow!("Could not find fields array in schema: {}", schema_path))
+}
+
+fn extract_return_from_function_expr(expr: &Expr) -> Option<Expr> {
+    match expr {
+        Expr::Fn(fn_expr) => {
+            if let Some(body) = &fn_expr.function.body {
+                for st in &body.stmts {
+                    if let Stmt::Return(ret) = st {
+                        if let Some(arg) = &ret.arg { return Some((**arg).clone()); }
+                    }
+                }
+            }
+            None
+        }
+        Expr::Arrow(arrow) => {
+            match &arrow.body {
+                swc_ecma_ast::BlockStmtOrExpr::Expr(e) => Some((***e).clone()),
+                swc_ecma_ast::BlockStmtOrExpr::BlockStmt(block) => {
+                    for st in &block.stmts {
+                        if let Stmt::Return(ret) = st {
+                            if let Some(arg) = &ret.arg { return Some((**arg).clone()); }
+                        }
+                    }
+                    None
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
+// === TypeScript tsconfig paths support ===
+
+#[derive(Debug)]
+struct TsPathsConfig {
+    base_dir: PathBuf,
+    // e.g. "@/*" => ["./src/*"]
+    mappings: Vec<(String, Vec<String>)>,
+}
+
+static TS_PATHS: OnceLock<TsPathsConfig> = OnceLock::new();
+
+fn resolve_via_ts_paths(cfg: &TsPathsConfig, source: &str) -> Option<String> {
+    for (alias, targets) in &cfg.mappings {
+        // Exact match (no wildcard)
+        if !alias.contains('*') {
+            if alias == source {
+                for t in targets {
+                    let candidate = cfg.base_dir.join(t);
+                    if let Some(res) = try_with_extensions(&candidate) {
+                        return Some(res.to_string_lossy().to_string());
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Wildcard pattern like "@/*" or "@/lib/*"
+        let parts: Vec<&str> = alias.split('*').collect();
+        let (prefix, suffix) = match parts.as_slice() {
+            [p, s] => (*p, *s),
+            [p] => (*p, ""),
+            _ => ("", ""),
+        };
+
+        if source.starts_with(prefix) && source.ends_with(suffix) && source.len() >= prefix.len() + suffix.len() {
+            let middle = &source[prefix.len()..source.len() - suffix.len()];
+            for t in targets {
+                let replaced = if t.contains('*') { t.replace('*', middle) } else { t.clone() };
+                let candidate = cfg.base_dir.join(replaced);
+                if let Some(res) = try_with_extensions(&candidate) {
+                    return Some(res.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Configure tsconfig paths resolution globally. Safe to call multiple times; only first wins.
+pub fn configure_ts_paths_from_file(tsconfig_path: &str) -> Result<()> {
+    let tsconfig_path = PathBuf::from(tsconfig_path);
+    if !tsconfig_path.exists() { return Ok(()); }
+    let raw = crate::util::fs::read_file(tsconfig_path.to_str().unwrap())?;
+    let json: Value = serde_json::from_str(&raw).or_else(|_| {
+        // Some projects use comments/JSONC; ignore failure silently
+        Err(anyhow!("Failed to parse tsconfig.json as JSON"))
+    }).unwrap_or(Value::Null);
+
+    let compiler_options = json.get("compilerOptions").cloned().unwrap_or(Value::Null);
+    let base_url = compiler_options.get("baseUrl").and_then(Value::as_str).unwrap_or(".");
+    let base_dir = tsconfig_path.parent().unwrap_or(Path::new(".")).join(base_url);
+    let base_dir = base_dir;
+
+    let mut mappings: Vec<(String, Vec<String>)> = Vec::new();
+    if let Some(paths_obj) = compiler_options.get("paths").and_then(Value::as_object) {
+        for (alias, targets_val) in paths_obj.iter() {
+            let targets: Vec<String> = match targets_val {
+                Value::Array(arr) => arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect(),
+                Value::String(s) => vec![s.clone()],
+                _ => Vec::new(),
+            };
+            if !targets.is_empty() {
+                mappings.push((alias.clone(), targets));
+            }
+        }
+    }
+
+    let _ = TS_PATHS.set(TsPathsConfig { base_dir, mappings });
+    Ok(())
 }
 
 

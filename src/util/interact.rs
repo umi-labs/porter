@@ -1,5 +1,5 @@
 use anyhow::Result;
-use dialoguer::{Select, Input, Confirm};
+use dialoguer::{Select, Input, Confirm, MultiSelect};
 use std::io;
 use colored::Colorize;
 
@@ -152,4 +152,15 @@ pub fn confirm_mappings(mappings: &[(String, String, String)]) -> Result<bool> {
         2 => Err(io::Error::new(io::ErrorKind::Interrupted, "User chose to start over").into()),
         _ => Ok(false),
     }
+}
+
+/// Prompts the user to multi-select items from a list. Returns the indices selected.
+pub fn multi_select<T: AsRef<str> + std::fmt::Display>(message: &str, options: &[T], preselect_all: bool) -> Result<Vec<usize>> {
+    let mut ms = MultiSelect::new();
+    ms.with_prompt(message).items(options);
+    if preselect_all {
+        let defaults: Vec<bool> = options.iter().map(|_| true).collect();
+        ms.defaults(&defaults);
+    }
+    Ok(ms.interact()?)
 }
