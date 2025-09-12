@@ -31,7 +31,7 @@ pub fn initialize_mappings_base(dir: &str) {
 fn resolve_mappings_base() -> String {
     if let Some(set) = MAPPINGS_BASE.get() { return set.clone(); }
     if let Ok(env_dir) = std::env::var("PORTER_MAPPINGS_DIR") { return env_dir; }
-    "./mappings".to_string()
+    "./migrations/output/mappings".to_string()
 }
 
 /// Result of coordinate combination operation
