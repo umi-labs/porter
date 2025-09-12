@@ -588,6 +588,7 @@ impl MappingGenerator {
 
 /// Information about a field
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct FieldInfo {
     name: String,
     field_type: String,

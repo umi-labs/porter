@@ -799,6 +799,7 @@ mod tests {
             typescript: Some(TypescriptSection {
                 tsconfig_path: "./tsconfig.json".to_string(),
                 path_aliases: None,
+                path_mappings: None,
             }),
             io: Some(IoSection {
                 graphs_dir: "./mapping/graphs".to_string(),

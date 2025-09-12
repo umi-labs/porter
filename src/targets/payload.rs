@@ -178,6 +178,7 @@ impl PayloadTarget {
     }
 
     /// Process relationships between collections
+    #[allow(dead_code)]
     fn process_relationships(&self, doc: &mut Value, related_collections: &[String]) -> Result<()> {
         if let Some(obj) = doc.as_object_mut() {
             // Process each field in the document
@@ -416,7 +417,9 @@ fn guess_mime_type(path: &str) -> &'static str {
 
 /// Payload target adapter state
 pub struct PayloadTargetState {
+    #[allow(dead_code)]
     config: Option<TargetConfig>,
+    #[allow(dead_code)]
     initialized: bool,
 }
 
