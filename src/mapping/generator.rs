@@ -85,7 +85,8 @@ impl MappingGenerator {
             // If we have a target schema, build a field graph and template
             if let Some(schema_path) = &collection.collection_path {
                 if Path::new(schema_path).exists() {
-                    // Configure tsconfig paths resolution once per run if provided
+                    // Prefer precise path mappings from config; else tsconfig
+                    crate::mapping::schema_introspect::configure_ts_paths_from_porter(&self.config);
                     if let Some(ts) = &self.config.typescript {
                         if !ts.tsconfig_path.is_empty() {
                             let _ = crate::mapping::schema_introspect::configure_ts_paths_from_file(&ts.tsconfig_path);
