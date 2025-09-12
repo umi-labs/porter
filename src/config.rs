@@ -448,15 +448,71 @@ pub async fn create_config_interactively() -> Result<PorterConfig> {
             "./tsconfig.json",
         )?;
         let use_aliases = interact::confirm_with_default("Use path aliases (e.g., @)?", true)?;
-        let path_aliases = if use_aliases {
-            let aliases_csv = interact::prompt_with_default("Enter alias prefixes (comma-separated)", "@")?;
-            let list = aliases_csv
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>();
-            if list.is_empty() { None } else { Some(list) }
-        } else { None };
+        let mut path_aliases: Option<Vec<String>> = None;
+
+        if use_aliases {
+            // Try to parse tsconfig for paths and confirm with user
+            let mut discovered: Vec<(String, String)> = Vec::new();
+            if std::path::Path::new(&tsconfig_path).exists() {
+                if let Ok(raw) = std::fs::read_to_string(&tsconfig_path) {
+                    if let Ok(json): Result<serde_json::Value, _> = serde_json::from_str(&raw) {
+                        if let Some(paths) = json
+                            .get("compilerOptions")
+                            .and_then(|c| c.get("paths"))
+                            .and_then(|p| p.as_object())
+                        {
+                            for (alias, targets) in paths.iter() {
+                                match targets {
+                                    serde_json::Value::Array(arr) => {
+                                        for t in arr {
+                                            if let Some(s) = t.as_str() {
+                                                discovered.push((alias.clone(), s.to_string()));
+                                            }
+                                        }
+                                    }
+                                    serde_json::Value::String(s) => {
+                                        discovered.push((alias.clone(), s.clone()));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let final_aliases = if !discovered.is_empty() {
+                println!("{}", "We found these path aliases in your tsconfig file, are they correct?".cyan());
+                let options: Vec<String> = discovered
+                    .iter()
+                    .map(|(a, t)| format!("\"{}\" => \"{}\"", a, t))
+                    .collect();
+                let selections = crate::util::interact::multi_select(
+                    "(use arrows up and down to select which are correct. space to select & a to select all)",
+                    &options,
+                    true,
+                )?;
+                let mut uniq_prefixes: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+                for idx in selections {
+                    if let Some((alias, _target)) = discovered.get(idx) {
+                        // store only the alias key as prefix the resolver will use
+                        uniq_prefixes.insert(alias.clone());
+                    }
+                }
+                if uniq_prefixes.is_empty() { None } else { Some(uniq_prefixes.into_iter().collect()) }
+            } else {
+                let aliases_csv = interact::prompt_with_default("Enter alias prefixes (comma-separated)", "@/*")?;
+                let list = aliases_csv
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>();
+                if list.is_empty() { None } else { Some(list) }
+            };
+
+            path_aliases = final_aliases;
+        }
+
         config.typescript = Some(TypescriptSection { tsconfig_path, path_aliases });
 
         println!();
