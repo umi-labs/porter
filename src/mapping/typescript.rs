@@ -7,7 +7,7 @@ use swc_common::{
     errors::{ColorConfig, Handler},
     SourceMap,
 };
-use swc_ecma_ast::*;
+use swc_core::ecma::ast::*;
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax, TsConfig};
 use serde_json::{Value, json};
 use std::collections::HashMap;

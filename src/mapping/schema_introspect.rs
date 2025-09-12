@@ -7,7 +7,7 @@ use crate::config::PorterConfig;
 use crate::dlog;
 use swc_common::sync::Lrc;
 use swc_common::{errors::ColorConfig, errors::Handler, SourceMap};
-use swc_ecma_ast::*;
+use swc_core::ecma::ast::*;
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax, TsConfig};
 
 fn parse_module(file_path: &str) -> Result<Module> {
@@ -378,8 +378,8 @@ fn extract_return_from_function_expr(expr: &Expr) -> Option<Expr> {
         }
         Expr::Arrow(arrow) => {
             match &*arrow.body {
-                swc_ecma_ast::BlockStmtOrExpr::Expr(e) => Some((**e).clone()),
-                swc_ecma_ast::BlockStmtOrExpr::BlockStmt(block) => {
+                BlockStmtOrExpr::Expr(e) => Some((**e).clone()),
+                BlockStmtOrExpr::BlockStmt(block) => {
                     for st in &block.stmts {
                         if let Stmt::Return(ret) = st {
                             if let Some(arg) = &ret.arg { return Some((**arg).clone()); }
