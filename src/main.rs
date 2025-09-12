@@ -33,6 +33,58 @@ async fn main() -> Result<()> {
                 config.save_to_file(&output)?;
                 return Ok(());
             }
+            Commands::Clean { config: config_file, dir, full } => {
+                use std::fs;
+                use std::path::PathBuf;
+                println!("{}", "🧹 Cleaning migrations".cyan().bold());
+
+                // Load config if provided/available to infer output and migrations dir
+                let config_opt = if let Some(config_path) = config_file {
+                    Some(PorterConfig::load_from_file(&config_path)?)
+                } else {
+                    find_and_load_config()?
+                };
+
+                // Determine migrations directory
+                let migrations_dir = if let Some(p) = dir {
+                    PathBuf::from(p)
+                } else if let Some(cfg) = &config_opt {
+                    // Assume migrations dir is parent of output if named like <migrations>/output
+                    let out = PathBuf::from(&cfg.output);
+                    out.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("./migrations"))
+                } else {
+                    PathBuf::from("./migrations")
+                };
+
+                if migrations_dir.exists() {
+                    println!("Deleting {:?}", migrations_dir);
+                    fs::remove_dir_all(&migrations_dir).map_err(|e| anyhow!("Failed to delete {:?}: {}", migrations_dir, e))?;
+                } else {
+                    println!("{} {:?}", "No migrations directory found at".yellow(), migrations_dir);
+                }
+
+                if full {
+                    // Delete porter config file if present
+                    let candidates = [
+                        "porter.config.toml",
+                        "porter.config.json",
+                        ".porter.toml",
+                        ".porter.json",
+                    ];
+                    let mut removed_any = false;
+                    for c in &candidates {
+                        if Path::new(c).exists() {
+                            println!("Deleting {}", c);
+                            fs::remove_file(c).map_err(|e| anyhow!("Failed to delete {}: {}", c, e))?;
+                            removed_any = true;
+                        }
+                    }
+                    if !removed_any { println!("{}", "No porter config file found".yellow()); }
+                }
+
+                println!("{}", "✓ Clean complete".green());
+                return Ok(());
+            }
             Commands::Config { file: _ } => {
                 if let Some(config) = find_and_load_config()? {
                     config.display();

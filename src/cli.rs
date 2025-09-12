@@ -75,4 +75,16 @@ pub enum Commands {
         #[arg(short, long)]
         config: Option<String>,
     },
+    /// Clean generated migration artifacts
+    Clean {
+        /// Configuration file to use (optional; used to infer migrations dir from output)
+        #[arg(short, long)]
+        config: Option<String>,
+        /// Migrations directory to delete (defaults to parent of output in config)
+        #[arg(short = 'd', long)]
+        dir: Option<String>,
+        /// Also delete porter.config file (porter.config.toml/json)
+        #[arg(short = 'f', long, action = ArgAction::SetTrue)]
+        full: bool,
+    },
 }
