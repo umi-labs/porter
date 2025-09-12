@@ -180,6 +180,20 @@ pub fn save_mapping(mapping: &Mapping) -> Result<()> {
     Ok(())
 }
 
+/// Loads a mapping file only; errors if it does not exist
+pub fn load_mapping_only(collection: &str, source: &str, target: &str) -> Result<Mapping> {
+    let mapping_path = get_mapping_path(collection, source, target);
+    if !fs::file_exists(&mapping_path) {
+        return Err(anyhow!(
+            "Mapping not found for collection '{}' (expected at {}). Run 'porter generate' first.",
+            collection, mapping_path
+        ));
+    }
+    let content = fs::read_file(&mapping_path)?;
+    let mapping: Mapping = serde_json::from_str(&content)?;
+    Ok(mapping)
+}
+
 /// Extracts field names from a Payload collection schema
 fn extract_payload_fields(collection_path: &str) -> Result<Vec<String>> {
     if !fs::file_exists(collection_path) {
