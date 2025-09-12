@@ -444,10 +444,10 @@ pub fn configure_ts_paths_from_file(tsconfig_path: &str) -> Result<()> {
     let tsconfig_path = PathBuf::from(tsconfig_path);
     if !tsconfig_path.exists() { return Ok(()); }
     let raw = crate::util::fs::read_file(tsconfig_path.to_str().unwrap())?;
-    let json: Value = serde_json::from_str(&raw).or_else(|_| {
-        // Some projects use comments/JSONC; ignore failure silently
-        Err(anyhow!("Failed to parse tsconfig.json as JSON"))
-    }).unwrap_or(Value::Null);
+    // Support standard JSON and JSONC-like via json5
+    let json: Value = serde_json::from_str(&raw)
+        .or_else(|_| json5::from_str(&raw))
+        .unwrap_or(Value::Null);
 
     let compiler_options = json.get("compilerOptions").cloned().unwrap_or(Value::Null);
     let base_url = compiler_options.get("baseUrl").and_then(Value::as_str).unwrap_or(".");
