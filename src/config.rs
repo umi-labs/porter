@@ -28,6 +28,14 @@ pub struct TypescriptSection {
     pub tsconfig_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path_aliases: Option<Vec<String>>, // e.g., ["@"]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_mappings: Option<Vec<PathAliasMapping>>, // preferred: alias=>paths
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PathAliasMapping {
+    pub alias: String,
+    pub paths: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -449,6 +457,7 @@ pub async fn create_config_interactively() -> Result<PorterConfig> {
         )?;
         let use_aliases = interact::confirm_with_default("Use path aliases (e.g., @)?", true)?;
         let mut path_aliases: Option<Vec<String>> = None;
+        let mut path_mappings: Option<Vec<PathAliasMapping>> = None;
 
         if use_aliases {
             // Try to parse tsconfig for paths and confirm with user
@@ -494,14 +503,23 @@ pub async fn create_config_interactively() -> Result<PorterConfig> {
                     &options,
                     true,
                 )?;
-                let mut uniq_prefixes: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+                // Build alias=>paths mapping from selections
+                use std::collections::BTreeMap;
+                let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
                 for idx in selections {
-                    if let Some((alias, _target)) = discovered.get(idx) {
-                        // store only the alias key as prefix the resolver will use
-                        uniq_prefixes.insert(alias.clone());
+                    if let Some((alias, target)) = discovered.get(idx) {
+                        map.entry(alias.clone()).or_default().push(target.clone());
                     }
                 }
-                if uniq_prefixes.is_empty() { None } else { Some(uniq_prefixes.into_iter().collect()) }
+                if map.is_empty() { None } else {
+                    let mappings: Vec<PathAliasMapping> = map.into_iter()
+                        .map(|(alias, paths)| PathAliasMapping { alias, paths })
+                        .collect();
+                    path_mappings = Some(mappings);
+                    // Keep legacy prefixes for compatibility as well
+                    let legacy: Vec<String> = path_mappings.as_ref().unwrap().iter().map(|m| m.alias.clone()).collect();
+                    Some(legacy)
+                }
             } else {
                 let aliases_csv = interact::prompt_with_default("Enter alias prefixes (comma-separated)", "@/*")?;
                 let list = aliases_csv
@@ -515,7 +533,7 @@ pub async fn create_config_interactively() -> Result<PorterConfig> {
             path_aliases = final_aliases;
         }
 
-        config.typescript = Some(TypescriptSection { tsconfig_path, path_aliases });
+        config.typescript = Some(TypescriptSection { tsconfig_path, path_aliases, path_mappings });
 
         println!();
         println!("{}", "📦 Output Directories".cyan().bold());
@@ -951,3 +969,4 @@ mod tests {
         Ok(())
     }
 }
+

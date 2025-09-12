@@ -3,6 +3,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use crate::config::PorterConfig;
 use swc_common::sync::Lrc;
 use swc_common::{errors::ColorConfig, errors::Handler, SourceMap};
 use swc_ecma_ast::*;
@@ -470,6 +471,17 @@ pub fn configure_ts_paths_from_file(tsconfig_path: &str) -> Result<()> {
 
     let _ = TS_PATHS.set(TsPathsConfig { base_dir, mappings });
     Ok(())
+}
+
+/// Configure ts paths directly from already-parsed config (preferred precise mappings)
+pub fn configure_ts_paths_from_porter(cfg: &PorterConfig) {
+    if let Some(ts) = &cfg.typescript {
+        if let Some(pm) = &ts.path_mappings {
+            let base = std::path::Path::new(&ts.tsconfig_path).parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+            let mappings: Vec<(String, Vec<String>)> = pm.iter().map(|m| (m.alias.clone(), m.paths.clone())).collect();
+            let _ = TS_PATHS.set(TsPathsConfig { base_dir: base, mappings });
+        }
+    }
 }
 
 
