@@ -61,12 +61,12 @@ impl ImportResolver {
             } else {
                 dlog!("No path mappings found, using defaults");
                 // Default aliases if no mappings provided
-                alias_map.insert("@".to_string(), vec![base_dir.join("src")]);
+                alias_map.insert("@/".to_string(), vec![base_dir.join("src")]);
             }
         } else {
             dlog!("No TypeScript config provided, using default aliases");
             // Default aliases if no config provided
-            alias_map.insert("@".to_string(), vec![base_dir.join("src")]);
+            alias_map.insert("@/".to_string(), vec![base_dir.join("src")]);
         }
         
         Self {
@@ -205,7 +205,7 @@ impl ImportResolver {
         Ok(parsed)
     }
 
-    fn resolve_import_path(&self, import_path: &str, from_file: &Path) -> Result<PathBuf> {
+    pub fn resolve_import_path(&self, import_path: &str, from_file: &Path) -> Result<PathBuf> {
         dlog!("Resolving import path: {} from {:?}", import_path, from_file);
         
         // Handle different import types
@@ -237,35 +237,49 @@ impl ImportResolver {
     fn resolve_alias_import(&self, import_path: &str) -> Result<PathBuf> {
         dlog!("Resolving alias import: {}", import_path);
         
-        // Try each alias
-        for (alias, base_paths) in &self.alias_map {
-            if import_path.starts_with(alias) {
-                let remainder = if alias.ends_with('/') {
+        // Try each alias - prioritize longer matches first
+        let mut sorted_aliases: Vec<_> = self.alias_map.keys().collect();
+        sorted_aliases.sort_by(|a, b| b.len().cmp(&a.len()));
+        
+        for alias in sorted_aliases {
+            let base_paths = &self.alias_map[alias];
+            
+            // Check if this import matches the alias
+            let remainder = if alias.ends_with('/') {
+                // Alias ends with /, so we need exact prefix match
+                if import_path.starts_with(alias) {
                     import_path.strip_prefix(alias).unwrap_or("")
-                } else if import_path.starts_with(&format!("{}/", alias)) {
-                    &import_path[alias.len() + 1..]
-                } else if import_path == alias {
-                    ""
                 } else {
                     continue;
+                }
+            } else {
+                // Alias doesn't end with /, so we need to match either:
+                // 1. Exact match: import_path == alias
+                // 2. Followed by /: import_path starts with alias + "/"
+                if import_path == alias {
+                    ""
+                } else if import_path.starts_with(&format!("{}/", alias)) {
+                    &import_path[alias.len() + 1..]
+                } else {
+                    continue;
+                }
+            };
+            
+            dlog!("  Matched alias '{}', remainder: '{}'", alias, remainder);
+            
+            // Try each base path for this alias
+            for base_path in base_paths {
+                let full_path = if remainder.is_empty() {
+                    base_path.clone()
+                } else {
+                    base_path.join(remainder)
                 };
                 
-                dlog!("  Matched alias '{}', remainder: '{}'", alias, remainder);
+                dlog!("  Trying base path: {:?}", full_path);
                 
-                // Try each base path for this alias
-                for base_path in base_paths {
-                    let full_path = if remainder.is_empty() {
-                        base_path.clone()
-                    } else {
-                        base_path.join(remainder)
-                    };
-                    
-                    dlog!("  Trying base path: {:?}", full_path);
-                    
-                    // Check if this path exists (with various extensions)
-                    if let Ok(resolved) = self.find_actual_file(full_path.clone()) {
-                        return Ok(resolved);
-                    }
+                // Check if this path exists (with various extensions)
+                if let Ok(resolved) = self.find_actual_file(full_path.clone()) {
+                    return Ok(resolved);
                 }
             }
         }
