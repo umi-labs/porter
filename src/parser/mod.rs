@@ -4,6 +4,9 @@ mod import_resolver;
 mod template_generator;
 mod errors;
 
+#[cfg(test)]
+mod tests;
+
 pub use schema::*;
 pub use errors::{SchemaParseError, Result};
 pub use template_generator::{FlattenedTemplate, TemplateGenerator};
