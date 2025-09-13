@@ -243,13 +243,16 @@ impl ImportResolver {
         
         for alias in sorted_aliases {
             let base_paths = &self.alias_map[alias];
+            dlog!("  Base paths for alias '{}': {:?}", alias, base_paths);
             
             // Check if this import matches the alias
             let remainder = if alias.ends_with('/') {
                 // Alias ends with /, so we need exact prefix match
                 if import_path.starts_with(alias) {
+                    dlog!("  Remainder: {}, using alias: {}", import_path, alias);
                     import_path.strip_prefix(alias).unwrap_or("")
                 } else {
+                    dlog!("  No match, continuing");
                     continue;
                 }
             } else {
@@ -257,10 +260,13 @@ impl ImportResolver {
                 // 1. Exact match: import_path == alias
                 // 2. Followed by /: import_path starts with alias + "/"
                 if import_path == alias {
+                    dlog!("  Remainder: {}, using alias: {}", import_path, alias);
                     ""
                 } else if import_path.starts_with(&format!("{}/", alias)) {
+                    dlog!("  Remainder: {}, using alias: {}", import_path, alias);
                     &import_path[alias.len() + 1..]
                 } else {
+                    dlog!("  No match, continuing");
                     continue;
                 }
             };
@@ -270,8 +276,10 @@ impl ImportResolver {
             // Try each base path for this alias
             for base_path in base_paths {
                 let full_path = if remainder.is_empty() {
+                    dlog!("  No remainder, using base path: {:?}", base_path);
                     base_path.clone()
                 } else {
+                    dlog!("  Remainder: {}, using base path: {:?}", remainder, base_path);
                     base_path.join(remainder)
                 };
                 
@@ -279,11 +287,13 @@ impl ImportResolver {
                 
                 // Check if this path exists (with various extensions)
                 if let Ok(resolved) = self.find_actual_file(full_path.clone()) {
+                    dlog!("  Found actual file: {:?}", resolved);
                     return Ok(resolved);
                 }
             }
         }
         
+        dlog!("  No valid file found for import: {}", import_path);
         Err(SchemaParseError::UnresolvedImport {
             import: import_path.to_string(),
             file: "unknown".to_string(),
