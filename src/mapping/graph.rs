@@ -36,7 +36,33 @@ pub struct FieldNode {
 /// and recursively flatten nested fields/tabs/arrays/blocks.
 pub fn build_field_graph_from_ts(schema_path: &str) -> Result<Vec<FieldNode>> {
     // Try to use the new parser first if we can determine the project root
-    if let Ok(template) = build_field_graph_with_new_parser(schema_path) {
+    if let Ok(template) = build_field_graph_with_new_parser(schema_path, None) {
+        return Ok(template);
+    }
+    
+    // Fallback to the old implementation
+    // Prefer JSON extraction that resolves custom field factories/imports; fallback to FieldDefinition
+    let mut nodes: Vec<FieldNode> = Vec::new();
+    if let Ok(values) = extract_fields_json(schema_path) {
+        flatten_fields_value(&Value::Array(values), "", &mut nodes)?;
+    } else {
+        let defs = parse_typescript_file(schema_path)?;
+        for def in defs {
+            flatten_field_definition(&def, "", &mut nodes)?;
+        }
+    }
+
+    // Dedup by (path, block_type)
+    nodes.sort_by(|a, b| a.path.cmp(&b.path).then(a.block_type.cmp(&b.block_type)));
+    nodes.dedup_by(|a, b| a.path == b.path && a.block_type == b.block_type);
+    Ok(nodes)
+}
+
+/// Build a field graph from a Payload TypeScript collection schema file with TypeScript configuration.
+/// This uses the new parser with proper TypeScript path alias resolution.
+pub fn build_field_graph_from_ts_with_config(schema_path: &str, ts_config: Option<&crate::config::TypescriptSection>) -> Result<Vec<FieldNode>> {
+    // Try to use the new parser first
+    if let Ok(template) = build_field_graph_with_new_parser(schema_path, ts_config) {
         return Ok(template);
     }
     
@@ -59,7 +85,7 @@ pub fn build_field_graph_from_ts(schema_path: &str) -> Result<Vec<FieldNode>> {
 }
 
 /// Build field graph using the new parser with full import resolution
-fn build_field_graph_with_new_parser(schema_path: &str) -> Result<Vec<FieldNode>> {
+fn build_field_graph_with_new_parser(schema_path: &str, ts_config: Option<&crate::config::TypescriptSection>) -> Result<Vec<FieldNode>> {
     use crate::dlog;
     
     dlog!("Attempting to use new parser for: {}", schema_path);
@@ -70,11 +96,18 @@ fn build_field_graph_with_new_parser(schema_path: &str) -> Result<Vec<FieldNode>
     let base_dir = find_project_root(config_path)?;
     dlog!("Found project root: {:?}", base_dir);
     
-    // Try to load the Porter config to get TypeScript settings
-    let ts_config = load_typescript_config(&base_dir);
+    // Use provided TypeScript config or try to load it
+    let loaded_config = if ts_config.is_none() {
+        dlog!("No TypeScript config provided, trying to load from project root");
+        load_typescript_config(&base_dir)
+    } else {
+        None
+    };
+    
+    let ts_config = ts_config.or(loaded_config.as_ref());
     
     // Create the new parser
-    let mut parser = PayloadSchemaParser::new(base_dir, ts_config.as_ref());
+    let mut parser = PayloadSchemaParser::new(base_dir, ts_config);
     
     // Generate the template
     let template = parser.generate_template(config_path)?;

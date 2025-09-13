@@ -551,7 +551,7 @@ impl MappingGenerator {
                         }
                     }
                     dlog!("Building field graph for {} at {}", collection.name, schema_path);
-                    let graph = build_field_graph_from_ts(schema_path)
+                    let graph = crate::mapping::graph::build_field_graph_from_ts_with_config(schema_path, self.config.typescript.as_ref())
                         .with_context(|| format!("Failed to build field graph for {}", collection.name))?;
                     dlog!("Field graph built: {} nodes", graph.len());
                     let graph_path = format!("{}/{}.json", graphs_dir_path, collection.name);
