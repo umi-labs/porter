@@ -45,14 +45,19 @@ impl ImportResolver {
                         .map(|p| {
                             let clean_path = p.trim_end_matches("/*").trim_end_matches('*');
                             if clean_path.starts_with("./") {
-                                base_dir.join(&clean_path[2..])
+                                dlog!("  Starting with ./, using as-is: {}", clean_path);
+                                PathBuf::from(clean_path)
                             } else if clean_path.starts_with("/") {
+                                dlog!("  Starting with /, using as-is: {}", clean_path);
                                 PathBuf::from(clean_path)
                             } else {
-                                base_dir.join(clean_path)
+                                dlog!("  Relative path, using as-is: {}", clean_path);
+                                PathBuf::from(clean_path)
                             }
                         })
                         .collect();
+
+                    dlog!("  Paths: {:?}", paths);
                     
                     let clean_alias = mapping.alias.trim_end_matches("/*").to_string();
                     dlog!("  Alias '{}' -> {:?}", clean_alias, paths);
