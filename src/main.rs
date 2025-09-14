@@ -793,6 +793,12 @@ fn explain_wordpress_api_migration(config: &PorterConfig) {
         println!("WordPress API URL: {}", api_url.blue());
         println!();
     }
+
+    println!("{}", "Step 0: Initialise Templates".yellow().bold());
+    println!("   Run: {}", "porter template".green());
+    println!("   • Creates templates for each collection");
+    println!("   • Creates TypeScript templates for each collection");
+    println!();
     
     println!("{}", "Step 1: Generate Mappings".yellow().bold());
     println!("   Run: {}", "porter generate".green());
