@@ -708,7 +708,7 @@ fn explain_general_migration_process() {
     println!("{}", "─".repeat(50));
     println!();
     
-    println!("{}", "1. Initialize Configuration".yellow().bold());
+    println!("{}", "1. Initialise Configuration".yellow().bold());
     println!("   Run: {}", "porter init".green());
     println!("   • Select your source system (Umbraco, WordPress, etc.)");
     println!("   • Select your target system (Payload, Strapi, etc.)");
@@ -717,8 +717,8 @@ fn explain_general_migration_process() {
     
     println!("{}", "2. Generate Mappings".yellow().bold());
     println!("   Run: {}", "porter generate".green());
-    println!("   • Analyzes source data structure");
-    println!("   • Analyzes target collection schemas");
+    println!("   • Analyses source data structure");
+    println!("   • Analyses target collection schemas");
     println!("   • Creates field mapping files");
     println!("   • Allows interactive field mapping");
     println!();
@@ -733,7 +733,7 @@ fn explain_general_migration_process() {
     
     println!("{}", "📋 Available Commands".cyan().bold());
     println!("{}", "─".repeat(30));
-    println!("{} - Initialize configuration", "porter init".green());
+    println!("{} - Initialise configuration", "porter init".green());
     println!("{} - Generate field mappings", "porter generate".green());
     println!("{} - Migrate data", "porter migrate".green());
     println!("{} - Show current configuration", "porter config".green());
@@ -799,8 +799,8 @@ fn explain_wordpress_api_migration(config: &PorterConfig) {
     println!("   • Connects to WordPress API at the configured URL");
     println!("   • Discovers available endpoints (posts, pages, media, etc.)");
     println!("   • Fetches sample data from each configured endpoint");
-    println!("   • Analyzes WordPress field structure");
-    println!("   • Analyzes Payload collection schemas");
+    println!("   • Analyses WordPress field structure");
+    println!("   • Analyses Payload collection schemas");
     println!("   • Creates field mapping files in ./mappings/ directory");
     println!("   • Allows interactive field mapping for complex fields");
     println!();
@@ -848,8 +848,8 @@ fn explain_wordpress_file_migration(_config: &PorterConfig) {
     println!("   Run: {}", "porter generate".green());
     println!("   • Reads WordPress WXR export files");
     println!("   • Parses WordPress XML structure");
-    println!("   • Analyzes WordPress field structure");
-    println!("   • Analyzes Payload collection schemas");
+    println!("   • Analyses WordPress field structure");
+    println!("   • Analyses Payload collection schemas");
     println!("   • Creates field mapping files");
     println!();
     
@@ -872,8 +872,8 @@ fn explain_umbraco_migration(_config: &PorterConfig) {
     println!("{}", "Step 1: Generate Mappings".yellow().bold());
     println!("   Run: {}", "porter generate".green());
     println!("   • Reads Umbraco JSON export files");
-    println!("   • Analyzes Umbraco content structure");
-    println!("   • Analyzes Payload collection schemas");
+    println!("   • Analyses Umbraco content structure");
+    println!("   • Analyses Payload collection schemas");
     println!("   • Creates field mapping files");
     println!();
     
