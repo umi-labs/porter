@@ -1352,7 +1352,7 @@ dependencies = [
 
 [[package]]
 name = "porter"
-version = "1.0.38"
+version = "1.0.39"
 dependencies = [
  "anyhow",
  "chrono",
