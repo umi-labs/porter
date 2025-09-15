@@ -27,3 +27,5 @@ pub use plugin::{PluginManager, PluginRegistrar};
 pub use sources::umbraco::UmbracoSource;
 pub use sources::wordpress::WordPressSource;
 pub use targets::payload::PayloadTarget;
+
+// Debug macros are automatically exported at crate root due to #[macro_export]

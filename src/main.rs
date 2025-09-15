@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use clap::Parser;
 use colored::Colorize;
 use log::{debug, info, warn};
- use porter::dlog;
+ use porter::{dlog, dlog_info, dlog_success, dlog_warning, dlog_error, dlog_step, dlog_data, dlog_file, dlog_processing, dlog_result};
 use porter::util::debug as dbgutil;
 use porter::adapter::TargetOptions;
 use porter::batch::BatchConfig;
@@ -34,32 +34,32 @@ async fn main() -> Result<()> {
         match command {
             Commands::Init { output } => {
                 println!("{}", "🚀 Initialising Porter Configuration".cyan().bold());
-                dlog!("Init command invoked; output file will be {}", output);
+                dlog_step!("Init command invoked; output file will be {}", output);
                 let config = create_config_interactively().await?;
-                dlog!(
+                dlog_success!(
                     "Init finished; saving config with {} collections to {}",
                     config.collections.len(),
                     output
                 );
                 config.save_to_file(&output)?;
-                dlog!("Config saved to {}", output);
+                dlog_success!("Config saved to {}", output);
                 return Ok(());
             }
             Commands::Clean { config: config_file, dir, full } => {
                 use std::fs;
                 use std::path::PathBuf;
                 println!("{}", "🧹 Cleaning migrations".cyan().bold());
-                dlog!("Clean command invoked with config={:?} dir={:?} full={}", config_file, dir, full);
+                dlog_step!("Clean command invoked with config={:?} dir={:?} full={}", config_file, dir, full);
 
                 // Load config if provided/available to infer output and migrations dir
                 let config_opt = if let Some(config_path) = config_file {
-                    dlog!("Loading config from explicit path: {}", config_path);
+                    dlog_file!("Loading config from explicit path: {}", config_path);
                     let cfg = PorterConfig::load_from_file(&config_path)?;
                     // If debug was not enabled via CLI, enable if config requests it
                     dbgutil::init(cli.debug || cfg.debug);
                     Some(cfg)
                 } else {
-                    dlog!("Attempting to find and load config from default locations");
+                    dlog_file!("Attempting to find and load config from default locations");
                     let cfg_opt = find_and_load_config()?;
                     if let Some(cfg) = &cfg_opt { dbgutil::init(cli.debug || cfg.debug); }
                     cfg_opt
@@ -67,21 +67,21 @@ async fn main() -> Result<()> {
 
                 // Determine migrations directory
                 let migrations_dir = if let Some(p) = dir {
-                    dlog!("Using migrations dir provided via --dir: {}", p);
+                    dlog_file!("Using migrations dir provided via --dir: {}", p);
                     PathBuf::from(p)
                 } else if let Some(cfg) = &config_opt {
                     // Assume migrations dir is parent of output if named like <migrations>/output
                     let out = PathBuf::from(&cfg.output);
                     let inferred = out.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("./migrations"));
-                    dlog!("Inferred migrations dir from config.output ({}): {:?}", cfg.output, inferred);
+                    dlog_file!("Inferred migrations dir from config.output ({}): {:?}", cfg.output, inferred);
                     inferred
                 } else {
-                    dlog!("No config available; defaulting migrations dir to ./migrations");
+                    dlog_file!("No config available; defaulting migrations dir to ./migrations");
                     PathBuf::from("./migrations")
                 };
 
                 if migrations_dir.exists() {
-                    dlog!("Deleting migrations directory {:?}", migrations_dir);
+                    dlog_file!("Deleting migrations directory {:?}", migrations_dir);
                     println!("Deleting {:?}", migrations_dir);
                     fs::remove_dir_all(&migrations_dir).map_err(|e| anyhow!("Failed to delete {:?}: {}", migrations_dir, e))?;
                 } else {
@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
                     let mut removed_any = false;
                     for c in &candidates {
                         if Path::new(c).exists() {
-                            dlog!("Removing config file {}", c);
+                            dlog_file!("Removing config file {}", c);
                             println!("Deleting {}", c);
                             fs::remove_file(c).map_err(|e| anyhow!("Failed to delete {}: {}", c, e))?;
                             removed_any = true;
@@ -122,45 +122,45 @@ async fn main() -> Result<()> {
             }
             Commands::Generate { config: config_file, collection } => {
                 println!("{}", "🔄 Generating Mappings".cyan().bold());
-                dlog!("Generate command invoked with config={:?} collection={:?}", config_file, collection);
+                dlog_step!("Generate command invoked with config={:?} collection={:?}", config_file, collection);
                 let config = if let Some(config_path) = config_file {
-                    dlog!("Loading config from explicit path: {}", config_path);
+                    dlog_file!("Loading config from explicit path: {}", config_path);
                     let cfg = PorterConfig::load_from_file(&config_path)?;
                     dbgutil::init(cli.debug || cfg.debug);
                     cfg
                 } else if let Some(file_config) = find_and_load_config()? {
-                    dlog!("Loaded config from default locations");
+                    dlog_file!("Loaded config from default locations");
                     dbgutil::init(cli.debug || file_config.debug);
                     file_config
                 } else {
                     return Err(anyhow!("No configuration file found. Run 'porter init' first."));
                 };
-                dlog!("Config loaded: collections={} output={}", config.collections.len(), config.output);
+                dlog_data!("Config loaded: collections={} output={}", config.collections.len(), config.output);
                 // Create mapping generator and generate mappings
                 let generator = MappingGenerator::new(config);
-                dlog!("MappingGenerator created; starting generate_mappings");
+                dlog_processing!("MappingGenerator created; starting generate_mappings");
                 generator.generate_mappings(collection.as_deref()).await?;
-                dlog!("Generate completed successfully");
+                dlog_success!("Generate completed successfully");
                 return Ok(());
             }
             Commands::Template { config: config_file, collection } => {
                 println!("{}", "🧩 Generating Templates".cyan().bold());
-                dlog!("Template command invoked with config={:?} collection={:?}", config_file, collection);
+                dlog_step!("Template command invoked with config={:?} collection={:?}", config_file, collection);
                 let config = if let Some(config_path) = config_file {
-                    dlog!("Loading config from explicit path: {}", config_path);
+                    dlog_file!("Loading config from explicit path: {}", config_path);
                     let cfg = PorterConfig::load_from_file(&config_path)?;
                     dbgutil::init(cli.debug || cfg.debug);
                     cfg
                 } else if let Some(file_config) = find_and_load_config()? {
-                    dlog!("Loaded config from default locations");
+                    dlog_file!("Loaded config from default locations");
                     dbgutil::init(cli.debug || file_config.debug);
                     file_config
                 } else {
                     return Err(anyhow!("No configuration file found. Run 'porter init' first."));
                 };
-                dlog!("Config loaded: collections={} output={}", config.collections.len(), config.output);
+                dlog_data!("Config loaded: collections={} output={}", config.collections.len(), config.output);
                 let generator = MappingGenerator::new(config);
-                dlog!("MappingGenerator created; starting generate_templates");
+                dlog_processing!("MappingGenerator created; starting generate_templates");
                 generator.generate_templates(collection.as_deref())?;
                 return Ok(());
             }
@@ -266,7 +266,7 @@ async fn main() -> Result<()> {
             }
             Commands::Upgrade { force } => {
                 println!("{}", "⬆️  Upgrading Porter".cyan().bold());
-                dlog!("Upgrade command invoked with force={}", force);
+                dlog_step!("Upgrade command invoked with force={}", force);
                 upgrade_porter(force).await?;
                 return Ok(());
             }
@@ -345,7 +345,7 @@ async fn main() -> Result<()> {
 
     // Initialize simple debug printer
     dbgutil::init(config.debug);
-    dlog!(
+    dlog_data!(
         "Configuration loaded - interactive: {}, verbose: {}, debug: {}",
         config.interactive,
         config.verbose,
@@ -391,7 +391,7 @@ async fn main() -> Result<()> {
         None => get_default_plugin_dir(),
     };
     info!("Loading plugins from {:?}", plugin_dir);
-    dlog!("Plugin directory resolved to {:?}", plugin_dir);
+    dlog_file!("Plugin directory resolved to {:?}", plugin_dir);
     if let Err(e) = plugin_manager.load_plugins_from_directory(&plugin_dir) {
         warn!("Error loading plugins: {}", e);
     }

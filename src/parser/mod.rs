@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use import_resolver::ImportResolver;
 use ast_analyzer::AstAnalyzer;
 use crate::config::TypescriptSection;
-use crate::dlog;
+use crate::{dlog, dlog_info, dlog_success, dlog_warning, dlog_error, dlog_step, dlog_data, dlog_file, dlog_processing, dlog_result};
 
 pub struct PayloadSchemaParser {
     base_dir: PathBuf,
@@ -24,7 +24,7 @@ pub struct PayloadSchemaParser {
 
 impl PayloadSchemaParser {
     pub fn new(base_dir: PathBuf, ts_config: Option<&TypescriptSection>) -> Self {
-        dlog!("Creating PayloadSchemaParser with base_dir: {:?}", base_dir);
+        dlog_processing!("Creating PayloadSchemaParser with base_dir: {:?}", base_dir);
         let resolver = ImportResolver::new(base_dir.clone(), ts_config);
         Self {
             base_dir,
@@ -33,7 +33,7 @@ impl PayloadSchemaParser {
     }
 
     pub fn parse_collection(&mut self, config_path: &Path) -> Result<CollectionSchema> {
-        dlog!("Parsing collection config: {:?}", config_path);
+        dlog_processing!("Parsing collection config: {:?}", config_path);
         
         // Initial parse to get the base schema
         let parsed = self.resolver.parse_file(config_path)?;
@@ -49,19 +49,19 @@ impl PayloadSchemaParser {
             raw_ast: Some(parsed.module.clone()),
         };
 
-        dlog!("Initial parse found {} fields and {} imports", 
+        dlog_processing!("Initial parse found {} fields and {} imports", 
               schema.fields.len(), schema.imports.len());
 
         // Resolve all imports and merge schemas
         self.resolver.resolve_imports(&mut schema, config_path)?;
 
-        dlog!("After import resolution: {} fields", schema.fields.len());
+        dlog_processing!("After import resolution: {} fields", schema.fields.len());
 
         Ok(schema)
     }
 
     pub fn generate_template(&mut self, config_path: &Path) -> Result<FlattenedTemplate> {
-        dlog!("Generating template for: {:?}", config_path);
+        dlog_processing!("Generating template for: {:?}", config_path);
         let schema = self.parse_collection(config_path)?;
         TemplateGenerator::generate(&schema)
     }
