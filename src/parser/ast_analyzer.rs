@@ -44,7 +44,8 @@ impl AstAnalyzer {
         for item in &module.body {
             self.analyze_module_item(item)?;
         }
-        dlog!("Found {} fields and {} blocks", self.fields.len(), self.blocks.len());
+        let field_configs = self.exports.values().filter(|item| matches!(item, ExportedItem::Object(_))).count();
+        dlog!("Found {} fields, {} blocks, and {} field configs", self.fields.len(), self.blocks.len(), field_configs);
         Ok(())
     }
 
@@ -276,8 +277,11 @@ impl AstAnalyzer {
                                     self.extract_collection_config(obj)?;
                                     // Also add the variable to exports so it can be imported
                                     self.exports.insert(name, ExportedItem::Object(obj.clone()));
+                                } else if self.is_field_config(obj) {
+                                    dlog!("  - Detected as field config (property-based)");
+                                    self.exports.insert(name, ExportedItem::Object(obj.clone()));
                                 } else {
-                                    dlog!("  - Not detected as block or collection, adding as generic object");
+                                    dlog!("  - Not detected as block, collection, or field, adding as generic object");
                                     self.exports.insert(name, ExportedItem::Object(obj.clone()));
                                 }
                             }
@@ -406,6 +410,28 @@ impl AstAnalyzer {
         }
         
         false
+    }
+
+    fn is_field_config(&self, obj: &ObjectLit) -> bool {
+        let mut has_name = false;
+        let mut has_type = false;
+        
+        for prop in &obj.props {
+            if let PropOrSpread::Prop(prop) = prop {
+                if let Prop::KeyValue(kv) = &**prop {
+                    if let PropName::Ident(ident) = &kv.key {
+                        match ident.sym.as_ref() {
+                            "name" => has_name = true,
+                            "type" => has_type = true,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Field configs have name and type (like group fields, array fields, etc.)
+        has_name && has_type
     }
 
     fn extract_collection_config(&mut self, obj: &ObjectLit) -> Result<()> {
