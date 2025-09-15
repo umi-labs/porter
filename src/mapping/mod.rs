@@ -94,14 +94,14 @@ pub fn load_or_create_mapping(
     };
 
     // Generate field mappings
-    let field_mappings = generate_field_mappings(&source_fields, &target_fields, interactive, Some(collection), collection_progress)?;
+    let (field_mappings, block_mappings) = generate_field_mappings(&source_fields, &target_fields, source_docs, interactive, Some(collection), collection_progress)?;
 
     let mapping = Mapping {
         source: source.to_string(),
         target: target.to_string(),
         collection: collection.to_string(),
         field_mappings,
-        block_mappings: None,
+        block_mappings,
     };
 
     // Save the mapping
@@ -329,10 +329,11 @@ fn extract_source_fields(doc: &Value) -> Vec<String> {
 fn generate_field_mappings(
     source_fields: &[String], 
     target_fields: &[String],
+    source_data: &[serde_json::Value],
     interactive: bool,
     collection_name: Option<&str>,
     collection_progress: Option<(usize, usize)>
-) -> Result<Vec<FieldMapping>> {
+) -> Result<(Vec<FieldMapping>, Option<crate::mapping::json_mapping::BlockMappings>)> {
     let mut mappings = Vec::new();
     let mut used_source_fields = std::collections::HashSet::<String>::new();
     let mut pending_mappings = Vec::new();
@@ -355,7 +356,7 @@ fn generate_field_mappings(
             }
         }
         info!("Created {} mappings in non-interactive mode", mappings.len());
-        return Ok(mappings);
+        return Ok((mappings, None));
     }
 
     info!("Running in interactive mode - starting interactive mapping process");
@@ -395,9 +396,7 @@ fn generate_field_mappings(
                 println!("{}", "This is a block field. You'll need to map ACF flexible content layouts to this block type.".yellow());
                 println!();
                 
-                // For now, skip block fields in the interactive mapping
-                // TODO: Implement proper block mapping logic
-                println!("{}", "⚠️  Block field mapping not yet implemented. Skipping...".yellow());
+                // Skip individual block fields - we'll handle block mapping separately
                 continue;
             }
         }
@@ -542,7 +541,14 @@ fn generate_field_mappings(
         }
     }
 
-    Ok(mappings)
+    // Handle block mapping if we have block fields and source data
+    let block_mappings = if interactive && target_fields.iter().any(|f| f.starts_with("blocks.")) {
+        Some(generate_block_mappings(source_data, target_fields, collection_name)?)
+    } else {
+        None
+    };
+
+    Ok((mappings, block_mappings))
 }
 
 /// Extracts block type from a field path like "blocks.content.columns"
@@ -554,6 +560,265 @@ fn extract_block_type_from_path(path: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Extracts ACF flexible content blocks from source data
+fn extract_acf_flexible_content(source_data: &[serde_json::Value]) -> Result<Vec<crate::mapping::json_mapping::ACFFlexibleContentBlock>> {
+    let mut blocks = Vec::new();
+    
+    for doc in source_data {
+        if let Some(acf_field) = doc.get("acf") {
+            if let Some(flexible_content) = acf_field.get("flexible_content") {
+                if let Some(flexible_array) = flexible_content.as_array() {
+                    for block_data in flexible_array {
+                        if let Some(layout) = block_data.get("acf_fc_layout") {
+                            if let Some(layout_str) = layout.as_str() {
+                                blocks.push(crate::mapping::json_mapping::ACFFlexibleContentBlock {
+                                    acf_fc_layout: layout_str.to_string(),
+                                    fields: block_data.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    Ok(blocks)
+}
+
+/// Gets unique ACF layout names from source data
+fn get_unique_acf_layouts(source_data: &[serde_json::Value]) -> Result<Vec<String>> {
+    let blocks = extract_acf_flexible_content(source_data)?;
+    let mut layouts: std::collections::HashSet<String> = std::collections::HashSet::new();
+    
+    for block in blocks {
+        layouts.insert(block.acf_fc_layout);
+    }
+    
+    let mut result: Vec<String> = layouts.into_iter().collect();
+    result.sort();
+    Ok(result)
+}
+
+/// Gets unique Payload block types from target field graph
+fn get_unique_payload_block_types(target_fields: &[String]) -> Vec<String> {
+    let mut block_types: std::collections::HashSet<String> = std::collections::HashSet::new();
+    
+    for field in target_fields {
+        if let Some(block_type) = extract_block_type_from_path(field) {
+            block_types.insert(block_type);
+        }
+    }
+    
+    let mut result: Vec<String> = block_types.into_iter().collect();
+    result.sort();
+    result
+}
+
+/// Generates block mappings interactively
+fn generate_block_mappings(
+    source_data: &[serde_json::Value],
+    target_fields: &[String],
+    collection_name: Option<&str>
+) -> Result<crate::mapping::json_mapping::BlockMappings> {
+    use crate::mapping::json_mapping::BlockMappings;
+    use std::collections::HashMap;
+    
+    let mut block_mappings = BlockMappings::new();
+    
+    // Get unique ACF layouts and Payload block types
+    let acf_layouts = get_unique_acf_layouts(source_data)?;
+    let payload_block_types = get_unique_payload_block_types(target_fields);
+    
+    if acf_layouts.is_empty() {
+        info!("No ACF flexible content layouts found in source data");
+        return Ok(block_mappings);
+    }
+    
+    if payload_block_types.is_empty() {
+        info!("No Payload block types found in target fields");
+        return Ok(block_mappings);
+    }
+    
+    // Clear screen and show block mapping header
+    clear_screen();
+    println!("{}", "=== Block Mapping Configuration ===".cyan().bold());
+    if let Some(collection) = collection_name {
+        println!("{}", format!("Collection: {}", collection).white().bold());
+        println!();
+    }
+    println!("{}", "Map ACF flexible content layouts to Payload block types".white());
+    println!();
+    
+    // Map each ACF layout to a Payload block type
+    for (index, acf_layout) in acf_layouts.iter().enumerate() {
+        let current_layout = index + 1;
+        let total_layouts = acf_layouts.len();
+        
+        clear_screen();
+        println!("{}", "=== Block Mapping Configuration ===".cyan().bold());
+        if let Some(collection) = collection_name {
+            println!("{}", format!("Collection: {}", collection).white().bold());
+        }
+        println!("{}", format!("=== Layout Progress: {}/{} ===", current_layout, total_layouts).yellow().bold());
+        println!("{}", format!("=== Mapping ACF layout: '{}' ===", acf_layout).magenta().bold());
+        println!();
+        
+        // Show available Payload block types
+        println!("{}", "Available Payload block types:".white());
+        for (i, block_type) in payload_block_types.iter().enumerate() {
+            println!("  {}. {}", i + 1, block_type);
+        }
+        println!();
+        
+        // Get user selection
+        let selection_index = interact::select(
+            &format!("Select Payload block type for ACF layout '{}'", acf_layout),
+            &payload_block_types
+        )?;
+        
+        let selected_block_type = &payload_block_types[selection_index];
+        block_mappings.layout_to_block_type.insert(acf_layout.clone(), selected_block_type.clone());
+        println!("{}", format!("✓ Mapped '{}' → '{}'", acf_layout, selected_block_type).green());
+        
+        if current_layout < total_layouts {
+            println!();
+            println!("{}", "Press Enter to continue...".white());
+            let _ = std::io::stdin().read_line(&mut String::new());
+        }
+    }
+    
+    // Now map fields within each block type
+    for (acf_layout, payload_block_type) in &block_mappings.layout_to_block_type {
+        if let Some(block_field_mappings) = map_block_fields(
+            source_data, 
+            acf_layout, 
+            payload_block_type, 
+            target_fields,
+            collection_name
+        )? {
+            block_mappings.block_field_mappings.insert(payload_block_type.clone(), block_field_mappings);
+        }
+    }
+    
+    Ok(block_mappings)
+}
+
+/// Maps fields within a specific block type
+fn map_block_fields(
+    source_data: &[serde_json::Value],
+    acf_layout: &str,
+    payload_block_type: &str,
+    target_fields: &[String],
+    collection_name: Option<&str>
+) -> Result<Option<Vec<FieldMapping>>> {
+    // Get fields for this specific block type
+    let block_target_fields: Vec<String> = target_fields
+        .iter()
+        .filter(|field| field.starts_with(&format!("blocks.{}.", payload_block_type)))
+        .map(|field| field.clone())
+        .collect();
+    
+    if block_target_fields.is_empty() {
+        return Ok(None);
+    }
+    
+    // Extract source fields from ACF blocks with this layout
+    let mut source_fields = std::collections::HashSet::<String>::new();
+    for doc in source_data {
+        if let Some(acf_field) = doc.get("acf") {
+            if let Some(flexible_content) = acf_field.get("flexible_content") {
+                if let Some(flexible_array) = flexible_content.as_array() {
+                    for block_data in flexible_array {
+                        if let Some(layout) = block_data.get("acf_fc_layout") {
+                            if let Some(layout_str) = layout.as_str() {
+                                if layout_str == acf_layout {
+                                    // Extract field names from this block
+                                    if let Some(obj) = block_data.as_object() {
+                                        for key in obj.keys() {
+                                            if key != "acf_fc_layout" {
+                                                source_fields.insert(key.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    let source_fields: Vec<String> = source_fields.into_iter().collect();
+    
+    if source_fields.is_empty() {
+        return Ok(None);
+    }
+    
+    // Clear screen and show block field mapping
+    clear_screen();
+    println!("{}", "=== Block Field Mapping ===".cyan().bold());
+    if let Some(collection) = collection_name {
+        println!("{}", format!("Collection: {}", collection).white().bold());
+    }
+    println!("{}", format!("ACF Layout: '{}' → Payload Block: '{}'", acf_layout, payload_block_type).white().bold());
+    println!();
+    
+    // Map each target field to a source field
+    let mut field_mappings = Vec::new();
+    for target_field in &block_target_fields {
+        let field_name = target_field.split('.').last().unwrap_or(target_field);
+        
+        println!("{}", format!("=== Mapping field: {} ===", field_name).magenta().bold());
+        
+        // Suggest matching source fields
+        let mut suggestions = Vec::new();
+        for source in &source_fields {
+            if source.to_lowercase() == field_name.to_lowercase() {
+                suggestions.push(source.clone());
+            } else if source.to_lowercase().contains(&field_name.to_lowercase()) {
+                suggestions.push(source.clone());
+            } else if field_name.to_lowercase().contains(&source.to_lowercase()) {
+                suggestions.push(source.clone());
+            }
+        }
+        
+        // Add remaining source fields as options
+        let mut options = suggestions.clone();
+        for source in &source_fields {
+            if !options.contains(source) {
+                options.push(source.clone());
+            }
+        }
+        
+        // Add skip option
+        options.insert(0, "⏭️  Skip this field".to_string());
+        
+        let selection_index = interact::select(
+            &format!("Select source field for '{}'", field_name),
+            &options
+        )?;
+        
+        let selected_source = &options[selection_index];
+        if selected_source != "⏭️  Skip this field" {
+            field_mappings.push(FieldMapping {
+                to: target_field.clone(),
+                from: serde_json::Value::String(selected_source.clone()),
+                transforms: Vec::new(),
+                fallback: None,
+            });
+            println!("{}", format!("✓ Mapped '{}' → '{}'", selected_source, field_name).green());
+        } else {
+            println!("{}", format!("⏭️  Skipped '{}'", field_name).yellow());
+        }
+        
+        println!();
+    }
+    
+    Ok(Some(field_mappings))
 }
 
 /// Clears the terminal screen
@@ -1222,5 +1487,144 @@ mod tests {
         let result = load_or_create_mapping("hotels", "umbraco", "payload", &vec![json!({})], None, false, None);
         // Should create a new mapping when file doesn't exist
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_extract_block_type_from_path() {
+        assert_eq!(extract_block_type_from_path("blocks.content.columns"), Some("content".to_string()));
+        assert_eq!(extract_block_type_from_path("blocks.section.heading"), Some("section".to_string()));
+        assert_eq!(extract_block_type_from_path("blocks.testimonials-blog.haveVideoSpinner"), Some("testimonials-blog".to_string()));
+        assert_eq!(extract_block_type_from_path("title"), None);
+        assert_eq!(extract_block_type_from_path("blocks"), None);
+    }
+
+    #[test]
+    fn test_extract_acf_flexible_content() {
+        let source_data = vec![
+            json!({
+                "acf": {
+                    "flexible_content": [
+                        {
+                            "acf_fc_layout": "cms",
+                            "content": "<h2>Welcome</h2>",
+                            "title": "Welcome Page"
+                        },
+                        {
+                            "acf_fc_layout": "testimonials",
+                            "testimonial_text": "Great service!",
+                            "author": "John Doe"
+                        }
+                    ]
+                }
+            })
+        ];
+
+        let blocks = extract_acf_flexible_content(&source_data).unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].acf_fc_layout, "cms");
+        assert_eq!(blocks[1].acf_fc_layout, "testimonials");
+    }
+
+    #[test]
+    fn test_get_unique_acf_layouts() {
+        let source_data = vec![
+            json!({
+                "acf": {
+                    "flexible_content": [
+                        {
+                            "acf_fc_layout": "cms",
+                            "content": "<h2>Welcome</h2>"
+                        },
+                        {
+                            "acf_fc_layout": "testimonials",
+                            "testimonial_text": "Great service!"
+                        },
+                        {
+                            "acf_fc_layout": "cms",
+                            "content": "<h2>Another CMS block</h2>"
+                        }
+                    ]
+                }
+            })
+        ];
+
+        let layouts = get_unique_acf_layouts(&source_data).unwrap();
+        assert_eq!(layouts.len(), 2);
+        assert!(layouts.contains(&"cms".to_string()));
+        assert!(layouts.contains(&"testimonials".to_string()));
+    }
+
+    #[test]
+    fn test_get_unique_payload_block_types() {
+        let target_fields = vec![
+            "title".to_string(),
+            "blocks.content.columns".to_string(),
+            "blocks.content.heading".to_string(),
+            "blocks.section.media".to_string(),
+            "blocks.testimonials-blog.haveVideoSpinner".to_string(),
+            "slug".to_string(),
+        ];
+
+        let block_types = get_unique_payload_block_types(&target_fields);
+        assert_eq!(block_types.len(), 3);
+        assert!(block_types.contains(&"content".to_string()));
+        assert!(block_types.contains(&"section".to_string()));
+        assert!(block_types.contains(&"testimonials-blog".to_string()));
+    }
+
+    #[test]
+    fn test_block_mappings_creation() {
+        use crate::mapping::json_mapping::BlockMappings;
+        use std::collections::HashMap;
+
+        let mut block_mappings = BlockMappings::new();
+        
+        // Test layout to block type mapping
+        block_mappings.layout_to_block_type.insert("cms".to_string(), "content".to_string());
+        block_mappings.layout_to_block_type.insert("testimonials".to_string(), "testimonials-blog".to_string());
+        
+        assert_eq!(block_mappings.layout_to_block_type.len(), 2);
+        assert_eq!(block_mappings.layout_to_block_type.get("cms"), Some(&"content".to_string()));
+        assert_eq!(block_mappings.layout_to_block_type.get("testimonials"), Some(&"testimonials-blog".to_string()));
+    }
+
+    #[test]
+    fn test_extract_acf_flexible_content_empty() {
+        let source_data = vec![
+            json!({
+                "title": "Some page",
+                "content": "Regular content"
+            })
+        ];
+
+        let blocks = extract_acf_flexible_content(&source_data).unwrap();
+        assert_eq!(blocks.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_acf_flexible_content_no_acf() {
+        let source_data = vec![
+            json!({
+                "title": "Some page",
+                "content": "Regular content"
+            })
+        ];
+
+        let blocks = extract_acf_flexible_content(&source_data).unwrap();
+        assert_eq!(blocks.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_acf_flexible_content_no_flexible_content() {
+        let source_data = vec![
+            json!({
+                "acf": {
+                    "regular_field": "value"
+                }
+            })
+        ];
+
+        let blocks = extract_acf_flexible_content(&source_data).unwrap();
+        assert_eq!(blocks.len(), 0);
     }
 }
