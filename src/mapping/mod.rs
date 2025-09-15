@@ -194,8 +194,71 @@ pub fn load_mapping_only(collection: &str, source: &str, target: &str) -> Result
     Ok(mapping)
 }
 
+/// Loads field names from existing graph file
+fn load_fields_from_graph_file(collection_path: &str) -> Result<Vec<String>> {
+    use std::path::Path;
+    
+    // Extract collection name from the path
+    let collection_name = Path::new(collection_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow!("Could not extract collection name from path: {}", collection_path))?;
+    
+    // Try to find the graph file in configured locations
+    // First try to load porter config to get the correct paths
+    let graph_paths = if let Ok(Some(config)) = crate::config::find_and_load_config() {
+        let graphs_dir = config.io.as_ref()
+            .map(|io| io.graphs_dir.clone())
+            .unwrap_or_else(|| "./migrations/output/graphs".to_string());
+        vec![
+            format!("{}/{}.json", graphs_dir, collection_name),
+            format!("{}/{}.ts", graphs_dir, collection_name),
+        ]
+    } else {
+        // Fallback to common locations if config not found
+        vec![
+            format!("./migrations/output/graphs/{}.json", collection_name),
+            format!("./mapping/graphs/{}.json", collection_name),
+            format!("./graphs/{}.json", collection_name),
+            format!("./migrations/output/graphs/{}.ts", collection_name),
+            format!("./mapping/graphs/{}.ts", collection_name),
+            format!("./graphs/{}.ts", collection_name),
+        ]
+    };
+    
+    for graph_path in graph_paths {
+        if fs::file_exists(&graph_path) {
+            info!("Loading fields from graph file: {}", graph_path);
+            let content = fs::read_file(&graph_path)?;
+            
+            // Try to parse as JSON first
+            if let Ok(graph_data) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
+                let mut fields = Vec::new();
+                for node in graph_data {
+                    if let Some(path) = node.get("path").and_then(|v| v.as_str()) {
+                        fields.push(path.to_string());
+                    }
+                }
+                if !fields.is_empty() {
+                    info!("Loaded {} fields from graph file: {}", fields.len(), graph_path);
+                    return Ok(fields);
+                }
+            }
+        }
+    }
+    
+    Err(anyhow!("No graph file found for collection: {}", collection_name))
+}
+
 /// Extracts field names from a Payload collection schema
+/// First tries to load from existing graph file, falls back to parsing TypeScript schema
 fn extract_payload_fields(collection_path: &str) -> Result<Vec<String>> {
+    // Try to load from existing graph file first
+    if let Ok(fields) = load_fields_from_graph_file(collection_path) {
+        return Ok(fields);
+    }
+
+    // Fallback to parsing TypeScript schema file
     if !fs::file_exists(collection_path) {
         return Err(anyhow!("Collection file not found: {}", collection_path));
     }
@@ -323,6 +386,22 @@ fn generate_field_mappings(
             }
         }
         println!("{}", format!("=== Field Progress: {}/{} ===", current_field, total_fields).yellow().bold());
+        
+        // Check if this is a block field
+        if target.starts_with("blocks.") {
+            // Handle block field mapping
+            if let Some(block_type) = extract_block_type_from_path(target) {
+                println!("{}", format!("=== Mapping for block field: {} (block type: {}) ===", target, block_type).magenta().bold());
+                println!("{}", "This is a block field. You'll need to map ACF flexible content layouts to this block type.".yellow());
+                println!();
+                
+                // For now, skip block fields in the interactive mapping
+                // TODO: Implement proper block mapping logic
+                println!("{}", "⚠️  Block field mapping not yet implemented. Skipping...".yellow());
+                continue;
+            }
+        }
+        
         println!("{}", format!("=== Mapping for target field: {} ===", target).magenta().bold());
 
         // Suggest matching source fields
@@ -464,6 +543,17 @@ fn generate_field_mappings(
     }
 
     Ok(mappings)
+}
+
+/// Extracts block type from a field path like "blocks.content.columns"
+fn extract_block_type_from_path(path: &str) -> Option<String> {
+    if path.starts_with("blocks.") {
+        let parts: Vec<&str> = path.split('.').collect();
+        if parts.len() >= 2 {
+            return Some(parts[1].to_string());
+        }
+    }
+    None
 }
 
 /// Clears the terminal screen
