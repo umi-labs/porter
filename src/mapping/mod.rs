@@ -381,6 +381,8 @@ fn generate_field_mappings(
     }
 
     info!("Running in interactive mode - starting interactive mapping process");
+    dlog!("Total target fields to process: {}", target_fields.len());
+    dlog!("Target fields: {:?}", target_fields);
 
     // Interactive mapping generation - collect all mappings first
     let total_fields = target_fields.len();
@@ -417,6 +419,7 @@ fn generate_field_mappings(
                 println!("{}", "This is a block field. You'll need to map ACF flexible content layouts to this block type.".yellow());
                 println!();
                 
+                dlog!("Skipping block field: {} (will be handled in block mapping)", target);
                 // Skip individual block fields - we'll handle block mapping separately
                 continue;
             }
@@ -564,15 +567,20 @@ fn generate_field_mappings(
 
     // Handle block mapping if we have block fields and source data
     let block_mappings = if interactive && target_fields.iter().any(|f| f.starts_with("blocks.")) {
+        dlog!("Block fields detected, checking for ACF flexible content");
         // Check if we have ACF flexible content in source data
         let acf_layouts = get_unique_acf_layouts(source_data).unwrap_or_default();
+        dlog!("Found {} ACF layouts: {:?}", acf_layouts.len(), acf_layouts);
         if !acf_layouts.is_empty() {
+            dlog!("Starting block mapping process");
             Some(generate_block_mappings(source_data, target_fields, collection_name)?)
         } else {
             info!("No ACF flexible content found in source data, skipping block mapping");
+            dlog!("Source data structure: {:?}", source_data.get(0).and_then(|d| d.as_object()).map(|obj| obj.keys().collect::<Vec<_>>()));
             None
         }
     } else {
+        dlog!("No block fields detected or not interactive mode");
         None
     };
 
