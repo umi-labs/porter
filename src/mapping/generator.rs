@@ -88,32 +88,42 @@ impl MappingGenerator {
             dlog!("Generating mapping for collection '{}'", collection.name);
             self.generate_collection_mapping(collection).await?;
 
-            // If we have a target schema, build a field graph and template
+            // If we have a target schema, check if graph/template files exist
+            // Only build them if they don't exist (they should be created by 'porter template' command)
             if let Some(schema_path) = &collection.collection_path {
                 if Path::new(schema_path).exists() {
-                    dlog!("Building graph/template for '{}' from {}", collection.name, schema_path);
-                    // Prefer precise path mappings from config; else tsconfig
-                    crate::mapping::schema_introspect::configure_ts_paths_from_porter(&self.config);
-                    if let Some(ts) = &self.config.typescript {
-                        if !ts.tsconfig_path.is_empty() {
-                            let _ = crate::mapping::schema_introspect::configure_ts_paths_from_file(&ts.tsconfig_path);
+                    let graph_path = format!("{}/{}.json", graphs_dir_path, collection.name);
+                    let tpl_path = format!("{}/{}.template.json", templates_dir_path, collection.name);
+                    
+                    // Check if both graph and template files exist
+                    let graph_exists = Path::new(&graph_path).exists();
+                    let template_exists = Path::new(&tpl_path).exists();
+                    
+                    if !graph_exists || !template_exists {
+                        dlog!("Building missing graph/template for '{}' from {}", collection.name, schema_path);
+                        // Prefer precise path mappings from config; else tsconfig
+                        crate::mapping::schema_introspect::configure_ts_paths_from_porter(&self.config);
+                        if let Some(ts) = &self.config.typescript {
+                            if !ts.tsconfig_path.is_empty() {
+                                let _ = crate::mapping::schema_introspect::configure_ts_paths_from_file(&ts.tsconfig_path);
+                            }
                         }
-                    }
-                    if let Ok(graph) = build_field_graph_from_ts(schema_path) {
-                        dlog!("Graph nodes: {}", graph.len());
-                        let graph_path = format!("{}/{}.json", graphs_dir_path, collection.name);
-                        let tpl_path = format!("{}/{}.template.json", templates_dir_path, collection.name);
-                        let graph_json = serde_json::to_string_pretty(&graph)?;
-                        fs::write(&graph_path, graph_json)?;
-                        let template = generate_template_from_graph(&graph);
-                        dlog!("Template rules: {}", template.len());
-                        let tpl_json = serde_json::to_string_pretty(&template)?;
-                        fs::write(&tpl_path, tpl_json)?;
-                        println!("{} {}\n{} {}",
-                            "✓ Wrote field graph:".green(), graph_path,
-                            "✓ Wrote mapping template:".green(), tpl_path);
+                        if let Ok(graph) = build_field_graph_from_ts(schema_path) {
+                            dlog!("Graph nodes: {}", graph.len());
+                            let graph_json = serde_json::to_string_pretty(&graph)?;
+                            fs::write(&graph_path, graph_json)?;
+                            let template = generate_template_from_graph(&graph);
+                            dlog!("Template rules: {}", template.len());
+                            let tpl_json = serde_json::to_string_pretty(&template)?;
+                            fs::write(&tpl_path, tpl_json)?;
+                            println!("{} {}\n{} {}",
+                                "✓ Wrote field graph:".green(), graph_path,
+                                "✓ Wrote mapping template:".green(), tpl_path);
+                        } else {
+                            dlog!("Failed to build field graph for '{}'", collection.name);
+                        }
                     } else {
-                        dlog!("Failed to build field graph for '{}'", collection.name);
+                        dlog!("Graph and template files already exist for '{}', skipping generation", collection.name);
                     }
                 }
             }
