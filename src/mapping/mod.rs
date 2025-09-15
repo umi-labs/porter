@@ -13,6 +13,7 @@ use log::{info, debug, warn};
 use serde_json::{Value, json};
 use colored::Colorize;
 use std::io::{self, Write};
+use crate::dlog;
 
 use crate::util::fs;
 use crate::util::interact;
@@ -199,10 +200,23 @@ fn load_fields_from_graph_file(collection_path: &str) -> Result<Vec<String>> {
     use std::path::Path;
     
     // Extract collection name from the path
-    let collection_name = Path::new(collection_path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| anyhow!("Could not extract collection name from path: {}", collection_path))?;
+    // Handle both direct file paths and directory paths
+    let collection_name = if collection_path.ends_with("/index.ts") || collection_path.ends_with("/index.tsx") {
+        // For paths like ./src/collections/Pages/index.ts, extract "Pages"
+        Path::new(collection_path)
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase())
+    } else {
+        // For direct file paths, use the file stem
+        Path::new(collection_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase())
+    }.ok_or_else(|| anyhow!("Could not extract collection name from path: {}", collection_path))?;
+    
+    dlog!("Extracted collection name: '{}' from path: '{}'", collection_name, collection_path);
     
     // Try to find the graph file in configured locations
     // First try to load porter config to get the correct paths
@@ -227,6 +241,7 @@ fn load_fields_from_graph_file(collection_path: &str) -> Result<Vec<String>> {
     };
     
     for graph_path in graph_paths {
+        dlog!("Checking graph file path: {}", graph_path);
         if fs::file_exists(&graph_path) {
             info!("Loading fields from graph file: {}", graph_path);
             let content = fs::read_file(&graph_path)?;
@@ -241,6 +256,7 @@ fn load_fields_from_graph_file(collection_path: &str) -> Result<Vec<String>> {
                 }
                 if !fields.is_empty() {
                     info!("Loaded {} fields from graph file: {}", fields.len(), graph_path);
+                    dlog!("Loaded fields: {:?}", fields);
                     return Ok(fields);
                 }
             }
@@ -253,10 +269,15 @@ fn load_fields_from_graph_file(collection_path: &str) -> Result<Vec<String>> {
 /// Extracts field names from a Payload collection schema
 /// First tries to load from existing graph file, falls back to parsing TypeScript schema
 fn extract_payload_fields(collection_path: &str) -> Result<Vec<String>> {
+    dlog!("extract_payload_fields called with collection_path: {}", collection_path);
+    
     // Try to load from existing graph file first
     if let Ok(fields) = load_fields_from_graph_file(collection_path) {
+        dlog!("Successfully loaded {} fields from graph file", fields.len());
         return Ok(fields);
     }
+    
+    dlog!("Failed to load from graph file, falling back to TypeScript parsing");
 
     // Fallback to parsing TypeScript schema file
     if !fs::file_exists(collection_path) {
@@ -543,7 +564,14 @@ fn generate_field_mappings(
 
     // Handle block mapping if we have block fields and source data
     let block_mappings = if interactive && target_fields.iter().any(|f| f.starts_with("blocks.")) {
-        Some(generate_block_mappings(source_data, target_fields, collection_name)?)
+        // Check if we have ACF flexible content in source data
+        let acf_layouts = get_unique_acf_layouts(source_data).unwrap_or_default();
+        if !acf_layouts.is_empty() {
+            Some(generate_block_mappings(source_data, target_fields, collection_name)?)
+        } else {
+            info!("No ACF flexible content found in source data, skipping block mapping");
+            None
+        }
     } else {
         None
     };
