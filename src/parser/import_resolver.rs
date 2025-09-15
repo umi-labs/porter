@@ -308,8 +308,33 @@ impl ImportResolver {
     fn find_actual_file(&self, base_path: PathBuf) -> Result<PathBuf> {
         // If it already has an extension and exists, return it
         if base_path.exists() {
-            dlog!("  Found exact match: {:?}", base_path);
-            return Ok(base_path);
+            // Check if it's a directory
+            if base_path.is_dir() {
+                dlog!("  Found directory: {:?}, looking for index files", base_path);
+                // Try to find index files in the directory
+                let index_variations = vec![
+                    base_path.join("index.ts"),
+                    base_path.join("index.tsx"),
+                    base_path.join("index.js"),
+                    base_path.join("index.jsx"),
+                ];
+                
+                for path in &index_variations {
+                    if path.exists() {
+                        dlog!("  Found index file: {:?}", path);
+                        return Ok(path.clone());
+                    }
+                }
+                
+                dlog!("  No index file found in directory: {:?}", base_path);
+                return Err(SchemaParseError::UnresolvedImport {
+                    import: base_path.display().to_string(),
+                    file: "filesystem".to_string(),
+                });
+            } else {
+                dlog!("  Found exact match: {:?}", base_path);
+                return Ok(base_path);
+            }
         }
         
         // Try different extensions and index files
