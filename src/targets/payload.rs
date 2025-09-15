@@ -400,12 +400,12 @@ impl TargetWriter for PayloadTarget {
                     buf.push_str(&function_name);
                     buf.push_str(": () => RequiredDataFromCollectionSlug<'");
                     buf.push_str(collection);
-                    buf.push_str("'> = () => ");
+                    buf.push_str("'> = () => {\nreturn ");
                     buf.push_str(
                         &serde_json::to_string_pretty(&processed_doc)
                             .context("Failed to serialize processed document")?,
                     );
-                    buf.push_str(";\n");
+                    buf.push_str("\n};\n");
 
                     // Write the file
                     fs::write(&file_name, buf).context("Failed to write seed file")?;

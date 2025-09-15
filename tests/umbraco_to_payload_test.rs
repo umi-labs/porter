@@ -65,6 +65,7 @@ fn test_umbraco_to_payload() -> Result<()> {
     assert!(content.contains("import type { RequiredDataFromCollectionSlug } from 'payload'"), "Output should contain the import statement");
     assert!(content.contains("export const"), "Output should export a function");
     assert!(content.contains("RequiredDataFromCollectionSlug<'"), "Output should contain the type annotation");
+    assert!(content.contains("return"), "Output should contain a return statement");
     
     // Clean up
     fs::remove_dir_all(test_output)?;
