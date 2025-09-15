@@ -237,6 +237,8 @@ impl AstAnalyzer {
                         if self.is_collection_config(obj) {
                             dlog!("  - Detected as collection config");
                             self.extract_collection_config(obj)?;
+                            // Also add the variable to exports so it can be imported
+                            self.exports.insert(name, ExportedItem::Object(obj.clone()));
                         } else {
                             self.exports.insert(name, ExportedItem::Object(obj.clone()));
                         }
