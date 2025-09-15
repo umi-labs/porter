@@ -231,16 +231,45 @@ impl AstAnalyzer {
             let name = ident.id.sym.to_string();
             dlog!("Found variable declaration: {}", name);
             
+            // Check for type annotation
+            let type_annotation = self.extract_type_annotation(ident);
+            dlog!("  - Type annotation: {:?}", type_annotation);
+            
             if let Some(init) = &decl.init {
                 match &**init {
                     Expr::Object(obj) => {
-                        if self.is_collection_config(obj) {
-                            dlog!("  - Detected as collection config");
-                            self.extract_collection_config(obj)?;
-                            // Also add the variable to exports so it can be imported
-                            self.exports.insert(name, ExportedItem::Object(obj.clone()));
-                        } else {
-                            self.exports.insert(name, ExportedItem::Object(obj.clone()));
+                        // Use type annotation to determine the type
+                        match type_annotation.as_deref() {
+                            Some("Block") => {
+                                dlog!("  - Detected as block config (type annotation)");
+                                let block = self.extract_block_config(obj, &name)?;
+                                self.exports.insert(name, ExportedItem::Block(block));
+                            }
+                            Some(collection_type) if collection_type.starts_with("CollectionConfig") => {
+                                dlog!("  - Detected as collection config (type annotation)");
+                                self.extract_collection_config(obj)?;
+                                // Also add the variable to exports so it can be imported
+                                self.exports.insert(name, ExportedItem::Object(obj.clone()));
+                            }
+                            Some(field_type) if field_type.ends_with("Field") || field_type == "Field[]" || field_type == "Field" => {
+                                dlog!("  - Detected as field config (type annotation)");
+                                self.exports.insert(name, ExportedItem::Object(obj.clone()));
+                            }
+                            _ => {
+                                // Fallback to property-based detection
+                                if self.is_block_config(obj) {
+                                    dlog!("  - Detected as block config (property-based)");
+                                    let block = self.extract_block_config(obj, &name)?;
+                                    self.exports.insert(name, ExportedItem::Block(block));
+                                } else if self.is_collection_config(obj) {
+                                    dlog!("  - Detected as collection config (property-based)");
+                                    self.extract_collection_config(obj)?;
+                                    // Also add the variable to exports so it can be imported
+                                    self.exports.insert(name, ExportedItem::Object(obj.clone()));
+                                } else {
+                                    self.exports.insert(name, ExportedItem::Object(obj.clone()));
+                                }
+                            }
                         }
                     }
                     Expr::Array(arr) => {
@@ -289,17 +318,60 @@ impl AstAnalyzer {
         Ok(())
     }
 
-    fn is_collection_config(&self, obj: &ObjectLit) -> bool {
-        obj.props.iter().any(|prop| {
+    fn extract_type_annotation(&self, _ident: &Ident) -> Option<String> {
+        // Note: In SWC, type annotations are not directly accessible from Ident
+        // They are typically found in the parent context (VarDeclarator, etc.)
+        // For now, we'll return None and rely on property-based detection
+        // TODO: Implement proper type annotation extraction from parent context
+        None
+    }
+
+    fn is_block_config(&self, obj: &ObjectLit) -> bool {
+        let mut has_slug = false;
+        let mut has_fields = false;
+        let mut has_labels_or_interface = false;
+        
+        for prop in &obj.props {
             if let PropOrSpread::Prop(prop) = prop {
                 if let Prop::KeyValue(kv) = &**prop {
                     if let PropName::Ident(ident) = &kv.key {
-                        return ident.sym == "slug" || ident.sym == "fields";
+                        match ident.sym.as_ref() {
+                            "slug" => has_slug = true,
+                            "fields" => has_fields = true,
+                            "labels" | "interfaceName" => has_labels_or_interface = true,
+                            _ => {}
+                        }
                     }
                 }
             }
-            false
-        })
+        }
+        
+        // Block configs have slug, fields, and either labels or interfaceName
+        has_slug && has_fields && has_labels_or_interface
+    }
+
+    fn is_collection_config(&self, obj: &ObjectLit) -> bool {
+        let mut has_slug = false;
+        let mut has_fields = false;
+        let mut has_collection_props = false;
+        
+        for prop in &obj.props {
+            if let PropOrSpread::Prop(prop) = prop {
+                if let Prop::KeyValue(kv) = &**prop {
+                    if let PropName::Ident(ident) = &kv.key {
+                        match ident.sym.as_ref() {
+                            "slug" => has_slug = true,
+                            "fields" => has_fields = true,
+                            "hooks" | "access" | "admin" | "versions" | "endpoints" => has_collection_props = true,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Collection configs have slug, fields, and collection-specific properties
+        has_slug && has_fields && has_collection_props
     }
 
     fn extract_collection_config(&mut self, obj: &ObjectLit) -> Result<()> {
@@ -331,6 +403,71 @@ impl AstAnalyzer {
             }
         }
         Ok(())
+    }
+
+    fn extract_block_config(&self, obj: &ObjectLit, name: &str) -> Result<BlockDefinition> {
+        dlog!("Extracting block config for: {}", name);
+        let mut slug = name.to_lowercase();
+        let mut fields = Vec::new();
+        let mut labels = BlockLabels {
+            singular: None,
+            plural: None,
+        };
+        
+        for prop in &obj.props {
+            if let PropOrSpread::Prop(prop) = prop {
+                if let Prop::KeyValue(kv) = &**prop {
+                    if let PropName::Ident(ident) = &kv.key {
+                        match ident.sym.as_ref() {
+                            "slug" => {
+                                if let Expr::Lit(lit) = &*kv.value {
+                                    if let Lit::Str(str_lit) = &lit {
+                                        slug = str_lit.value.to_string();
+                                        dlog!("  - Found block slug: {}", slug);
+                                    }
+                                }
+                            }
+                            "fields" => {
+                                if let Expr::Array(arr) = &*kv.value {
+                                    dlog!("  - Extracting fields array");
+                                    fields = self.extract_fields_from_array(arr)?;
+                                }
+                            }
+                            "labels" => {
+                                if let Expr::Object(labels_obj) = &*kv.value {
+                                    dlog!("  - Extracting labels");
+                                    for label_prop in &labels_obj.props {
+                                        if let PropOrSpread::Prop(label_prop) = label_prop {
+                                            if let Prop::KeyValue(label_kv) = &**label_prop {
+                                                if let PropName::Ident(label_ident) = &label_kv.key {
+                                                    if let Expr::Lit(label_lit) = &*label_kv.value {
+                                                        if let Lit::Str(label_str) = &label_lit {
+                                                            match label_ident.sym.as_ref() {
+                                                                "singular" => labels.singular = Some(label_str.value.to_string()),
+                                                                "plural" => labels.plural = Some(label_str.value.to_string()),
+                                                                _ => {}
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        
+        dlog!("  - Extracted block: {} with {} fields", slug, fields.len());
+        Ok(BlockDefinition {
+            slug,
+            fields,
+            labels,
+        })
     }
 
     fn extract_fields_from_array(&self, arr: &ArrayLit) -> Result<Vec<FieldDefinition>> {
