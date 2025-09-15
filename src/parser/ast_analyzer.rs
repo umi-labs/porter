@@ -370,8 +370,31 @@ impl AstAnalyzer {
             }
         }
         
-        // Collection configs have slug, fields, and collection-specific properties
-        has_slug && has_fields && has_collection_props
+        // Collection configs have slug and fields, and optionally collection-specific properties
+        // If it has collection-specific properties, it's definitely a collection
+        // If it only has slug and fields, it could be a collection or block, so we need to check for block properties
+        if has_slug && has_fields {
+            if has_collection_props {
+                return true; // Definitely a collection
+            } else {
+                // Check if it has block-specific properties
+                for prop in &obj.props {
+                    if let PropOrSpread::Prop(prop) = prop {
+                        if let Prop::KeyValue(kv) = &**prop {
+                            if let PropName::Ident(ident) = &kv.key {
+                                if ident.sym == "labels" || ident.sym == "interfaceName" {
+                                    return false; // Has block properties, so it's a block
+                                }
+                            }
+                        }
+                    }
+                }
+                // No block properties found, so it's likely a collection
+                return true;
+            }
+        }
+        
+        false
     }
 
     fn extract_collection_config(&mut self, obj: &ObjectLit) -> Result<()> {
