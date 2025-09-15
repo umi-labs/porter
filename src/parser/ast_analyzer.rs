@@ -238,6 +238,16 @@ impl AstAnalyzer {
             if let Some(init) = &decl.init {
                 match &**init {
                     Expr::Object(obj) => {
+                        dlog!("  - Object has {} properties", obj.props.len());
+                        for prop in &obj.props {
+                            if let PropOrSpread::Prop(prop) = prop {
+                                if let Prop::KeyValue(kv) = &**prop {
+                                    if let PropName::Ident(ident) = &kv.key {
+                                        dlog!("    - Property: {}", ident.sym);
+                                    }
+                                }
+                            }
+                        }
                         // Use type annotation to determine the type
                         match type_annotation.as_deref() {
                             Some("Block") => {
@@ -267,6 +277,7 @@ impl AstAnalyzer {
                                     // Also add the variable to exports so it can be imported
                                     self.exports.insert(name, ExportedItem::Object(obj.clone()));
                                 } else {
+                                    dlog!("  - Not detected as block or collection, adding as generic object");
                                     self.exports.insert(name, ExportedItem::Object(obj.clone()));
                                 }
                             }
