@@ -87,4 +87,10 @@ pub enum Commands {
         #[arg(short = 'f', long, action = ArgAction::SetTrue)]
         full: bool,
     },
+    /// Upgrade Porter to the latest version via Homebrew
+    Upgrade {
+        /// Force upgrade even if already up to date
+        #[arg(short, long, action = ArgAction::SetTrue)]
+        force: bool,
+    },
 }
