@@ -123,7 +123,7 @@ impl MappingGenerator {
                             dlog!("Failed to build field graph for '{}'", collection.name);
                         }
                     } else {
-                        dlog!("Graph and template files already exist for '{}', skipping generation", collection.name);
+                        dlog!("Graph and template files already exist for '{}', using existing files", collection.name);
                     }
                 }
             }
