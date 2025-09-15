@@ -86,19 +86,19 @@ pub fn build_field_graph_from_ts_with_config(schema_path: &str, ts_config: Optio
 
 /// Build field graph using the new parser with full import resolution
 fn build_field_graph_with_new_parser(schema_path: &str, ts_config: Option<&crate::config::TypescriptSection>) -> Result<Vec<FieldNode>> {
-    use crate::dlog;
+    use crate::{dlog, dlog_info, dlog_success, dlog_warning, dlog_error, dlog_step, dlog_data, dlog_file, dlog_processing, dlog_result};
     
-    dlog!("Attempting to use new parser for: {}", schema_path);
+    dlog_processing!("Attempting to use new parser for: {}", schema_path);
     
     let config_path = Path::new(schema_path);
     
     // Try to find the project root
     let base_dir = find_project_root(config_path)?;
-    dlog!("Found project root: {:?}", base_dir);
+    dlog_processing!("Found project root: {:?}", base_dir);
     
     // Use provided TypeScript config or try to load it
     let loaded_config = if ts_config.is_none() {
-        dlog!("No TypeScript config provided, trying to load from project root");
+        dlog_processing!("No TypeScript config provided, trying to load from project root");
         load_typescript_config(&base_dir)
     } else {
         None
@@ -111,7 +111,7 @@ fn build_field_graph_with_new_parser(schema_path: &str, ts_config: Option<&crate
     
     // Generate the template
     let template = parser.generate_template(config_path)?;
-    dlog!("Generated template with {} fields", template.fields.len());
+    dlog_processing!("Generated template with {} fields", template.fields.len());
     
     // Convert FlattenedTemplate to Vec<FieldNode>
     let mut nodes = Vec::new();
@@ -155,7 +155,7 @@ fn build_field_graph_with_new_parser(schema_path: &str, ts_config: Option<&crate
         }
     }
     
-    dlog!("Converted to {} field nodes", nodes.len());
+    dlog_processing!("Converted to {} field nodes", nodes.len());
     Ok(nodes)
 }
 
@@ -179,7 +179,7 @@ fn find_project_root(from: &Path) -> Result<PathBuf> {
 }
 
 fn load_typescript_config(base_dir: &Path) -> Option<crate::config::TypescriptSection> {
-    use crate::dlog;
+    use crate::{dlog, dlog_info, dlog_success, dlog_warning, dlog_error, dlog_step, dlog_data, dlog_file, dlog_processing, dlog_result};
     
     // Look for porter config files
     let config_names = vec![
@@ -192,7 +192,7 @@ fn load_typescript_config(base_dir: &Path) -> Option<crate::config::TypescriptSe
     for name in config_names {
         let config_path = base_dir.join(name);
         if config_path.exists() {
-            dlog!("Found config file: {:?}", config_path);
+            dlog_processing!("Found config file: {:?}", config_path);
             if let Ok(content) = std::fs::read_to_string(&config_path) {
                 if let Ok(config) = toml::from_str::<PorterConfig>(&content) {
                     return config.typescript;

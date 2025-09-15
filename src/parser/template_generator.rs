@@ -2,7 +2,7 @@ use super::schema::*;
 use super::errors::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::dlog;
+use crate::{dlog, dlog_info, dlog_success, dlog_warning, dlog_error, dlog_step, dlog_data, dlog_file, dlog_processing, dlog_result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlattenedTemplate {
@@ -53,7 +53,7 @@ pub struct TemplateGenerator;
 
 impl TemplateGenerator {
     pub fn generate(schema: &CollectionSchema) -> Result<FlattenedTemplate> {
-        dlog!("Generating template for collection: {}", schema.slug);
+        dlog_processing!("Generating template for collection: {}", schema.slug);
         
         let mut template = FlattenedTemplate {
             collection_name: schema.slug.clone(),
@@ -66,12 +66,12 @@ impl TemplateGenerator {
         };
 
         // Flatten fields recursively
-        dlog!("Flattening {} top-level fields", schema.fields.len());
+        dlog_processing!("Flattening {} top-level fields", schema.fields.len());
         Self::flatten_fields(&schema.fields, String::new(), &mut template.fields, &mut template.relationships)?;
-        dlog!("Generated {} flattened fields", template.fields.len());
+        dlog_processing!("Generated {} flattened fields", template.fields.len());
 
         // Process blocks
-        dlog!("Processing {} blocks", schema.blocks.len());
+        dlog_processing!("Processing {} blocks", schema.blocks.len());
         for (slug, block) in &schema.blocks {
             let mut block_fields = Vec::new();
             Self::flatten_fields(&block.fields, format!("blocks.{}", slug), &mut block_fields, &mut template.relationships)?;
@@ -87,7 +87,7 @@ impl TemplateGenerator {
         template.hooks.extend(schema.hooks.after_change.clone());
         template.hooks.extend(schema.hooks.before_delete.clone());
         template.hooks.extend(schema.hooks.after_delete.clone());
-        dlog!("Found {} hooks", template.hooks.len());
+        dlog_processing!("Found {} hooks", template.hooks.len());
 
         // Extract access controls
         if let Some(read) = &schema.access.read {
@@ -102,9 +102,9 @@ impl TemplateGenerator {
         if let Some(delete) = &schema.access.delete {
             template.access_controls.insert("delete".to_string(), delete.clone());
         }
-        dlog!("Found {} access controls", template.access_controls.len());
+        dlog_processing!("Found {} access controls", template.access_controls.len());
 
-        dlog!("Template generation complete");
+        dlog_processing!("Template generation complete");
         Ok(template)
     }
 
@@ -121,22 +121,22 @@ impl TemplateGenerator {
                 format!("{}.{}", prefix, field.name)
             };
 
-            dlog!("  Processing field: {}", path);
+            dlog_processing!("  Processing field: {}", path);
 
             match &field.field_type {
                 FieldType::Tabs { tabs } => {
-                    dlog!("    Field is tabs with {} tabs", tabs.len());
+                    dlog_processing!("    Field is tabs with {} tabs", tabs.len());
                     for (i, tab) in tabs.iter().enumerate() {
                         let tab_prefix = format!("{}.tab_{}", path, i);
                         Self::flatten_fields(&tab.fields, tab_prefix, output, relationships)?;
                     }
                 }
                 FieldType::Group { fields: nested } => {
-                    dlog!("    Field is group with {} nested fields", nested.len());
+                    dlog_processing!("    Field is group with {} nested fields", nested.len());
                     Self::flatten_fields(nested, path.clone(), output, relationships)?;
                 }
                 FieldType::Array { fields: nested } => {
-                    dlog!("    Field is array with {} nested fields", nested.len());
+                    dlog_processing!("    Field is array with {} nested fields", nested.len());
                     output.push(Self::create_flattened_field(field, &path));
                     if !nested.is_empty() {
                         let array_prefix = format!("{}[]", path);
@@ -144,7 +144,7 @@ impl TemplateGenerator {
                     }
                 }
                 FieldType::Blocks { blocks } => {
-                    dlog!("    Field is blocks with {} block types", blocks.len());
+                    dlog_processing!("    Field is blocks with {} block types", blocks.len());
                     output.push(FlattenedField {
                         path: path.clone(),
                         name: field.name.clone(),
@@ -159,7 +159,7 @@ impl TemplateGenerator {
                     });
                 }
                 FieldType::Relationship { relationTo } => {
-                    dlog!("    Field is relationship to: {}", relationTo);
+                    dlog_processing!("    Field is relationship to: {}", relationTo);
                     relationships.push(RelationshipInfo {
                         field_path: path.clone(),
                         related_collection: relationTo.clone(),
@@ -168,11 +168,11 @@ impl TemplateGenerator {
                     output.push(Self::create_flattened_field(field, &path));
                 }
                 FieldType::Row { fields: nested } => {
-                    dlog!("    Field is row with {} nested fields", nested.len());
+                    dlog_processing!("    Field is row with {} nested fields", nested.len());
                     Self::flatten_fields(nested, path.clone(), output, relationships)?;
                 }
                 FieldType::Collapsible { fields: nested, .. } => {
-                    dlog!("    Field is collapsible with {} nested fields", nested.len());
+                    dlog_processing!("    Field is collapsible with {} nested fields", nested.len());
                     Self::flatten_fields(nested, path.clone(), output, relationships)?;
                 }
                 _ => {

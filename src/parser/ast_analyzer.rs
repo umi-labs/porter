@@ -7,7 +7,7 @@ use super::errors::{Result, SchemaParseError};
 use swc_core::ecma::ast::*;
 use swc_core::ecma::visit::{Visit, VisitWith};
 use std::collections::HashMap;
-use crate::dlog;
+use crate::{dlog, dlog_info, dlog_success, dlog_warning, dlog_error, dlog_step, dlog_data, dlog_file, dlog_processing, dlog_result};
 
 #[derive(Clone)]
 pub struct AstAnalyzer {
@@ -40,12 +40,12 @@ impl AstAnalyzer {
     }
 
     pub fn analyze_module(&mut self, module: &Module) -> Result<()> {
-        dlog!("Analyzing module with {} items", module.body.len());
+        dlog_processing!("Analyzing module with {} items", module.body.len());
         for item in &module.body {
             self.analyze_module_item(item)?;
         }
         let field_configs = self.exports.values().filter(|item| matches!(item, ExportedItem::Object(_))).count();
-        dlog!("Found {} fields, {} blocks, and {} field configs", self.fields.len(), self.blocks.len(), field_configs);
+        dlog_data!("Found {} fields, {} blocks, and {} field configs", self.fields.len(), self.blocks.len(), field_configs);
         Ok(())
     }
 
@@ -60,23 +60,23 @@ impl AstAnalyzer {
     fn analyze_module_decl(&mut self, decl: &ModuleDecl) -> Result<()> {
         match decl {
             ModuleDecl::Import(import_decl) => {
-                dlog!("Found import from: {}", import_decl.src.value);
+                dlog_info!("Found import from: {}", import_decl.src.value);
                 self.extract_import(import_decl)?;
             }
             ModuleDecl::ExportDecl(export_decl) => {
-                dlog!("Found export declaration");
+                dlog_info!("Found export declaration");
                 self.analyze_export_decl(export_decl)?;
             }
             ModuleDecl::ExportNamed(named_export) => {
-                dlog!("Found named export");
+                dlog_info!("Found named export");
                 self.analyze_named_export(named_export)?;
             }
             ModuleDecl::ExportDefaultDecl(default_export) => {
-                dlog!("Found default export");
+                dlog_info!("Found default export");
                 self.analyze_default_export(default_export)?;
             }
             ModuleDecl::ExportDefaultExpr(expr_export) => {
-                dlog!("Found default expression export");
+                dlog_info!("Found default expression export");
                 self.analyze_default_expr_export(expr_export)?;
             }
             _ => {}
@@ -96,17 +96,17 @@ impl AstAnalyzer {
                         .unwrap_or_else(|| named.local.sym.to_string());
                     let local = named.local.sym.to_string();
                     
-                    dlog!("  - Named import: {} as {}", imported, local);
+                    dlog_data!("  - Named import: {} as {}", imported, local);
                     specifiers.push(super::schema::ImportSpecifier::Named { imported, local });
                 }
                 ImportSpecifier::Default(default) => {
                     let local = default.local.sym.to_string();
-                    dlog!("  - Default import: {}", local);
+                    dlog_data!("  - Default import: {}", local);
                     specifiers.push(super::schema::ImportSpecifier::Default(local));
                 }
                 ImportSpecifier::Namespace(ns) => {
                     let local = ns.local.sym.to_string();
-                    dlog!("  - Namespace import: * as {}", local);
+                    dlog_data!("  - Namespace import: * as {}", local);
                     specifiers.push(super::schema::ImportSpecifier::Namespace(local));
                 }
             }
@@ -131,7 +131,7 @@ impl AstAnalyzer {
                 }
                 Decl::Fn(fn_decl) => {
                     let name = fn_decl.ident.sym.to_string();
-                    dlog!("Found function declaration: {}", name);
+                    dlog_info!("Found function declaration: {}", name);
                     self.exports.insert(name.clone(), ExportedItem::Function(
                         name,
                         Module {
@@ -157,7 +157,7 @@ impl AstAnalyzer {
             }
             Decl::Fn(fn_decl) => {
                 let name = fn_decl.ident.sym.to_string();
-                dlog!("Exporting function: {}", name);
+                dlog_info!("Exporting function: {}", name);
                 self.exports.insert(name.clone(), ExportedItem::Function(
                     fn_decl.ident.sym.to_string(),
                     Module {
@@ -168,7 +168,7 @@ impl AstAnalyzer {
                 ));
             }
             Decl::Class(class_decl) => {
-                dlog!("Found class export: {}", class_decl.ident.sym);
+                dlog_success!("Found class export: {}", class_decl.ident.sym);
             }
             _ => {}
         }
@@ -177,21 +177,21 @@ impl AstAnalyzer {
 
     fn analyze_named_export(&mut self, export: &NamedExport) -> Result<()> {
         if let Some(src) = &export.src {
-            dlog!("Re-export from: {}", src.value);
+            dlog_processing!("Re-export from: {}", src.value);
         }
         
         for spec in &export.specifiers {
             match spec {
                 ExportSpecifier::Named(named) => {
                     let orig = self.get_module_export_name(&named.orig);
-                    dlog!("Named export: {}", orig);
+                    dlog_processing!("Named export: {}", orig);
                 }
                 ExportSpecifier::Default(_) => {
-                    dlog!("Default re-export");
+                    dlog_processing!("Default re-export");
                 }
                 ExportSpecifier::Namespace(ns) => {
                     let name = self.get_module_export_name(&ns.name);
-                    dlog!("Namespace export: {}", name);
+                    dlog_processing!("Namespace export: {}", name);
                 }
             }
         }
@@ -201,20 +201,20 @@ impl AstAnalyzer {
     fn analyze_default_export(&mut self, export: &ExportDefaultDecl) -> Result<()> {
         match &export.decl {
             DefaultDecl::Class(class) => {
-                dlog!("Default export: class");
+                dlog_processing!("Default export: class");
             }
             DefaultDecl::Fn(func) => {
-                dlog!("Default export: function");
+                dlog_processing!("Default export: function");
             }
             DefaultDecl::TsInterfaceDecl(_) => {
-                dlog!("Default export: TypeScript interface");
+                dlog_processing!("Default export: TypeScript interface");
             }
         }
         Ok(())
     }
 
     fn analyze_default_expr_export(&mut self, export: &ExportDefaultExpr) -> Result<()> {
-        dlog!("Default expression export");
+        dlog_processing!("Default expression export");
         match &*export.expr {
             Expr::Object(obj) => {
                 self.exports.insert("default".to_string(), ExportedItem::Object(obj.clone()));
@@ -230,21 +230,21 @@ impl AstAnalyzer {
     fn analyze_var_declarator(&mut self, decl: &VarDeclarator) -> Result<()> {
         if let Pat::Ident(ident) = &decl.name {
             let name = ident.id.sym.to_string();
-            dlog!("Found variable declaration: {}", name);
+            dlog_processing!("Found variable declaration: {}", name);
             
             // Check for type annotation
             let type_annotation = self.extract_type_annotation(ident);
-            dlog!("  - Type annotation: {:?}", type_annotation);
+            dlog_processing!("  - Type annotation: {:?}", type_annotation);
             
             if let Some(init) = &decl.init {
                 match &**init {
                     Expr::Object(obj) => {
-                        dlog!("  - Object has {} properties", obj.props.len());
+                        dlog_processing!("  - Object has {} properties", obj.props.len());
                         for prop in &obj.props {
                             if let PropOrSpread::Prop(prop) = prop {
                                 if let Prop::KeyValue(kv) = &**prop {
                                     if let PropName::Ident(ident) = &kv.key {
-                                        dlog!("    - Property: {}", ident.sym);
+                                        dlog_processing!("    - Property: {}", ident.sym);
                                     }
                                 }
                             }
@@ -252,37 +252,37 @@ impl AstAnalyzer {
                         // Use type annotation to determine the type
                         match type_annotation.as_deref() {
                             Some("Block") => {
-                                dlog!("  - Detected as block config (type annotation)");
+                                dlog_processing!("  - Detected as block config (type annotation)");
                                 let block = self.extract_block_config(obj, &name)?;
                                 self.exports.insert(name, ExportedItem::Block(block));
                             }
                             Some(collection_type) if collection_type.starts_with("CollectionConfig") => {
-                                dlog!("  - Detected as collection config (type annotation)");
+                                dlog_processing!("  - Detected as collection config (type annotation)");
                                 self.extract_collection_config(obj)?;
                                 // Also add the variable to exports so it can be imported
                                 self.exports.insert(name, ExportedItem::Object(obj.clone()));
                             }
                             Some(field_type) if field_type.ends_with("Field") || field_type == "Field[]" || field_type == "Field" => {
-                                dlog!("  - Detected as field config (type annotation)");
+                                dlog_processing!("  - Detected as field config (type annotation)");
                                 self.exports.insert(name, ExportedItem::Object(obj.clone()));
                             }
                             _ => {
                                 // Fallback to property-based detection
                                 if self.is_block_config(obj) {
-                                    dlog!("  - Detected as block config (property-based)");
+                                    dlog_processing!("  - Detected as block config (property-based)");
                                     let block = self.extract_block_config(obj, &name)?;
                                     self.exports.insert(name, ExportedItem::Block(block));
                                 } else if self.is_collection_config(obj) {
-                                    dlog!("  - Detected as collection config (property-based)");
+                                    dlog_processing!("  - Detected as collection config (property-based)");
                                     self.extract_collection_config(obj)?;
                                     // Also add the variable to exports so it can be imported
                                     self.exports.insert(name, ExportedItem::Object(obj.clone()));
                                 } else if self.is_field_config(obj) {
-                                    dlog!("  - Detected as field config (property-based)");
+                                    dlog_processing!("  - Detected as field config (property-based)");
                                     self.extract_field_config(obj, &name)?;
                                     self.exports.insert(name, ExportedItem::Object(obj.clone()));
                                 } else {
-                                    dlog!("  - Not detected as block, collection, or field, adding as generic object");
+                                    dlog_processing!("  - Not detected as block, collection, or field, adding as generic object");
                                     self.exports.insert(name, ExportedItem::Object(obj.clone()));
                                 }
                             }
@@ -291,7 +291,7 @@ impl AstAnalyzer {
                     Expr::Array(arr) => {
                         let fields = self.extract_fields_from_array(arr)?;
                         if !fields.is_empty() {
-                            dlog!("  - Contains {} fields", fields.len());
+                            dlog_processing!("  - Contains {} fields", fields.len());
                             self.exports.insert(name, ExportedItem::Fields(fields));
                         }
                     }
@@ -307,7 +307,7 @@ impl AstAnalyzer {
 
     fn analyze_call_expression(&mut self, call: &CallExpr, export_name: Option<String>) -> Result<()> {
         let func_name = self.extract_call_name(call);
-        dlog!("Analyzing call to function: {}", func_name);
+        dlog_processing!("Analyzing call to function: {}", func_name);
         
         // Handle common Payload field functions
         if func_name == "slugField" {
@@ -436,7 +436,7 @@ impl AstAnalyzer {
     }
 
     fn extract_field_config(&mut self, obj: &ObjectLit, name: &str) -> Result<()> {
-        dlog!("Extracting field config for: {}", name);
+        dlog_processing!("Extracting field config for: {}", name);
         
         // Extract the field type
         let mut field_type = String::new();
@@ -448,7 +448,7 @@ impl AstAnalyzer {
                             if let Expr::Lit(lit) = &*kv.value {
                                 if let Lit::Str(str_lit) = &lit {
                                     field_type = str_lit.value.to_string();
-                                    dlog!("  - Found field type: {}", field_type);
+                                    dlog_processing!("  - Found field type: {}", field_type);
                                 }
                             }
                         }
@@ -465,7 +465,7 @@ impl AstAnalyzer {
                         if let PropName::Ident(ident) = &kv.key {
                             if ident.sym == "fields" {
                                 if let Expr::Array(arr) = &*kv.value {
-                                    dlog!("  - Extracting fields from group field: {}", name);
+                                    dlog_processing!("  - Extracting fields from group field: {}", name);
                                     let group_fields = self.extract_fields_from_array(arr)?;
                                     // Add the group field itself
                                     self.fields.push(FieldDefinition {
@@ -490,7 +490,7 @@ impl AstAnalyzer {
             }
         } else {
             // For non-group fields, just add the field definition
-            dlog!("  - Adding field definition for: {}", name);
+            dlog_processing!("  - Adding field definition for: {}", name);
             let field_type_enum = match field_type.as_str() {
                 "text" => FieldType::Text { min_length: None, max_length: None },
                 "number" => FieldType::Number { min: None, max: None },
@@ -521,7 +521,7 @@ impl AstAnalyzer {
     }
 
     fn extract_collection_config(&mut self, obj: &ObjectLit) -> Result<()> {
-        dlog!("Extracting collection config");
+        dlog_processing!("Extracting collection config");
         for prop in &obj.props {
             if let PropOrSpread::Prop(prop) = prop {
                 if let Prop::KeyValue(kv) = &**prop {
@@ -529,18 +529,18 @@ impl AstAnalyzer {
                         match ident.sym.as_ref() {
                             "fields" => {
                                 if let Expr::Array(arr) = &*kv.value {
-                                    dlog!("  - Extracting fields array");
+                                    dlog_processing!("  - Extracting fields array");
                                     self.fields = self.extract_fields_from_array(arr)?;
                                 }
                             }
                             "slug" => {
-                                dlog!("  - Found collection slug");
+                                dlog_processing!("  - Found collection slug");
                             }
                             "hooks" => {
-                                dlog!("  - Found hooks configuration");
+                                dlog_processing!("  - Found hooks configuration");
                             }
                             "access" => {
-                                dlog!("  - Found access configuration");
+                                dlog_processing!("  - Found access configuration");
                             }
                             _ => {}
                         }
@@ -552,7 +552,7 @@ impl AstAnalyzer {
     }
 
     fn extract_block_config(&self, obj: &ObjectLit, name: &str) -> Result<BlockDefinition> {
-        dlog!("Extracting block config for: {}", name);
+        dlog_processing!("Extracting block config for: {}", name);
         let mut slug = name.to_lowercase();
         let mut fields = Vec::new();
         let mut labels = BlockLabels {
@@ -569,19 +569,19 @@ impl AstAnalyzer {
                                 if let Expr::Lit(lit) = &*kv.value {
                                     if let Lit::Str(str_lit) = &lit {
                                         slug = str_lit.value.to_string();
-                                        dlog!("  - Found block slug: {}", slug);
+                                        dlog_processing!("  - Found block slug: {}", slug);
                                     }
                                 }
                             }
                             "fields" => {
                                 if let Expr::Array(arr) = &*kv.value {
-                                    dlog!("  - Extracting fields array");
+                                    dlog_processing!("  - Extracting fields array");
                                     fields = self.extract_fields_from_array(arr)?;
                                 }
                             }
                             "labels" => {
                                 if let Expr::Object(labels_obj) = &*kv.value {
-                                    dlog!("  - Extracting labels");
+                                    dlog_processing!("  - Extracting labels");
                                     for label_prop in &labels_obj.props {
                                         if let PropOrSpread::Prop(label_prop) = label_prop {
                                             if let Prop::KeyValue(label_kv) = &**label_prop {
@@ -608,7 +608,7 @@ impl AstAnalyzer {
             }
         }
         
-        dlog!("  - Extracted block: {} with {} fields", slug, fields.len());
+        dlog_processing!("  - Extracted block: {} with {} fields", slug, fields.len());
         Ok(BlockDefinition {
             slug,
             fields,
@@ -618,7 +618,7 @@ impl AstAnalyzer {
 
     fn extract_fields_from_array(&self, arr: &ArrayLit) -> Result<Vec<FieldDefinition>> {
         let mut fields = Vec::new();
-        dlog!("Extracting fields from array with {} elements", arr.elems.len());
+        dlog_processing!("Extracting fields from array with {} elements", arr.elems.len());
         
         for (i, elem) in arr.elems.iter().enumerate() {
             match elem {
@@ -628,7 +628,7 @@ impl AstAnalyzer {
                         match &*elem.expr {
                             Expr::Call(call) => {
                                 let func_name = self.extract_call_name(call);
-                                dlog!("  - Spread call {}: ...{}()", i, func_name);
+                                dlog_processing!("  - Spread call {}: ...{}()", i, func_name);
                                 fields.push(FieldDefinition {
                                     name: format!("__spread__call__{}", func_name),
                                     field_type: FieldType::Text { min_length: None, max_length: None },
@@ -640,7 +640,7 @@ impl AstAnalyzer {
                                 });
                             }
                             Expr::Ident(ident) => {
-                                dlog!("  - Spread {}: ...{}", i, ident.sym);
+                                dlog_processing!("  - Spread {}: ...{}", i, ident.sym);
                                 fields.push(FieldDefinition {
                                     name: format!("__spread__{}", ident.sym),
                                     field_type: FieldType::Text { min_length: None, max_length: None },
@@ -658,12 +658,12 @@ impl AstAnalyzer {
                         match &*elem.expr {
                             Expr::Object(obj) => {
                                 if let Some(field) = self.extract_field_from_object(obj)? {
-                                    dlog!("  - Field {}: {}", i, field.name);
+                                    dlog_processing!("  - Field {}: {}", i, field.name);
                                     fields.push(field);
                                 }
                             }
                             Expr::Ident(ident) => {
-                                dlog!("  - Reference {}: {}", i, ident.sym);
+                                dlog_processing!("  - Reference {}: {}", i, ident.sym);
                                 fields.push(FieldDefinition {
                                     name: format!("__ref__{}", ident.sym),
                                     field_type: FieldType::Text { min_length: None, max_length: None },
@@ -908,7 +908,7 @@ impl AstAnalyzer {
             "json" => FieldType::Json,
             "point" => FieldType::Point,
             _ => {
-                dlog!("Unknown field type: {}", type_str);
+                dlog_processing!("Unknown field type: {}", type_str);
                 FieldType::Text { min_length: None, max_length: None }
             }
         };

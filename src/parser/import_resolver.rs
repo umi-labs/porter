@@ -12,7 +12,7 @@ use swc_common::{sync::Lrc, FileName, SourceMap};
 use swc_core::ecma::ast::*;
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax, TsConfig};
 use dashmap::DashMap;
-use crate::dlog;
+use crate::{dlog, dlog_info, dlog_success, dlog_warning, dlog_error, dlog_step, dlog_data, dlog_file, dlog_processing, dlog_result};
 
 pub struct ImportResolver {
     source_map: Lrc<SourceMap>,
@@ -35,41 +35,41 @@ impl ImportResolver {
         
         // Load TypeScript configuration from the migration config file
         if let Some(config) = ts_config {
-            dlog!("Loading TypeScript config with path mappings");
+            dlog_processing!("Loading TypeScript config with path mappings");
             
             if let Some(mappings) = &config.path_mappings {
-                dlog!("Found {} path mappings", mappings.len());
+                dlog_data!("Found {} path mappings", mappings.len());
                 
                 for mapping in mappings {
                     let paths: Vec<PathBuf> = mapping.paths.iter()
                         .map(|p| {
                             let clean_path = p.trim_end_matches("/*").trim_end_matches('*');
                             if clean_path.starts_with("./") {
-                                dlog!("  Starting with ./, using as-is: {}", clean_path);
+                                dlog_file!("  Starting with ./, using as-is: {}", clean_path);
                                 PathBuf::from(clean_path)
                             } else if clean_path.starts_with("/") {
-                                dlog!("  Starting with /, using as-is: {}", clean_path);
+                                dlog_file!("  Starting with /, using as-is: {}", clean_path);
                                 PathBuf::from(clean_path)
                             } else {
-                                dlog!("  Relative path, using as-is: {}", clean_path);
+                dlog_file!("  Relative path, using as-is: {}", clean_path);
                                 PathBuf::from(clean_path)
                             }
                         })
                         .collect();
 
-                    dlog!("  Paths: {:?}", paths);
+                    dlog_data!("  Paths: {:?}", paths);
                     
                     let clean_alias = mapping.alias.trim_end_matches("/*").to_string();
-                    dlog!("  Alias '{}' -> {:?}", clean_alias, paths);
+                    dlog_data!("  Alias '{}' -> {:?}", clean_alias, paths);
                     alias_map.insert(clean_alias, paths);
                 }
             } else {
-                dlog!("No path mappings found, using defaults");
+                dlog_info!("No path mappings found, using defaults");
                 // Default aliases if no mappings provided
                 alias_map.insert("@/".to_string(), vec![base_dir.join("src")]);
             }
         } else {
-            dlog!("No TypeScript config provided, using default aliases");
+            dlog_info!("No TypeScript config provided, using default aliases");
             // Default aliases if no config provided
             alias_map.insert("@/".to_string(), vec![base_dir.join("src")]);
         }
@@ -84,7 +84,7 @@ impl ImportResolver {
     }
 
     pub fn resolve_imports(&mut self, schema: &mut CollectionSchema, file_path: &Path) -> Result<()> {
-        dlog!("Resolving imports for: {:?}", file_path);
+        dlog_processing!("Resolving imports for: {:?}", file_path);
         
         // Check for circular dependencies
         if self.resolution_stack.contains(&file_path.to_path_buf()) {
@@ -99,15 +99,15 @@ impl ImportResolver {
         self.resolution_stack.push(file_path.to_path_buf());
         
         let imports = schema.imports.clone();
-        dlog!("Processing {} imports", imports.len());
+        dlog_data!("Processing {} imports", imports.len());
         
         for mut import in imports {
-            dlog!("Resolving import: {}", import.source);
+            dlog_processing!("Resolving import: {}", import.source);
             
             // Resolve the import path
             match self.resolve_import_path(&import.source, file_path) {
                 Ok(resolved) => {
-                    dlog!("  Resolved to: {:?}", resolved);
+                    dlog_success!("  Resolved to: {:?}", resolved);
                     import.resolved_path = Some(resolved.clone());
                     
                     // Parse the imported file
@@ -117,28 +117,28 @@ impl ImportResolver {
                             for specifier in &import.specifiers {
                                 match specifier {
                                     ImportSpecifier::Named { imported, local } => {
-                                        dlog!("  Merging named import: {} as {}", imported, local);
+                                        dlog_processing!("  Merging named import: {} as {}", imported, local);
                                         self.merge_named_import(schema, &parsed, imported, local)?;
                                     }
                                     ImportSpecifier::Default(local) => {
-                                        dlog!("  Merging default import: {}", local);
+                                        dlog_processing!("  Merging default import: {}", local);
                                         self.merge_default_import(schema, &parsed, local)?;
                                     }
                                     ImportSpecifier::Namespace(local) => {
-                                        dlog!("  Merging namespace import: * as {}", local);
+                                        dlog_processing!("  Merging namespace import: * as {}", local);
                                         self.merge_namespace_import(schema, &parsed, local)?;
                                     }
                                 }
                             }
                         }
                         Err(e) => {
-                            dlog!("  Failed to parse imported file: {}", e);
+                            dlog_error!("  Failed to parse imported file: {}", e);
                             // Continue with other imports
                         }
                     }
                 }
                 Err(e) => {
-                    dlog!("  Failed to resolve import path: {}", e);
+                    dlog_error!("  Failed to resolve import path: {}", e);
                     // Continue with other imports
                 }
             }
@@ -152,11 +152,11 @@ impl ImportResolver {
     }
 
     pub fn parse_file(&mut self, file_path: &Path) -> Result<ParsedFile> {
-        dlog!("Parsing file: {:?}", file_path);
+        dlog_file!("Parsing file: {:?}", file_path);
         
         // Check cache
         if let Some(cached) = self.cache.get(file_path) {
-            dlog!("  Using cached version");
+            dlog_info!("  Using cached version");
             return Ok(ParsedFile {
                 module: cached.module.clone(),
                 analyzer: cached.analyzer.clone(),
@@ -170,7 +170,7 @@ impl ImportResolver {
                 source: e,
             })?;
 
-        dlog!("  File size: {} bytes", content.len());
+        dlog_data!("  File size: {} bytes", content.len());
 
         let fm = self.source_map.new_source_file(
             FileName::Real(file_path.to_path_buf()),
@@ -205,13 +205,13 @@ impl ImportResolver {
         };
         
         self.cache.insert(file_path.to_path_buf(), parsed.clone());
-        dlog!("  Successfully parsed and cached");
+        dlog_success!("  Successfully parsed and cached");
         
         Ok(parsed)
     }
 
     pub fn resolve_import_path(&self, import_path: &str, from_file: &Path) -> Result<PathBuf> {
-        dlog!("Resolving import path: {} from {:?}", import_path, from_file);
+        dlog_processing!("Resolving import path: {} from {:?}", import_path, from_file);
         
         // Handle different import types
         let resolved = if import_path.starts_with('@') {
@@ -240,7 +240,7 @@ impl ImportResolver {
     }
 
     fn resolve_alias_import(&self, import_path: &str) -> Result<PathBuf> {
-        dlog!("Resolving alias import: {}", import_path);
+        dlog_processing!("Resolving alias import: {}", import_path);
         
         // Try each alias - prioritize longer matches first
         let mut sorted_aliases: Vec<_> = self.alias_map.keys().collect();
@@ -248,16 +248,16 @@ impl ImportResolver {
         
         for alias in sorted_aliases {
             let base_paths = &self.alias_map[alias];
-            dlog!("  Base paths for alias '{}': {:?}", alias, base_paths);
+            dlog_data!("  Base paths for alias '{}': {:?}", alias, base_paths);
             
             // Check if this import matches the alias
             let remainder = if alias.ends_with('/') {
                 // Alias ends with /, so we need exact prefix match
                 if import_path.starts_with(alias) {
-                    dlog!("  Remainder: {}, using alias: {}", import_path, alias);
+                    dlog_data!("  Remainder: {}, using alias: {}", import_path, alias);
                     import_path.strip_prefix(alias).unwrap_or("")
                 } else {
-                    dlog!("  No match, continuing");
+                    dlog_info!("  No match, continuing");
                     continue;
                 }
             } else {
@@ -265,40 +265,40 @@ impl ImportResolver {
                 // 1. Exact match: import_path == alias
                 // 2. Followed by /: import_path starts with alias + "/"
                 if import_path == alias {
-                    dlog!("  Remainder: {}, using alias: {}", import_path, alias);
+                    dlog_data!("  Remainder: {}, using alias: {}", import_path, alias);
                     ""
                 } else if import_path.starts_with(&format!("{}/", alias)) {
-                    dlog!("  Remainder: {}, using alias: {}", import_path, alias);
+                    dlog_data!("  Remainder: {}, using alias: {}", import_path, alias);
                     &import_path[alias.len() + 1..]
                 } else {
-                    dlog!("  No match, continuing");
+                    dlog_info!("  No match, continuing");
                     continue;
                 }
             };
             
-            dlog!("  Matched alias '{}', remainder: '{}'", alias, remainder);
+            dlog_data!("  Matched alias '{}', remainder: '{}'", alias, remainder);
             
             // Try each base path for this alias
             for base_path in base_paths {
                 let full_path = if remainder.is_empty() {
-                    dlog!("  No remainder, using base path: {:?}", base_path);
+                    dlog_file!("  No remainder, using base path: {:?}", base_path);
                     base_path.clone()
                 } else {
-                    dlog!("  Remainder: {}, using base path: {:?}", remainder, base_path);
+                    dlog_file!("  Remainder: {}, using base path: {:?}", remainder, base_path);
                     base_path.join(remainder)
                 };
                 
-                dlog!("  Trying base path: {:?}", full_path);
+                dlog_file!("  Trying base path: {:?}", full_path);
                 
                 // Check if this path exists (with various extensions)
                 if let Ok(resolved) = self.find_actual_file(full_path.clone()) {
-                    dlog!("  Found actual file: {:?}", resolved);
+                    dlog_success!("  Found actual file: {:?}", resolved);
                     return Ok(resolved);
                 }
             }
         }
         
-        dlog!("  No valid file found for import: {}", import_path);
+        dlog_error!("  No valid file found for import: {}", import_path);
         Err(SchemaParseError::UnresolvedImport {
             import: import_path.to_string(),
             file: "unknown".to_string(),
@@ -310,7 +310,7 @@ impl ImportResolver {
         if base_path.exists() {
             // Check if it's a directory
             if base_path.is_dir() {
-                dlog!("  Found directory: {:?}, looking for index files", base_path);
+                dlog_file!("  Found directory: {:?}, looking for index files", base_path);
                 // Try to find index files in the directory
                 let index_variations = vec![
                     base_path.join("index.ts"),
@@ -321,18 +321,18 @@ impl ImportResolver {
                 
                 for path in &index_variations {
                     if path.exists() {
-                        dlog!("  Found index file: {:?}", path);
+                        dlog_success!("  Found index file: {:?}", path);
                         return Ok(path.clone());
                     }
                 }
                 
-                dlog!("  No index file found in directory: {:?}", base_path);
+                dlog_error!("  No index file found in directory: {:?}", base_path);
                 return Err(SchemaParseError::UnresolvedImport {
                     import: base_path.display().to_string(),
                     file: "filesystem".to_string(),
                 });
             } else {
-                dlog!("  Found exact match: {:?}", base_path);
+                dlog_success!("  Found exact match: {:?}", base_path);
                 return Ok(base_path);
             }
         }
@@ -353,12 +353,12 @@ impl ImportResolver {
         
         for path in &variations {
             if path.exists() {
-                dlog!("  Found with variation: {:?}", path);
+                dlog_success!("  Found with variation: {:?}", path);
                 return Ok(path.clone());
             }
         }
         
-        dlog!("  No valid file found for: {:?}", base_path);
+        dlog_error!("  No valid file found for: {:?}", base_path);
         Err(SchemaParseError::UnresolvedImport {
             import: base_path.display().to_string(),
             file: "filesystem".to_string(),
@@ -367,14 +367,14 @@ impl ImportResolver {
 
     fn merge_named_import(&self, schema: &mut CollectionSchema, parsed: &ParsedFile, imported: &str, local: &str) -> Result<()> {
         if let Some(export) = parsed.exports.get(imported) {
-            dlog!("Found export '{}' to merge as '{}'", imported, local);
+            dlog_processing!("Found export '{}' to merge as '{}'", imported, local);
             
             match export {
                 ExportedItem::Field(field) => {
                     // Replace reference with actual field
                     for field_mut in &mut schema.fields {
                         if field_mut.name == format!("__ref__{}", local) {
-                            dlog!("  Replacing field reference with actual field");
+                            dlog_processing!("  Replacing field reference with actual field");
                             *field_mut = field.clone();
                         }
                     }
@@ -384,7 +384,7 @@ impl ImportResolver {
                     let mut new_fields = Vec::new();
                     for field in &schema.fields {
                         if field.name == format!("__spread__{}", local) {
-                            dlog!("  Replacing spread with {} fields", fields.len());
+                            dlog_processing!("  Replacing spread with {} fields", fields.len());
                             new_fields.extend(fields.clone());
                         } else {
                             new_fields.push(field.clone());
@@ -393,13 +393,13 @@ impl ImportResolver {
                     schema.fields = new_fields;
                 }
                 ExportedItem::Block(block) => {
-                    dlog!("  Adding block: {}", block.slug);
+                    dlog_processing!("  Adding block: {}", block.slug);
                     schema.blocks.insert(block.slug.clone(), block.clone());
                 }
                 _ => {}
             }
         } else {
-            dlog!("Export '{}' not found in parsed file", imported);
+            dlog_processing!("Export '{}' not found in parsed file", imported);
         }
         
         Ok(())
@@ -407,13 +407,13 @@ impl ImportResolver {
 
     fn merge_default_import(&self, schema: &mut CollectionSchema, parsed: &ParsedFile, local: &str) -> Result<()> {
         if let Some(export) = parsed.exports.get("default") {
-            dlog!("Found default export to merge as '{}'", local);
+            dlog_processing!("Found default export to merge as '{}'", local);
             
             match export {
                 ExportedItem::Field(field) => {
                     for field_mut in &mut schema.fields {
                         if field_mut.name == format!("__ref__{}", local) {
-                            dlog!("  Replacing field reference with default export");
+                            dlog_processing!("  Replacing field reference with default export");
                             *field_mut = field.clone();
                         }
                     }
@@ -422,7 +422,7 @@ impl ImportResolver {
                     let mut new_fields = Vec::new();
                     for field in &schema.fields {
                         if field.name == format!("__spread__{}", local) {
-                            dlog!("  Replacing spread with {} default fields", fields.len());
+                            dlog_processing!("  Replacing spread with {} default fields", fields.len());
                             new_fields.extend(fields.clone());
                         } else {
                             new_fields.push(field.clone());
@@ -438,24 +438,24 @@ impl ImportResolver {
     }
 
     fn merge_namespace_import(&self, schema: &mut CollectionSchema, parsed: &ParsedFile, local: &str) -> Result<()> {
-        dlog!("Namespace import '{}' - currently not fully implemented", local);
+        dlog_processing!("Namespace import '{}' - currently not fully implemented", local);
         // TODO: Handle namespace imports if needed
         // This would involve making all exports available under the namespace
         Ok(())
     }
 
     fn resolve_field_references(&self, schema: &mut CollectionSchema) -> Result<()> {
-        dlog!("Resolving field references and spread calls");
+        dlog_processing!("Resolving field references and spread calls");
         let mut resolved_fields = Vec::new();
         
         for field in &schema.fields {
             if field.name.starts_with("__spread__call__") {
                 let func_name = field.name.strip_prefix("__spread__call__").unwrap();
-                dlog!("  Processing spread call: {}()", func_name);
+                dlog_processing!("  Processing spread call: {}()", func_name);
                 
                 // Handle common Payload field functions
                 if func_name == "slugField" {
-                    dlog!("    Expanding slugField()");
+                    dlog_processing!("    Expanding slugField()");
                     resolved_fields.push(FieldDefinition {
                         name: "slug".to_string(),
                         field_type: FieldType::Text { min_length: None, max_length: None },
@@ -472,19 +472,19 @@ impl ImportResolver {
                     });
                 } else {
                     // Keep unresolved references for now
-                    dlog!("    Unknown function, keeping as-is");
+                    dlog_processing!("    Unknown function, keeping as-is");
                     resolved_fields.push(field.clone());
                 }
             } else if !field.name.starts_with("__") {
                 // Normal field
                 resolved_fields.push(field.clone());
             } else {
-                dlog!("  Skipping unresolved reference: {}", field.name);
+                dlog_processing!("  Skipping unresolved reference: {}", field.name);
             }
         }
         
         schema.fields = resolved_fields;
-        dlog!("Resolved to {} fields", schema.fields.len());
+        dlog_processing!("Resolved to {} fields", schema.fields.len());
         Ok(())
     }
 }
