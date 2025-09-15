@@ -264,6 +264,12 @@ async fn main() -> Result<()> {
                 explain_migration_process(&config);
                 return Ok(());
             }
+            Commands::Upgrade { force } => {
+                println!("{}", "⬆️  Upgrading Porter".cyan().bold());
+                dlog!("Upgrade command invoked with force={}", force);
+                upgrade_porter(force).await?;
+                return Ok(());
+            }
         }
     }
 
@@ -889,4 +895,105 @@ fn explain_umbraco_migration(_config: &PorterConfig) {
     println!("   • Applies field mappings");
     println!("   • Generates Payload seed files");
     println!();
+}
+
+async fn upgrade_porter(force: bool) -> Result<()> {
+    use std::process::Command;
+    
+    println!("{}", "Checking for Porter updates...".cyan());
+    
+    // First, update Homebrew
+    println!("{}", "Updating Homebrew...".yellow());
+    let update_result = Command::new("brew")
+        .arg("update")
+        .output();
+    
+    match update_result {
+        Ok(output) => {
+            if !output.status.success() {
+                let error = String::from_utf8_lossy(&output.stderr);
+                return Err(anyhow!("Failed to update Homebrew: {}", error));
+            }
+            println!("{}", "✅ Homebrew updated successfully".green());
+        }
+        Err(e) => {
+            return Err(anyhow!("Failed to run 'brew update': {}. Make sure Homebrew is installed.", e));
+        }
+    }
+    
+    // Check current version
+    let current_version = env!("CARGO_PKG_VERSION");
+    println!("{}", format!("Current version: {}", current_version).cyan());
+    
+    // Check if there's a newer version available
+    let outdated_result = Command::new("brew")
+        .arg("outdated")
+        .arg("porter")
+        .output();
+    
+    let has_updates = match outdated_result {
+        Ok(output) => {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                !stdout.trim().is_empty()
+            } else {
+                // If brew outdated fails, assume no updates (might be a network issue)
+                false
+            }
+        }
+        Err(_) => false,
+    };
+    
+    if !has_updates && !force {
+        println!("{}", "✅ Porter is already up to date!".green());
+        println!("{}", "Use --force to upgrade anyway".yellow());
+        return Ok(());
+    }
+    
+    if has_updates {
+        println!("{}", "🔄 New version available! Upgrading...".yellow());
+    } else if force {
+        println!("{}", "🔄 Force upgrading...".yellow());
+    }
+    
+    // Perform the upgrade
+    let upgrade_result = Command::new("brew")
+        .arg("upgrade")
+        .arg("porter")
+        .output();
+    
+    match upgrade_result {
+        Ok(output) => {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                println!("{}", "✅ Porter upgraded successfully!".green());
+                
+                if !stdout.trim().is_empty() {
+                    println!();
+                    println!("{}", "Upgrade output:".cyan());
+                    println!("{}", stdout);
+                }
+                
+                // Show new version
+                let version_result = Command::new("porter")
+                    .arg("--version")
+                    .output();
+                
+                if let Ok(version_output) = version_result {
+                    if version_output.status.success() {
+                        let version = String::from_utf8_lossy(&version_output.stdout);
+                        println!("{}", format!("New version: {}", version.trim()).green());
+                    }
+                }
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(anyhow!("Failed to upgrade Porter: {}", stderr));
+            }
+        }
+        Err(e) => {
+            return Err(anyhow!("Failed to run 'brew upgrade porter': {}. Make sure Porter is installed via Homebrew.", e));
+        }
+    }
+    
+    Ok(())
 }
