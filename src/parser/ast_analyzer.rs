@@ -279,6 +279,7 @@ impl AstAnalyzer {
                                     self.exports.insert(name, ExportedItem::Object(obj.clone()));
                                 } else if self.is_field_config(obj) {
                                     dlog!("  - Detected as field config (property-based)");
+                                    self.extract_field_config(obj, &name)?;
                                     self.exports.insert(name, ExportedItem::Object(obj.clone()));
                                 } else {
                                     dlog!("  - Not detected as block, collection, or field, adding as generic object");
@@ -432,6 +433,91 @@ impl AstAnalyzer {
         
         // Field configs have name and type (like group fields, array fields, etc.)
         has_name && has_type
+    }
+
+    fn extract_field_config(&mut self, obj: &ObjectLit, name: &str) -> Result<()> {
+        dlog!("Extracting field config for: {}", name);
+        
+        // Extract the field type
+        let mut field_type = String::new();
+        for prop in &obj.props {
+            if let PropOrSpread::Prop(prop) = prop {
+                if let Prop::KeyValue(kv) = &**prop {
+                    if let PropName::Ident(ident) = &kv.key {
+                        if ident.sym == "type" {
+                            if let Expr::Lit(lit) = &*kv.value {
+                                if let Lit::Str(str_lit) = &lit {
+                                    field_type = str_lit.value.to_string();
+                                    dlog!("  - Found field type: {}", field_type);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // If this is a group field, extract its nested fields
+        if field_type == "group" {
+            for prop in &obj.props {
+                if let PropOrSpread::Prop(prop) = prop {
+                    if let Prop::KeyValue(kv) = &**prop {
+                        if let PropName::Ident(ident) = &kv.key {
+                            if ident.sym == "fields" {
+                                if let Expr::Array(arr) = &*kv.value {
+                                    dlog!("  - Extracting fields from group field: {}", name);
+                                    let group_fields = self.extract_fields_from_array(arr)?;
+                                    // Add the group field itself
+                                    self.fields.push(FieldDefinition {
+                                        name: name.to_string(),
+                                        field_type: FieldType::Group { fields: Vec::new() },
+                                        required: false, // Default, could be extracted from properties
+                                        default_value: None,
+                                        label: None,
+                                        admin: None,
+                                        source_location: SourceLocation::default(),
+                                    });
+                                    // Add the nested fields with the group name as prefix
+                                    for mut field in group_fields {
+                                        field.name = format!("{}.{}", name, field.name);
+                                        self.fields.push(field);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // For non-group fields, just add the field definition
+            dlog!("  - Adding field definition for: {}", name);
+            let field_type_enum = match field_type.as_str() {
+                "text" => FieldType::Text { min_length: None, max_length: None },
+                "number" => FieldType::Number { min: None, max: None },
+                "date" => FieldType::Date { admin: None },
+                "checkbox" => FieldType::Checkbox,
+                "select" => FieldType::Select { options: Vec::new() },
+                "relationship" => FieldType::Relationship { relationTo: String::new() },
+                "array" => FieldType::Array { fields: Vec::new() },
+                "blocks" => FieldType::Blocks { blocks: Vec::new() },
+                "upload" => FieldType::Upload { relationTo: String::new() },
+                "richText" => FieldType::RichText,
+                "json" => FieldType::Json,
+                "point" => FieldType::Point,
+                _ => FieldType::Text { min_length: None, max_length: None }, // Default fallback
+            };
+            self.fields.push(FieldDefinition {
+                name: name.to_string(),
+                field_type: field_type_enum,
+                required: false, // Default, could be extracted from properties
+                default_value: None,
+                label: None,
+                admin: None,
+                source_location: SourceLocation::default(),
+            });
+        }
+        
+        Ok(())
     }
 
     fn extract_collection_config(&mut self, obj: &ObjectLit) -> Result<()> {
