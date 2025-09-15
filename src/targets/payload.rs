@@ -401,6 +401,7 @@ impl TargetWriter for PayloadTarget {
                     buf.push_str(": () => RequiredDataFromCollectionSlug<'");
                     buf.push_str(collection);
                     buf.push_str("'> = () => {\nreturn ");
+                    buf.push_str("'_status: 'published', ");
                     buf.push_str(
                         &serde_json::to_string_pretty(&processed_doc)
                             .context("Failed to serialize processed document")?,
