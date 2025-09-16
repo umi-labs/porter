@@ -530,7 +530,8 @@ impl AstAnalyzer {
                             "fields" => {
                                 if let Expr::Array(arr) = &*kv.value {
                                     dlog_processing!("  - Extracting fields array");
-                                    self.fields = self.extract_fields_from_array(arr)?;
+                                    let mut new_fields = self.extract_fields_from_array(arr)?;
+                                    self.fields.append(&mut new_fields);
                                 }
                             }
                             "slug" => {

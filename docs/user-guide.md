@@ -20,9 +20,12 @@ Welcome to Porter! This guide will help you get started with migrating content b
 
 ```bash
 # Install Porter
-brew install porter
+brew install umi-labs/tap/porter
 
-# Update Porter to the latest version
+# Update Porter to the latest version (recommended)
+porter upgrade
+
+# Or manually update via Homebrew
 brew update
 brew upgrade porter
 
@@ -35,11 +38,15 @@ porter --version
 #### Homebrew Users
 
 ```bash
-# Check if updates are available
+# Use Porter's built-in upgrade command (recommended)
+porter upgrade
+
+# Or check manually if updates are available
 brew outdated
 
-# Check Porter specifically
+# Check Porter specifically (try both variants)
 brew outdated porter
+brew outdated umi-labs/tap/porter
 
 # See what would be updated
 brew upgrade --dry-run porter
@@ -146,9 +153,15 @@ cargo install --path .
 #### Homebrew Users
 
 ```bash
-# Update Homebrew and Porter
+# Use Porter's built-in upgrade command (recommended)
+porter upgrade
+
+# Or update manually via Homebrew
 brew update
 brew upgrade porter
+
+# Force upgrade even if Porter thinks it's up to date
+porter upgrade --force
 
 # Verify the update
 porter --version
@@ -192,19 +205,42 @@ cargo build --release
 If you encounter issues updating via Homebrew:
 
 ```bash
+# Use Porter's built-in upgrade command first
+porter upgrade
+
+# If that doesn't work, try forcing the upgrade
+porter upgrade --force
+
 # Clean Homebrew cache
 brew cleanup
 
 # Update Homebrew itself
 brew update
 
-# Try upgrading again
+# Try upgrading manually
 brew upgrade porter
+# or if installed from tap:
+brew upgrade umi-labs/tap/porter
 
 # If still having issues, try uninstalling and reinstalling
 brew uninstall porter
 brew install umi-labs/tap/porter
 ```
+
+#### Porter Upgrade Command Not Detecting Updates
+
+If `porter upgrade` says "Porter is already up to date" but `brew outdated` shows updates available:
+
+```bash
+# Force the upgrade
+porter upgrade --force
+
+# Or update manually via Homebrew
+brew update
+brew upgrade umi-labs/tap/porter
+```
+
+This issue has been fixed in recent versions, but if you're running an older version of Porter, the upgrade detection might not work correctly.
 
 #### Manual Installation Issues
 

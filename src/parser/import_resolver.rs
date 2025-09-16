@@ -401,13 +401,28 @@ impl ImportResolver {
                     if self.is_field_config_object(obj) {
                         dlog_processing!("  Found field config object, extracting fields");
                         if let Ok(field_def) = self.extract_field_from_object(obj, local) {
+                            let target_ref = format!("__ref__{}", local);
+                            dlog_processing!("  Looking for field reference: {}", target_ref);
+                            dlog_processing!("  Current schema has {} fields", schema.fields.len());
+                            
+                            // Debug: list all current field names
+                            for (i, field) in schema.fields.iter().enumerate() {
+                                dlog_processing!("    Field {}: {}", i, field.name);
+                            }
+                            
                             // Replace field reference with the extracted field
+                            let mut found = false;
                             for field_mut in &mut schema.fields {
-                                if field_mut.name == format!("__ref__{}", local) {
-                                    dlog_processing!("  Replacing field reference with extracted field config");
+                                if field_mut.name == target_ref {
+                                    dlog_processing!("  ✅ Replacing field reference with extracted field config");
                                     *field_mut = field_def.clone();
+                                    found = true;
                                     break;
                                 }
+                            }
+                            
+                            if !found {
+                                dlog_processing!("  ❌ Field reference '{}' not found in schema fields", target_ref);
                             }
                         }
                     } else {

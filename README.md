@@ -94,7 +94,7 @@ cargo build --release
 brew install umi-labs/tap/porter
 
 # Update to latest version
-brew update && brew upgrade porter
+porter upgrade
 
 # Verify installation
 porter --version
