@@ -926,22 +926,54 @@ async fn upgrade_porter(force: bool) -> Result<()> {
     println!("{}", format!("Current version: {}", current_version).cyan());
     
     // Check if there's a newer version available
-    let outdated_result = Command::new("brew")
+    // Try both the tap name and just "porter" to handle different installation methods
+    let outdated_result_tap = Command::new("brew")
+        .arg("outdated")
+        .arg("umi-labs/tap/porter")
+        .output();
+    
+    let outdated_result_direct = Command::new("brew")
         .arg("outdated")
         .arg("porter")
         .output();
     
-    let has_updates = match outdated_result {
-        Ok(output) => {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                !stdout.trim().is_empty()
-            } else {
-                // If brew outdated fails, assume no updates (might be a network issue)
-                false
+    let has_updates = match (outdated_result_tap, outdated_result_direct) {
+        (Ok(output), _) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            !stdout.trim().is_empty()
+        }
+        (_, Ok(output)) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            !stdout.trim().is_empty()
+        }
+        _ => {
+            // If both commands fail, try a different approach - check brew list
+            let list_result = Command::new("brew")
+                .arg("list")
+                .arg("--versions")
+                .output();
+            
+            match list_result {
+                Ok(output) if output.status.success() => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    // Look for porter in the output and check if there's a version mismatch
+                    stdout.lines()
+                        .find(|line| line.starts_with("porter ") || line.contains("/porter "))
+                        .map(|line| {
+                            // Extract installed version from brew list output
+                            let parts: Vec<&str> = line.split_whitespace().collect();
+                            if parts.len() >= 2 {
+                                let installed_version = parts[1];
+                                installed_version != current_version
+                            } else {
+                                false
+                            }
+                        })
+                        .unwrap_or(false)
+                }
+                _ => false,
             }
         }
-        Err(_) => false,
     };
     
     if !has_updates && !force {
@@ -957,10 +989,22 @@ async fn upgrade_porter(force: bool) -> Result<()> {
     }
     
     // Perform the upgrade
+    // Try upgrading with the tap name first, then fall back to just "porter"
     let upgrade_result = Command::new("brew")
         .arg("upgrade")
-        .arg("porter")
+        .arg("umi-labs/tap/porter")
         .output();
+    
+    let upgrade_result = match upgrade_result {
+        Ok(output) if output.status.success() => Ok(output),
+        _ => {
+            // Fall back to upgrading just "porter" (in case it was installed differently)
+            Command::new("brew")
+                .arg("upgrade")
+                .arg("porter")
+                .output()
+        }
+    };
     
     match upgrade_result {
         Ok(output) => {
