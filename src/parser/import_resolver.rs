@@ -396,6 +396,24 @@ impl ImportResolver {
                     dlog_processing!("  Adding block: {}", block.slug);
                     schema.blocks.insert(block.slug.clone(), block.clone());
                 }
+                ExportedItem::Object(obj) => {
+                    // Check if this object represents a field config
+                    if self.is_field_config_object(obj) {
+                        dlog_processing!("  Found field config object, extracting fields");
+                        if let Ok(field_def) = self.extract_field_from_object(obj, local) {
+                            // Replace field reference with the extracted field
+                            for field_mut in &mut schema.fields {
+                                if field_mut.name == format!("__ref__{}", local) {
+                                    dlog_processing!("  Replacing field reference with extracted field config");
+                                    *field_mut = field_def.clone();
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        dlog_processing!("  Object export '{}' not recognized as field config", local);
+                    }
+                }
                 _ => {}
             }
         } else {
@@ -486,5 +504,194 @@ impl ImportResolver {
         schema.fields = resolved_fields;
         dlog_processing!("Resolved to {} fields", schema.fields.len());
         Ok(())
+    }
+
+    /// Check if an ObjectLit represents a field config (has name and type properties)
+    fn is_field_config_object(&self, obj: &swc_core::ecma::ast::ObjectLit) -> bool {
+        use swc_core::ecma::ast::*;
+        
+        let mut has_name = false;
+        let mut has_type = false;
+        
+        for prop in &obj.props {
+            if let PropOrSpread::Prop(prop) = prop {
+                if let Prop::KeyValue(kv) = &**prop {
+                    if let PropName::Ident(ident) = &kv.key {
+                        match ident.sym.as_ref() {
+                            "name" => has_name = true,
+                            "type" => has_type = true,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        
+        has_name && has_type
+    }
+
+    /// Extract a field definition from an ObjectLit (field config)
+    fn extract_field_from_object(&self, obj: &swc_core::ecma::ast::ObjectLit, name: &str) -> Result<FieldDefinition> {
+        use swc_core::ecma::ast::*;
+        use crate::parser::schema::{FieldType, FieldAdmin};
+        
+        let mut field = FieldDefinition {
+            name: name.to_string(),
+            field_type: FieldType::Group { fields: Vec::new() },
+            required: false,
+            default_value: None,
+            label: None,
+            admin: None,
+            source_location: crate::parser::schema::SourceLocation::default(),
+        };
+
+        // Extract field properties
+        for prop in &obj.props {
+            if let PropOrSpread::Prop(prop) = prop {
+                if let Prop::KeyValue(kv) = &**prop {
+                    if let PropName::Ident(key) = &kv.key {
+                        match key.sym.as_ref() {
+                            "name" => {
+                                if let Expr::Lit(Lit::Str(s)) = &*kv.value {
+                                    field.name = s.value.to_string();
+                                }
+                            }
+                            "type" => {
+                                if let Expr::Lit(Lit::Str(s)) = &*kv.value {
+                                    // For now, assume group type for field configs
+                                    // This should be expanded to handle other types
+                                    if s.value.as_ref() == "group" {
+                                        field.field_type = FieldType::Group { fields: Vec::new() };
+                                    } else {
+                                        field.field_type = FieldType::Text { min_length: None, max_length: None };
+                                    }
+                                }
+                            }
+                            "required" => {
+                                if let Expr::Lit(Lit::Bool(b)) = &*kv.value {
+                                    field.required = b.value;
+                                }
+                            }
+                            "label" => {
+                                if let Expr::Lit(Lit::Str(s)) = &*kv.value {
+                                    field.label = Some(s.value.to_string());
+                                } else if let Expr::Lit(Lit::Bool(b)) = &*kv.value {
+                                    if !b.value {
+                                        field.label = None;
+                                    }
+                                }
+                            }
+                            "fields" => {
+                                // For group fields, extract nested fields
+                                if let Expr::Array(arr) = &*kv.value {
+                                    if let Ok(nested_fields) = self.extract_fields_from_array(arr) {
+                                        field.field_type = FieldType::Group { fields: nested_fields };
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(field)
+    }
+
+    /// Extract fields from an array literal (helper for field configs)
+    fn extract_fields_from_array(&self, arr: &swc_core::ecma::ast::ArrayLit) -> Result<Vec<FieldDefinition>> {
+        use swc_core::ecma::ast::*;
+        
+        let mut fields = Vec::new();
+        
+        for elem in &arr.elems {
+            if let Some(elem) = elem {
+                if let Expr::Object(obj) = &*elem.expr {
+                    if let Ok(Some(field)) = self.extract_simple_field_from_object(obj) {
+                        fields.push(field);
+                    }
+                } else if let Expr::Ident(ident) = &*elem.expr {
+                    // Handle field references within the array
+                    fields.push(FieldDefinition {
+                        name: format!("__ref__{}", ident.sym),
+                        field_type: FieldType::Text { min_length: None, max_length: None },
+                        required: false,
+                        default_value: None,
+                        label: None,
+                        admin: None,
+                        source_location: crate::parser::schema::SourceLocation::default(),
+                    });
+                }
+            }
+        }
+        
+        Ok(fields)
+    }
+
+    /// Extract a simple field definition from an object (for nested fields)
+    fn extract_simple_field_from_object(&self, obj: &swc_core::ecma::ast::ObjectLit) -> Result<Option<FieldDefinition>> {
+        use swc_core::ecma::ast::*;
+        use crate::parser::schema::{FieldType, FieldAdmin};
+        
+        let mut field = FieldDefinition {
+            name: String::new(),
+            field_type: FieldType::Text { min_length: None, max_length: None },
+            required: false,
+            default_value: None,
+            label: None,
+            admin: None,
+            source_location: crate::parser::schema::SourceLocation::default(),
+        };
+
+        let mut has_name = false;
+
+        for prop in &obj.props {
+            if let PropOrSpread::Prop(prop) = prop {
+                if let Prop::KeyValue(kv) = &**prop {
+                    if let PropName::Ident(key) = &kv.key {
+                        match key.sym.as_ref() {
+                            "name" => {
+                                if let Expr::Lit(Lit::Str(s)) = &*kv.value {
+                                    field.name = s.value.to_string();
+                                    has_name = true;
+                                }
+                            }
+                            "type" => {
+                                if let Expr::Lit(Lit::Str(s)) = &*kv.value {
+                                    match s.value.as_ref() {
+                                        "text" => field.field_type = FieldType::Text { min_length: None, max_length: None },
+                                        "select" => field.field_type = FieldType::Select { options: Vec::new() },
+                                        "checkbox" => field.field_type = FieldType::Checkbox,
+                                        "richText" => field.field_type = FieldType::RichText,
+                                        "relationship" => field.field_type = FieldType::Relationship { relationTo: String::new() },
+                                        "array" => field.field_type = FieldType::Array { fields: Vec::new() },
+                                        "group" => field.field_type = FieldType::Group { fields: Vec::new() },
+                                        _ => field.field_type = FieldType::Text { min_length: None, max_length: None },
+                                    }
+                                }
+                            }
+                            "required" => {
+                                if let Expr::Lit(Lit::Bool(b)) = &*kv.value {
+                                    field.required = b.value;
+                                }
+                            }
+                            "label" => {
+                                if let Expr::Lit(Lit::Str(s)) = &*kv.value {
+                                    field.label = Some(s.value.to_string());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        if has_name {
+            Ok(Some(field))
+        } else {
+            Ok(None)
+        }
     }
 }
