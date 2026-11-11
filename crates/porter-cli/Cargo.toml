@@ -1,0 +1,16 @@
+[package]
+name = "porter-cli"
+description = "Porter is a CLI for migrating content between CMS platforms."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "porter"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }

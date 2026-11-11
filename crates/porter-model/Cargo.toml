@@ -1,0 +1,8 @@
+[package]
+name = "porter-model"
+description = "Porter 2.0 model"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
