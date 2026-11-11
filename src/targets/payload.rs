@@ -366,17 +366,24 @@ impl TargetWriter for PayloadTarget {
             docs.len()
         );
 
+        // Names already written this run, so docs sharing a title don't overwrite each other
+        let mut used_names = std::collections::HashSet::new();
+
         // Process and validate each document, creating separate files
         for (index, doc) in docs.iter().enumerate() {
             match self.process_document(doc, opts) {
-                Ok(processed_doc) => {
+                Ok(mut processed_doc) => {
                     // Validate the processed document
                     if let Err(e) = self.validate_document(&processed_doc) {
                         warn!("Document validation warning: {}", e);
                     }
 
                     // Extract title for function name
-                    let function_name = self.extract_function_name(&processed_doc, index);
+                    let mut function_name = self.extract_function_name(&processed_doc, index);
+                    if !used_names.insert(function_name.clone()) {
+                        function_name = format!("{}_{}", function_name, index);
+                        used_names.insert(function_name.clone());
+                    }
                     let file_name = format!("{}/{}.ts", out_dir, function_name);
 
                     // Generate the seed file content
@@ -401,7 +408,9 @@ impl TargetWriter for PayloadTarget {
                     buf.push_str(": () => RequiredDataFromCollectionSlug<'");
                     buf.push_str(collection);
                     buf.push_str("'> = () => {\nreturn ");
-                    buf.push_str("'_status: 'published', ");
+                    if let Some(obj) = processed_doc.as_object_mut() {
+                        obj.entry("_status").or_insert_with(|| json!("published"));
+                    }
                     buf.push_str(
                         &serde_json::to_string_pretty(&processed_doc)
                             .context("Failed to serialize processed document")?,

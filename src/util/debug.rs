@@ -1,12 +1,12 @@
 use colored::Colorize;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-static mut DEBUG_ENABLED: bool = false;
+static DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
 static INDENT_LEVEL: AtomicUsize = AtomicUsize::new(0);
 
 /// Initialize debug printing based on a flag
 pub fn init(enabled: bool) {
-    unsafe { DEBUG_ENABLED = enabled; }
+    DEBUG_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
 /// Increase indentation level for nested debug messages
@@ -40,8 +40,8 @@ fn get_indent_string() -> String {
 
 /// Print a debug line with enhanced formatting
 pub fn log<T: AsRef<str>>(message: T) {
-    unsafe {
-        if DEBUG_ENABLED {
+    {
+        if DEBUG_ENABLED.load(Ordering::Relaxed) {
             let indent = get_indent_string();
             let prefix = format!("{}🔍", indent).cyan().bold();
             let content = message.as_ref();
@@ -50,10 +50,10 @@ pub fn log<T: AsRef<str>>(message: T) {
             let lines: Vec<&str> = content.split('\n').collect();
             for (i, line) in lines.iter().enumerate() {
                 if i == 0 {
-                    println!("{} {}", prefix, line.cyan());
+                    eprintln!("{} {}", prefix, line.cyan());
                 } else {
                     let line_indent = format!("{}  ", indent);
-                    println!("{}{}", line_indent.cyan(), line.cyan());
+                    eprintln!("{}{}", line_indent.cyan(), line.cyan());
                 }
             }
         }
@@ -62,8 +62,8 @@ pub fn log<T: AsRef<str>>(message: T) {
 
 /// Print a debug line with info-level styling (lighter blue)
 pub fn log_info<T: AsRef<str>>(message: T) {
-    unsafe {
-        if DEBUG_ENABLED {
+    {
+        if DEBUG_ENABLED.load(Ordering::Relaxed) {
             let indent = get_indent_string();
             let prefix = format!("{}ℹ️ ", indent).blue().bold();
             let content = message.as_ref();
@@ -71,10 +71,10 @@ pub fn log_info<T: AsRef<str>>(message: T) {
             let lines: Vec<&str> = content.split('\n').collect();
             for (i, line) in lines.iter().enumerate() {
                 if i == 0 {
-                    println!("{} {}", prefix, line.blue());
+                    eprintln!("{} {}", prefix, line.blue());
                 } else {
                     let line_indent = format!("{}  ", indent);
-                    println!("{}{}", line_indent.blue(), line.blue());
+                    eprintln!("{}{}", line_indent.blue(), line.blue());
                 }
             }
         }
@@ -83,8 +83,8 @@ pub fn log_info<T: AsRef<str>>(message: T) {
 
 /// Print a debug line with success styling (green)
 pub fn log_success<T: AsRef<str>>(message: T) {
-    unsafe {
-        if DEBUG_ENABLED {
+    {
+        if DEBUG_ENABLED.load(Ordering::Relaxed) {
             let indent = get_indent_string();
             let prefix = format!("{}✅", indent).green().bold();
             let content = message.as_ref();
@@ -92,10 +92,10 @@ pub fn log_success<T: AsRef<str>>(message: T) {
             let lines: Vec<&str> = content.split('\n').collect();
             for (i, line) in lines.iter().enumerate() {
                 if i == 0 {
-                    println!("{} {}", prefix, line.green());
+                    eprintln!("{} {}", prefix, line.green());
                 } else {
                     let line_indent = format!("{}  ", indent);
-                    println!("{}{}", line_indent.green(), line.green());
+                    eprintln!("{}{}", line_indent.green(), line.green());
                 }
             }
         }
@@ -104,8 +104,8 @@ pub fn log_success<T: AsRef<str>>(message: T) {
 
 /// Print a debug line with warning styling (yellow)
 pub fn log_warning<T: AsRef<str>>(message: T) {
-    unsafe {
-        if DEBUG_ENABLED {
+    {
+        if DEBUG_ENABLED.load(Ordering::Relaxed) {
             let indent = get_indent_string();
             let prefix = format!("{}⚠️ ", indent).yellow().bold();
             let content = message.as_ref();
@@ -113,10 +113,10 @@ pub fn log_warning<T: AsRef<str>>(message: T) {
             let lines: Vec<&str> = content.split('\n').collect();
             for (i, line) in lines.iter().enumerate() {
                 if i == 0 {
-                    println!("{} {}", prefix, line.yellow());
+                    eprintln!("{} {}", prefix, line.yellow());
                 } else {
                     let line_indent = format!("{}  ", indent);
-                    println!("{}{}", line_indent.yellow(), line.yellow());
+                    eprintln!("{}{}", line_indent.yellow(), line.yellow());
                 }
             }
         }
@@ -125,8 +125,8 @@ pub fn log_warning<T: AsRef<str>>(message: T) {
 
 /// Print a debug line with error styling (red)
 pub fn log_error<T: AsRef<str>>(message: T) {
-    unsafe {
-        if DEBUG_ENABLED {
+    {
+        if DEBUG_ENABLED.load(Ordering::Relaxed) {
             let indent = get_indent_string();
             let prefix = format!("{}❌", indent).red().bold();
             let content = message.as_ref();
@@ -134,10 +134,10 @@ pub fn log_error<T: AsRef<str>>(message: T) {
             let lines: Vec<&str> = content.split('\n').collect();
             for (i, line) in lines.iter().enumerate() {
                 if i == 0 {
-                    println!("{} {}", prefix, line.red());
+                    eprintln!("{} {}", prefix, line.red());
                 } else {
                     let line_indent = format!("{}  ", indent);
-                    println!("{}{}", line_indent.red(), line.red());
+                    eprintln!("{}{}", line_indent.red(), line.red());
                 }
             }
         }
@@ -146,8 +146,8 @@ pub fn log_error<T: AsRef<str>>(message: T) {
 
 /// Print a debug line with step styling (purple)
 pub fn log_step<T: AsRef<str>>(message: T) {
-    unsafe {
-        if DEBUG_ENABLED {
+    {
+        if DEBUG_ENABLED.load(Ordering::Relaxed) {
             let indent = get_indent_string();
             let prefix = format!("{}▶️ ", indent).purple().bold();
             let content = message.as_ref();
@@ -155,10 +155,10 @@ pub fn log_step<T: AsRef<str>>(message: T) {
             let lines: Vec<&str> = content.split('\n').collect();
             for (i, line) in lines.iter().enumerate() {
                 if i == 0 {
-                    println!("{} {}", prefix, line.purple());
+                    eprintln!("{} {}", prefix, line.purple());
                 } else {
                     let line_indent = format!("{}  ", indent);
-                    println!("{}{}", line_indent.purple(), line.purple());
+                    eprintln!("{}{}", line_indent.purple(), line.purple());
                 }
             }
         }
@@ -167,8 +167,8 @@ pub fn log_step<T: AsRef<str>>(message: T) {
 
 /// Print a debug line with data styling (gray)
 pub fn log_data<T: AsRef<str>>(message: T) {
-    unsafe {
-        if DEBUG_ENABLED {
+    {
+        if DEBUG_ENABLED.load(Ordering::Relaxed) {
             let indent = get_indent_string();
             let prefix = format!("{}📊", indent).bright_black().bold();
             let content = message.as_ref();
@@ -176,10 +176,10 @@ pub fn log_data<T: AsRef<str>>(message: T) {
             let lines: Vec<&str> = content.split('\n').collect();
             for (i, line) in lines.iter().enumerate() {
                 if i == 0 {
-                    println!("{} {}", prefix, line.bright_black());
+                    eprintln!("{} {}", prefix, line.bright_black());
                 } else {
                     let line_indent = format!("{}  ", indent);
-                    println!("{}{}", line_indent.bright_black(), line.bright_black());
+                    eprintln!("{}{}", line_indent.bright_black(), line.bright_black());
                 }
             }
         }
@@ -188,8 +188,8 @@ pub fn log_data<T: AsRef<str>>(message: T) {
 
 /// Print a debug line with file styling (magenta)
 pub fn log_file<T: AsRef<str>>(message: T) {
-    unsafe {
-        if DEBUG_ENABLED {
+    {
+        if DEBUG_ENABLED.load(Ordering::Relaxed) {
             let indent = get_indent_string();
             let prefix = format!("{}📁", indent).magenta().bold();
             let content = message.as_ref();
@@ -197,10 +197,10 @@ pub fn log_file<T: AsRef<str>>(message: T) {
             let lines: Vec<&str> = content.split('\n').collect();
             for (i, line) in lines.iter().enumerate() {
                 if i == 0 {
-                    println!("{} {}", prefix, line.magenta());
+                    eprintln!("{} {}", prefix, line.magenta());
                 } else {
                     let line_indent = format!("{}  ", indent);
-                    println!("{}{}", line_indent.magenta(), line.magenta());
+                    eprintln!("{}{}", line_indent.magenta(), line.magenta());
                 }
             }
         }
@@ -209,8 +209,8 @@ pub fn log_file<T: AsRef<str>>(message: T) {
 
 /// Print a debug line with processing styling (bright cyan)
 pub fn log_processing<T: AsRef<str>>(message: T) {
-    unsafe {
-        if DEBUG_ENABLED {
+    {
+        if DEBUG_ENABLED.load(Ordering::Relaxed) {
             let indent = get_indent_string();
             let prefix = format!("{}⚙️ ", indent).bright_cyan().bold();
             let content = message.as_ref();
@@ -218,10 +218,10 @@ pub fn log_processing<T: AsRef<str>>(message: T) {
             let lines: Vec<&str> = content.split('\n').collect();
             for (i, line) in lines.iter().enumerate() {
                 if i == 0 {
-                    println!("{} {}", prefix, line.bright_cyan());
+                    eprintln!("{} {}", prefix, line.bright_cyan());
                 } else {
                     let line_indent = format!("{}  ", indent);
-                    println!("{}{}", line_indent.bright_cyan(), line.bright_cyan());
+                    eprintln!("{}{}", line_indent.bright_cyan(), line.bright_cyan());
                 }
             }
         }
@@ -230,8 +230,8 @@ pub fn log_processing<T: AsRef<str>>(message: T) {
 
 /// Print a debug line with result styling (bright green)
 pub fn log_result<T: AsRef<str>>(message: T) {
-    unsafe {
-        if DEBUG_ENABLED {
+    {
+        if DEBUG_ENABLED.load(Ordering::Relaxed) {
             let indent = get_indent_string();
             let prefix = format!("{}🎯", indent).bright_green().bold();
             let content = message.as_ref();
@@ -239,10 +239,10 @@ pub fn log_result<T: AsRef<str>>(message: T) {
             let lines: Vec<&str> = content.split('\n').collect();
             for (i, line) in lines.iter().enumerate() {
                 if i == 0 {
-                    println!("{} {}", prefix, line.bright_green());
+                    eprintln!("{} {}", prefix, line.bright_green());
                 } else {
                     let line_indent = format!("{}  ", indent);
-                    println!("{}{}", line_indent.bright_green(), line.bright_green());
+                    eprintln!("{}{}", line_indent.bright_green(), line.bright_green());
                 }
             }
         }
@@ -251,33 +251,33 @@ pub fn log_result<T: AsRef<str>>(message: T) {
 
 /// Print a debug line with separator styling
 pub fn log_separator() {
-    unsafe {
-        if DEBUG_ENABLED {
+    {
+        if DEBUG_ENABLED.load(Ordering::Relaxed) {
             let indent = get_indent_string();
             let separator = "─".repeat(50);
-            println!("{}{}", indent.cyan(), separator.cyan());
+            eprintln!("{}{}", indent.cyan(), separator.cyan());
         }
     }
 }
 
 /// Print a debug line with section header styling
 pub fn log_section<T: AsRef<str>>(message: T) {
-    unsafe {
-        if DEBUG_ENABLED {
+    {
+        if DEBUG_ENABLED.load(Ordering::Relaxed) {
             let indent = get_indent_string();
             let content = message.as_ref();
             let header = format!("{}📋 {}", indent, content).cyan().bold();
             let underline = "─".repeat(content.len() + 3);
-            println!("{}", header);
-            println!("{}{}", indent.cyan(), underline.cyan());
+            eprintln!("{}", header);
+            eprintln!("{}{}", indent.cyan(), underline.cyan());
         }
     }
 }
 
 /// Print a debug line if enabled (backward compatibility)
 pub fn log_legacy<T: AsRef<str>>(message: T) {
-    unsafe {
-        if DEBUG_ENABLED {
+    {
+        if DEBUG_ENABLED.load(Ordering::Relaxed) {
             let indent = get_indent_string();
             let prefix = format!("{}[DEBUG]:", indent).red().bold();
             let content = message.as_ref();
@@ -285,10 +285,10 @@ pub fn log_legacy<T: AsRef<str>>(message: T) {
             let lines: Vec<&str> = content.split('\n').collect();
             for (i, line) in lines.iter().enumerate() {
                 if i == 0 {
-                    println!("{} {}", prefix, line);
+                    eprintln!("{} {}", prefix, line);
                 } else {
                     let line_indent = format!("{}  ", indent);
-                    println!("{}{}", line_indent, line);
+                    eprintln!("{}{}", line_indent, line);
                 }
             }
         }

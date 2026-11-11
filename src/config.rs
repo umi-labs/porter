@@ -127,6 +127,12 @@ impl PorterConfig {
         };
 
         std::fs::write(path, content)?;
+        // The config can hold WordPress credentials, so keep it owner-only
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
         println!("{}", format!("✓ Configuration saved to {}", path).green());
         Ok(())
     }
@@ -356,7 +362,7 @@ pub async fn create_config_interactively() -> Result<PorterConfig> {
 
             match auth_type.as_str() {
                 "bearer" => {
-                    let token = interact::prompt("Enter Bearer token (will be stored in config):")?;
+                    let token = interact::prompt("Enter Bearer token (stored in config; leave blank to use PORTER_WP_BEARER_TOKEN):")?;
                     if !token.is_empty() {
                         config.metadata.as_mut().unwrap().insert("wordpress_bearer_token".to_string(), token);
                         println!("{}", "✓ Bearer token saved".green());

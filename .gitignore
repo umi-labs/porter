@@ -4,3 +4,7 @@
 /test-data/hotels.json
 /test-data/pages.json
 /seed/
+
+# Can hold WordPress credentials
+/porter.config.*
+/.porter.*
