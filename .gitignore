@@ -1,1 +1,6 @@
 /target
+
+# Real client exports: keep local, never commit
+/test-data/hotels.json
+/test-data/pages.json
+/seed/
