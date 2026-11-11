@@ -76,7 +76,7 @@ mod tests {
     use super::*;
 
     fn src(id: &str) -> SourceRef {
-        SourceRef { connector: "wp".into(), source_id: id.into(), url: None }
+        SourceRef { connector: "conn-a".into(), source_id: id.into(), url: None }
     }
 
     #[test]
@@ -87,6 +87,13 @@ mod tests {
         assert_ne!(a, ItemId::new(ItemKind::Media, &src("1")));
         assert_eq!(a.to_string().parse::<ItemId>().unwrap(), a);
         assert_eq!(serde_json::to_string(&a).unwrap(), format!("\"{a}\""));
+    }
+
+    // python3 -c "import uuid; print(uuid.uuid5(uuid.UUID('6f1c2b0e-4d8a-4c1e-9b7a-0b6f2e9d5a11'), 'document|conn-a|42'))"
+    #[test]
+    fn item_id_golden_vector() {
+        let id = ItemId::new(ItemKind::Document, &src("42"));
+        assert_eq!(id.to_string(), "1f0c4c33-b3e1-5d93-a50c-32360d7ec5c9");
     }
 
     #[test]

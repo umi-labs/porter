@@ -87,8 +87,8 @@ mod tests {
         let mut blk = b(BlockKind::Button, vec![b(BlockKind::Spacer, vec![])]);
         blk.props.insert("label".into(), FieldValue::Text("Go".into()));
         blk.original = Some(Original {
-            builder: "divi".into(),
-            module: "et_pb_button".into(),
+            builder: "builder-x".into(),
+            module: "module-a".into(),
             classes: vec!["a".into()],
             settings: serde_json::json!({"k": [1, 2]}),
         });
