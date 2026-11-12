@@ -68,6 +68,25 @@ export const projectMember = pgTable(
   (t) => [primaryKey({ columns: [t.projectId, t.userId] }), index("project_member_user_idx").on(t.userId)],
 );
 
+/** Pending per-project invitation by email; accepted on the invitee's first verified sign-in. */
+export const projectInvitation = pgTable(
+  "project_invitation",
+  {
+    id: id(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    /** Stored lowercased. */
+    email: text("email").notNull(),
+    role: projectRole("role").notNull().default("client"),
+    invitedBy: text("invited_by").references(() => user.id, { onDelete: "set null" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("project_invitation_email_idx").on(t.email)],
+);
+
 export const projectVersion = pgTable(
   "project_version",
   {

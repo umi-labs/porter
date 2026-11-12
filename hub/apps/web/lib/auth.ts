@@ -1,0 +1,233 @@
+import { connect, invitation, member, projectInvitation, projectMember, schema, user } from "@porter-hub/db";
+import { betterAuth } from "better-auth";
+import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { APIError, createAuthMiddleware } from "better-auth/api";
+import { bearer, deviceAuthorization, magicLink, organization } from "better-auth/plugins";
+import type { BetterAuthPlugin } from "better-auth/types";
+import { and, eq, gt, inArray, isNull, sql } from "drizzle-orm";
+import { createTransport } from "nodemailer";
+
+export type Mail = { to: string; subject: string; text: string };
+type Db = ReturnType<typeof connect>["db"];
+type GoogleOverrides = { clientId?: string; clientSecret?: string; verifyIdToken?: () => Promise<boolean> };
+
+/** The CLI's device-authorization client id. */
+export const CLI_CLIENT_ID = "porter-cli";
+
+/** True only for exactly `local@<domain>` (case-insensitive): no lookalikes, no subdomains. */
+export function isStaffEmail(email: string, domain: string) {
+  const at = email.indexOf("@");
+  return (
+    !!domain &&
+    at > 0 &&
+    at === email.lastIndexOf("@") &&
+    email.slice(at + 1).toLowerCase() === domain.toLowerCase()
+  );
+}
+
+function smtpMailer() {
+  const env = process.env;
+  const transport = createTransport({
+    host: env.SMTP_HOST,
+    port: Number(env.SMTP_PORT ?? 587),
+    auth: env.SMTP_USER ? { user: env.SMTP_USER, pass: env.SMTP_PASSWORD } : undefined,
+  });
+  return async (m: Mail) => {
+    await transport.sendMail({ from: env.SMTP_FROM, ...m });
+  };
+}
+
+const lower = (
+  col: typeof projectInvitation.email | typeof invitation.email | typeof user.email,
+  v: string,
+) => sql`lower(${col}) = ${v.toLowerCase()}`;
+
+const pendingProjectInvite = (email: string) =>
+  and(
+    lower(projectInvitation.email, email),
+    isNull(projectInvitation.acceptedAt),
+    gt(projectInvitation.expiresAt, new Date()),
+  );
+
+/** Magic links go only to invited emails and existing client users. */
+async function mayGetMagicLink(db: Db, email: string) {
+  const [invited, client] = await Promise.all([
+    db
+      .select({ id: projectInvitation.id })
+      .from(projectInvitation)
+      .where(pendingProjectInvite(email))
+      .limit(1),
+    db
+      .select({ id: user.id })
+      .from(user)
+      .innerJoin(projectMember, eq(projectMember.userId, user.id))
+      .where(and(lower(user.email, email), eq(projectMember.role, "client")))
+      .limit(1),
+  ]);
+  return invited.length + client.length > 0;
+}
+
+/** Staff (any org membership) or an owner/developer on some project. */
+async function canApproveDevice(db: Db, userId: string) {
+  const [staff, dev] = await Promise.all([
+    db.select({ id: member.id }).from(member).where(eq(member.userId, userId)).limit(1),
+    db
+      .select({ id: projectMember.userId })
+      .from(projectMember)
+      .where(and(eq(projectMember.userId, userId), inArray(projectMember.role, ["owner", "developer"])))
+      .limit(1),
+  ]);
+  return staff.length + dev.length > 0;
+}
+
+/** Turns a verified user's pending project invitations into project roles. */
+async function acceptProjectInvites(db: Db, userId: string) {
+  const [u] = await db.select().from(user).where(eq(user.id, userId));
+  if (!u?.emailVerified) return;
+  await db.transaction(async (tx) => {
+    const accepted = await tx
+      .update(projectInvitation)
+      .set({ acceptedAt: new Date() })
+      .where(pendingProjectInvite(u.email))
+      .returning();
+    if (accepted.length === 0) return;
+    await tx
+      .insert(projectMember)
+      .values(accepted.map((i) => ({ projectId: i.projectId, userId: u.id, role: i.role })))
+      .onConflictDoNothing();
+  });
+}
+
+export function createAuth(
+  deps: { db?: Db; sendMail?: (m: Mail) => Promise<void>; google?: GoogleOverrides } = {},
+) {
+  const env = process.env;
+  if (env.NODE_ENV === "production") {
+    for (const k of ["BETTER_AUTH_SECRET", "BETTER_AUTH_URL"]) {
+      if (!env[k]) throw new Error(`${k} must be set in production`);
+    }
+  }
+  const db = deps.db ?? connect().db;
+  const sendMail = deps.sendMail ?? smtpMailer();
+  const domain = (env.STAFF_EMAIL_DOMAIN ?? "").toLowerCase();
+
+  const google = { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET, ...deps.google };
+  if (google.clientId && !domain) throw new Error("STAFF_EMAIL_DOMAIN must be set when Google sign-in is on");
+
+  const staffDeviceApproval = {
+    id: "porter-staff-device-approval",
+    hooks: {
+      before: [
+        {
+          matcher: (ctx) => ctx.path === "/device/approve",
+          handler: createAuthMiddleware(async (ctx) => {
+            // Through auth.api so a bearer token counts too (sibling hooks see the raw request).
+            const s = await auth.api.getSession({ headers: ctx.headers ?? new Headers() });
+            if (s && !(await canApproveDevice(db, s.user.id))) {
+              throw new APIError("FORBIDDEN", {
+                message: "Only staff and developers can approve CLI sign-ins",
+              });
+            }
+          }),
+        },
+      ],
+    },
+  } satisfies BetterAuthPlugin;
+
+  const auth = betterAuth({
+    secret: env.BETTER_AUTH_SECRET,
+    baseURL: env.BETTER_AUTH_URL,
+    database: drizzleAdapter(db, { provider: "pg", schema }),
+    advanced: { useSecureCookies: env.NODE_ENV === "production" },
+    emailAndPassword: { enabled: true, minPasswordLength: 12, requireEmailVerification: true },
+    emailVerification: {
+      sendOnSignUp: true,
+      sendVerificationEmail: async ({ user: u, url }) => {
+        await sendMail({
+          to: u.email,
+          subject: "Verify your Porter email",
+          text: `Verify your email: ${url}`,
+        });
+      },
+    },
+    socialProviders: google.clientId
+      ? {
+          google: {
+            ...google,
+            clientId: google.clientId,
+            clientSecret: google.clientSecret ?? "",
+            // Google enforces the Workspace domain (hd claim); we check the email itself too.
+            hd: domain,
+            mapProfileToUser: (p) => {
+              if (p.email_verified !== true || !isStaffEmail(p.email, domain)) {
+                throw new APIError("FORBIDDEN", { message: "Google sign-in is for staff accounts only" });
+              }
+              return {};
+            },
+          },
+        }
+      : {},
+    hooks: {
+      // Password sign-up is for staff: only emails with a pending organization invitation.
+      before: createAuthMiddleware(async (ctx) => {
+        if (ctx.path !== "/sign-up/email") return;
+        const email = String(ctx.body?.email ?? "");
+        const [inv] = await db
+          .select({ id: invitation.id })
+          .from(invitation)
+          .where(
+            and(
+              lower(invitation.email, email),
+              eq(invitation.status, "pending"),
+              gt(invitation.expiresAt, new Date()),
+            ),
+          )
+          .limit(1);
+        if (!inv) throw new APIError("FORBIDDEN", { message: "Sign-up is by staff invitation only" });
+      }),
+    },
+    databaseHooks: {
+      user: {
+        create: {
+          // A magic link only ever creates a user who still has a pending project invitation.
+          before: async (u, ctx) => {
+            if (ctx?.path !== "/magic-link/verify") return;
+            const [inv] = await db
+              .select({ id: projectInvitation.id })
+              .from(projectInvitation)
+              .where(pendingProjectInvite(u.email))
+              .limit(1);
+            if (!inv) return false;
+          },
+        },
+      },
+      session: { create: { after: (s) => acceptProjectInvites(db, s.userId) } },
+    },
+    plugins: [
+      organization({ requireEmailVerificationOnInvitation: true }),
+      magicLink({
+        sendMagicLink: async ({ email, url }) => {
+          // Same response whether or not anyone is invited (no account enumeration); the mail is not
+          // awaited so the response time does not tell either.
+          if (!(await mayGetMagicLink(db, email))) return;
+          sendMail({
+            to: email,
+            subject: "Sign in to Porter",
+            text: `Sign in: ${url}\n\nThe link expires in 5 minutes.`,
+          }).catch((e) => console.error("magic link mail failed:", e));
+        },
+      }),
+      deviceAuthorization({ validateClient: (id) => id === CLI_CLIENT_ID, verificationUri: "/device" }),
+      bearer(),
+      staffDeviceApproval,
+    ],
+  });
+  return auth;
+}
+
+let instance: ReturnType<typeof createAuth> | undefined;
+/** The app's auth, built from env on first use. */
+export const getAuth = () => {
+  instance ??= createAuth();
+  return instance;
+};

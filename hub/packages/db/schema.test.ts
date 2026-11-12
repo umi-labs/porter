@@ -22,6 +22,7 @@ const expected = [
   // porter
   "project",
   "project_member",
+  "project_invitation",
   "project_version",
   "media_object",
   "run",
