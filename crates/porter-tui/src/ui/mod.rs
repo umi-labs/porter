@@ -473,6 +473,24 @@ mod tests {
     }
 
     #[test]
+    fn stale_short_forms_are_words() {
+        use porter_engine::fingerprint::NOT_RECORDED;
+        assert_eq!(
+            stages::stale_short("extract re-ran since"),
+            "extract re-ran"
+        );
+        assert_eq!(
+            stages::stale_short("mapping changed since"),
+            "mapping changed"
+        );
+        assert_eq!(stages::stale_short(NOT_RECORDED), "re-run");
+        assert_eq!(
+            stages::stale_short("porter.toml could not be read"),
+            "stale"
+        );
+    }
+
+    #[test]
     fn stale_stage_keeps_its_result_and_says_why() {
         let (mut app, _d) = app_with(sum(|_| {}), true);
         let ov = app.panels.overview.as_mut().unwrap();
@@ -483,10 +501,7 @@ mod tests {
         ov.last_runs.push((Stage::Normalise, normalise));
         ov.last_runs[0].1 = newer;
         let out = stages_panel(&app);
-        assert!(
-            out.contains("✓ normalise  clean ↻ stale: extract "),
-            "{out}"
-        );
+        assert!(out.contains("✓ normalise  clean ↻ extract re-ran"), "{out}");
         insta::assert_snapshot!(out);
     }
 

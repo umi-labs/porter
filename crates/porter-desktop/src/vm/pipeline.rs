@@ -37,7 +37,30 @@ pub struct StageRow {
     pub dry_run: bool,
 }
 
+/// The one button a stage card offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CardAction {
+    Cancel,
+    /// An interrupted writing load: through the Apply sheet and its gates, never directly.
+    ResumeViaApply,
+    /// Runs the stage again (never writing); the engine skips what is already done.
+    Resume,
+    /// Runs the stage, never writing ("Dry run" on load).
+    Run,
+}
+
 impl StageRow {
+    pub fn action(&self) -> CardAction {
+        match self.state {
+            StageState::Running => CardAction::Cancel,
+            StageState::Interrupted if self.stage == Stage::Load && !self.dry_run => {
+                CardAction::ResumeViaApply
+            }
+            StageState::Interrupted => CardAction::Resume,
+            _ => CardAction::Run,
+        }
+    }
+
     /// The run's counts; a dry run's are what it would write.
     pub fn counts(&self) -> Option<String> {
         let s = self.summary.as_ref()?;
@@ -599,6 +622,34 @@ mod tests {
 
     fn with_id(id: &str, r: RunRow) -> RunRow {
         RunRow { id: id.into(), ..r }
+    }
+
+    #[test]
+    fn an_interrupted_writing_load_never_resumes_directly() {
+        let mut p = Pipeline::default();
+        let interrupted = |dry| {
+            let mut r = run(Some(sum(1, 0, 0, 0)), dry);
+            r.summary.as_mut().unwrap().interrupted = true;
+            r
+        };
+        p.overview_landed(Ok(Overview {
+            last_runs: vec![
+                (Stage::Extract, interrupted(false)),
+                (Stage::Load, interrupted(false)),
+            ],
+            ..Default::default()
+        }));
+        assert_eq!(row(&p, Stage::Load).action(), CardAction::ResumeViaApply);
+        assert_eq!(row(&p, Stage::Extract).action(), CardAction::Resume);
+        assert_eq!(row(&p, Stage::Schema).action(), CardAction::Run);
+        // An interrupted dry run resumes as one.
+        p.overview_landed(Ok(Overview {
+            last_runs: vec![(Stage::Load, interrupted(true))],
+            ..Default::default()
+        }));
+        assert_eq!(row(&p, Stage::Load).action(), CardAction::Resume);
+        p.start(&stage_plan(Stage::Extract)).unwrap();
+        assert_eq!(row(&p, Stage::Extract).action(), CardAction::Cancel);
     }
 
     #[test]

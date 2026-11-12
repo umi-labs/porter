@@ -109,6 +109,16 @@ pub fn glyph(s: &StageState) -> (&'static str, Option<Color>) {
     }
 }
 
+/// "extract re-ran since" -> "extract re-ran", "mapping changed since" -> "mapping
+/// changed", a run from before fingerprints -> "re-run".
+pub fn stale_short(why: &str) -> &str {
+    match why.strip_suffix(" since") {
+        Some(s) => s,
+        None if why.contains("re-run") => "re-run",
+        None => "stale",
+    }
+}
+
 pub fn progress_text(p: &Progress) -> String {
     match p {
         (done, Some(total), label) => format!("{done}/{total} {label}"),
@@ -160,10 +170,9 @@ pub fn render(app: &App, f: &mut Frame, area: Rect) {
                 }
                 (None, s) => state_text(s).into(),
             };
-            // Short form to fit the panel ("↻ stale: extract"); the detail pane says it all.
+            // Short form to fit the panel; the detail pane says it all.
             if let Some(why) = &r.stale {
-                let what = why.split(' ').next().unwrap_or_default();
-                tail += &format!(" ↻ stale: {what}");
+                tail += &format!(" ↻ {}", stale_short(why));
             }
             let mut line = Line::from(vec![
                 Span::raw(if sel { "> " } else { "  " }),

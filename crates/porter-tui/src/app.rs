@@ -1721,14 +1721,10 @@ mod tests {
         // A comment is not a change to what load reads.
         std::fs::write(&toml, t.clone() + "\n# edited\n").unwrap();
         assert_eq!(s.preview_stale(&p), None);
-        std::fs::write(
-            &toml,
-            t + "\n[[redirects]]\nfrom = \"/a\"\nto = \"/b\"\ncode = 301\n",
-        )
-        .unwrap();
+        std::fs::write(&toml, t + "\n[mapping.types.zz]\nto = \"zz\"\n").unwrap();
         assert_eq!(
             s.preview_stale(&p).as_deref(),
-            Some("redirects changed since")
+            Some("mapping changed since")
         );
         let info = crate::actions::preview_info(&s).unwrap();
         assert!(info.stale.is_some());

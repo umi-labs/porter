@@ -3,12 +3,13 @@
 //! typed the destination host. The gates are read again when Apply is pressed. Nothing
 //! here ever applies by default.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::SystemTime;
 
 use porter_engine::session::{IssueQuery, RunPlan, Session, StageOpts};
 use porter_engine::stage::SchemaMode;
 use porter_model::{Resolution, Severity, Stage};
+use uuid::Uuid;
 
 /// The last dry run as the sheet needs it.
 #[derive(Clone, Debug, PartialEq)]
@@ -19,14 +20,22 @@ pub struct PreviewInfo {
     pub stale: Option<String>,
 }
 
+/// The open issues the gates judge.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Open {
+    pub errors: u64,
+    /// By id, so a tick covers exactly the warnings that were open when it was given.
+    pub warnings: BTreeSet<Uuid>,
+}
+
 /// Everything the sheet checks and lists, read together.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ApplyFacts {
     /// `destination.url`, verbatim.
     pub url: String,
     pub preview: Option<PreviewInfo>,
-    /// Open (errors, warnings); None when the issues could not be read.
-    pub open: Option<(u64, u64)>,
+    /// Open issues; None when they could not be read.
+    pub open: Option<Open>,
     /// What the load leaves out, each with why.
     pub not_written: Vec<String>,
 }
@@ -69,9 +78,13 @@ pub fn apply_facts(s: &Session) -> ApplyFacts {
     ApplyFacts {
         url: config.destination.url.clone(),
         preview: preview_info(s),
-        open: open.ok().map(|is| {
-            let n = |sev| is.iter().filter(|i| i.severity == sev).count() as u64;
-            (n(Severity::Error), n(Severity::Warning))
+        open: open.ok().map(|is| Open {
+            errors: is.iter().filter(|i| i.severity == Severity::Error).count() as u64,
+            warnings: is
+                .iter()
+                .filter(|i| i.severity == Severity::Warning)
+                .map(|i| i.id)
+                .collect(),
         }),
         not_written,
     }
@@ -99,8 +112,8 @@ pub struct Gate {
 pub struct ApplySheet {
     pub facts: ApplyFacts,
     host: Option<String>,
-    /// How many open warnings the user ticked as reviewed.
-    acked: Option<u64>,
+    /// The open warnings the user ticked as reviewed.
+    acked: Option<BTreeSet<Uuid>>,
     /// What was typed when Apply was pressed, while the recheck is in flight.
     pending: Option<String>,
     /// Why the last Apply was refused.
@@ -143,7 +156,10 @@ impl ApplySheet {
 
     /// The warnings box is shown only when there are open warnings.
     pub fn open_warnings(&self) -> u64 {
-        self.facts.open.map_or(0, |(_, w)| w)
+        self.facts
+            .open
+            .as_ref()
+            .map_or(0, |o| o.warnings.len() as u64)
     }
 
     pub fn acked(&self) -> bool {
@@ -154,7 +170,13 @@ impl ApplySheet {
     pub fn toggle_ack(&mut self) {
         self.acked = match self.acked {
             Some(_) => None,
-            None => Some(self.open_warnings()),
+            None => Some(
+                self.facts
+                    .open
+                    .as_ref()
+                    .map(|o| o.warnings.clone())
+                    .unwrap_or_default(),
+            ),
         };
     }
 
@@ -172,7 +194,7 @@ impl ApplySheet {
             }) => g(
                 false,
                 "The dry run is stale",
-                format!("{why}. Its counts no longer describe what Apply would write."),
+                format!("{why}. Run a dry run again to see what Apply would write."),
             ),
             Some(p) => g(
                 true,
@@ -183,21 +205,26 @@ impl ApplySheet {
                 ),
             ),
         };
-        let errors = match self.facts.open {
+        let errors = match self.facts.open.as_ref().map(|o| o.errors) {
             None => g(
                 false,
                 "Open errors unknown",
                 "The issues could not be read.".into(),
             ),
-            Some((0, _)) => g(true, "No open errors", "Nothing blocks the load.".into()),
-            Some((n, _)) => g(
+            Some(0) => g(true, "No open errors", "Nothing blocks the load.".into()),
+            Some(n) => g(
                 false,
                 &format!("{n} open error{}", if n == 1 { "" } else { "s" }),
                 "Resolve them in Issues first.".into(),
             ),
         };
         let w = self.open_warnings();
-        let warnings = match (w, self.acked) {
+        // Every warning open now must be one that was ticked.
+        let covered = match (&self.facts.open, &self.acked) {
+            (Some(o), Some(a)) => o.warnings.is_subset(a),
+            _ => false,
+        };
+        let warnings = match (w, covered) {
             (0, _) if self.facts.open.is_some() => {
                 g(true, "No open warnings", "Nothing to acknowledge.".into())
             }
@@ -206,7 +233,7 @@ impl ApplySheet {
                 "Open warnings unknown",
                 "The issues could not be read.".into(),
             ),
-            (w, Some(a)) if a >= w => g(
+            (w, true) => g(
                 true,
                 &format!("{w} open warnings"),
                 "Reviewed and acknowledged.".into(),
@@ -309,7 +336,10 @@ mod tests {
         ApplyFacts {
             url: URL.into(),
             preview,
-            open: Some((errors, warnings)),
+            open: Some(Open {
+                errors,
+                warnings: (0..warnings).map(|i| Uuid::from_u128(i.into())).collect(),
+            }),
             not_written: vec![],
         }
     }
@@ -411,7 +441,7 @@ mod tests {
         assert!(s.check("cms.example.com").is_ok());
         s.toggle_ack();
         assert!(s.check("cms.example.com").is_err());
-        // The tick covers the warnings it was given for: more by the recheck refuses.
+        // The tick covers the warnings it was given for: a new one by the recheck refuses.
         s.toggle_ack();
         s.begin_confirm("cms.example.com").unwrap();
         assert!(s.finish(facts(Some(fresh()), 0, 4)).is_err());
@@ -421,6 +451,16 @@ mod tests {
         s.toggle_ack();
         s.begin_confirm("cms.example.com").unwrap();
         assert!(s.finish(facts(Some(fresh()), 0, 2)).is_ok());
+        // Same count, different warnings: one resolved, a new one opened. Refused.
+        let mut s = ApplySheet::new(facts(Some(fresh()), 0, 2));
+        s.toggle_ack();
+        let mut swapped = facts(Some(fresh()), 0, 0);
+        swapped.open = Some(Open {
+            errors: 0,
+            warnings: [Uuid::from_u128(0), Uuid::from_u128(99)].into(),
+        });
+        s.begin_confirm("cms.example.com").unwrap();
+        assert!(s.finish(swapped).is_err());
         // No warnings: nothing to tick, the gate passes.
         assert!(ApplySheet::new(facts(Some(fresh()), 0, 0)).gates()[2].pass);
     }

@@ -426,6 +426,48 @@ async fn dry_run_sends_nothing() {
     assert!(f.p.store().dest_ids().unwrap().is_empty());
 }
 
+/// What the Apply sheet lists as not written comes from the dry run's own statuses, and
+/// the documents the dry run would write are not among them.
+#[tokio::test]
+async fn dry_run_left_out_lists_only_what_is_not_written() {
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let f = fx(&s.uri());
+    f.put(&doc("page", "post:1", "a", None));
+    f.put(&doc("page", "post:2", "b", None));
+    f.put(&doc("member", "member:1", "m", None));
+    f.put(&doc("news", "news:1", "n", None));
+    f.load(false, CancellationToken::new()).await;
+    let store = f.p.store();
+    // (`run_stage` alone: the session is what marks the row as a dry run.)
+    let run = store.runs(Stage::Load).unwrap().pop().unwrap();
+    // A failed item in the same run is left out too.
+    store
+        .set_status(
+            porter_engine::store::RunId(run.id.parse().unwrap()),
+            Stage::Load,
+            did("post:2"),
+            &ItemStatus::Failed {
+                error: "boom".into(),
+            },
+        )
+        .unwrap();
+    let mut got = store.run_left_out(&run.id, Stage::Load).unwrap();
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            (
+                "member".to_string(),
+                "members are handled by the CRM".to_string(),
+                1
+            ),
+            ("news".into(), "no destination mapped".into(), 1),
+            ("page".into(), "failed".into(), 1),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn dry_run_clears_old_previews() {
     let fake = Fake::default();

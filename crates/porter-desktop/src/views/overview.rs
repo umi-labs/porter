@@ -15,7 +15,7 @@ use crate::theme::{radius, text, tokens};
 use crate::ui::buttons::{Kind, button};
 use crate::ui::chip::{Chip, ChipState, STALE_OPACITY};
 use crate::ui::severity::SeverityChip;
-use crate::vm::pipeline::{StageRow, Tone, relative_time};
+use crate::vm::pipeline::{CardAction, StageRow, Tone, relative_time};
 
 pub fn tone_color(t: Tone, theme: &Theme) -> Hsla {
     match t {
@@ -77,12 +77,13 @@ fn action(
     enabled: bool,
     cx: &mut Context<ProjectWindow>,
     f: impl Fn(&mut ProjectWindow, &mut Context<ProjectWindow>) + 'static,
-) -> impl IntoElement {
+) -> gpui::AnyElement {
     let b = button(id, Kind::Secondary, label, cx);
     if enabled {
         b.on_click(cx.listener(move |this, _, _, cx| f(this, cx)))
+            .into_any_element()
     } else {
-        b.opacity(0.5).cursor_default()
+        b.opacity(0.5).cursor_default().into_any_element()
     }
 }
 
@@ -105,28 +106,21 @@ fn stage_card(w: &ProjectWindow, r: StageRow, cx: &mut Context<ProjectWindow>) -
     if r.stale.is_some() {
         result = result.opacity(STALE_OPACITY);
     }
-    let button = match &r.state {
-        StageState::Running => action(
+    let button = match r.action() {
+        CardAction::Cancel => action(
             ("cancel", i),
             "Cancel",
             !w.pipeline.cancelling,
             cx,
             |this, cx| this.cancel(cx),
-        )
-        .into_any_element(),
-        // A writing load resumes through the Apply sheet and its gates, never directly.
-        StageState::Interrupted if stage == Stage::Load && !r.dry_run => {
-            action(("resume", i), "Resume…", !busy, cx, |this, cx| {
-                this.open_apply(cx)
-            })
-            .into_any_element()
-        }
-        // The engine skips what is already done.
-        StageState::Interrupted => action(("resume", i), "Resume", !busy, cx, move |this, cx| {
+        ),
+        CardAction::ResumeViaApply => action(("resume", i), "Resume…", !busy, cx, |this, cx| {
+            this.open_apply(cx)
+        }),
+        CardAction::Resume => action(("resume", i), "Resume", !busy, cx, move |this, cx| {
             this.start(RunPlan::Stage(stage, dry()), cx)
-        })
-        .into_any_element(),
-        _ => action(
+        }),
+        CardAction::Run => action(
             ("run", i),
             if stage == Stage::Load {
                 "Dry run"
@@ -136,8 +130,7 @@ fn stage_card(w: &ProjectWindow, r: StageRow, cx: &mut Context<ProjectWindow>) -
             !busy,
             cx,
             move |this, cx| this.start(RunPlan::Stage(stage, dry()), cx),
-        )
-        .into_any_element(),
+        ),
     };
     v_flex()
         .flex_1()

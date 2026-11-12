@@ -27,7 +27,8 @@ impl Store {
     }
 
     /// What one run left out, grouped: `(what, why, how many)`. `what` is the document
-    /// type, or the item kind for anything else; failed items group under "failed".
+    /// type, or the item kind for anything else; failed items group under "failed". Items
+    /// a dry run would write are not left out.
     pub fn run_left_out(&self, run: &str, stage: Stage) -> Result<Vec<(String, String, u64)>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -43,6 +44,12 @@ impl Store {
         })? {
             let (what, status) = row?;
             let why = match serde_json::from_str(&status)? {
+                // A dry run records what it would write as a skip: that is written, not left out.
+                ItemStatus::Skipped { reason }
+                    if reason == crate::destinations::payload::DRY_RUN =>
+                {
+                    continue;
+                }
                 ItemStatus::Skipped { reason } => reason,
                 ItemStatus::Failed { .. } => "failed".into(),
                 ItemStatus::Done | ItemStatus::Partial { .. } => continue,

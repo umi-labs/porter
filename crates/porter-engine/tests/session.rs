@@ -85,15 +85,21 @@ async fn session_all_stops_at_first_failure() {
 }
 
 /// The first Run all seeds `[mapping]` after analyse, and the stages after it run with the
-/// seed: nothing reads as stale once it ends.
+/// seed: nothing reads as stale once it ends, and schema and load recorded the seeded
+/// mapping (the paths it adds are what load renders).
 #[tokio::test]
 async fn first_run_all_is_not_stale() {
+    use porter_engine::config::ProjectConfig;
+    use porter_engine::fingerprint::changed;
     use porter_engine::session::stage_view;
-    let d = wxr_project("");
+    // A destination nothing answers at: schema and load start (and record), then fail.
+    let d = wxr_project(
+        "adapter = \"payload\"\nurl = \"http://127.0.0.1:9\"\napi_key_env = \"PORTER_TEST_NO_SUCH_KEY\"\nauth_collection = \"users\"\n",
+    );
     let s = Session::open(d.path()).unwrap();
     let out = s
         .run(RunPlan::All {
-            keep_going: false,
+            keep_going: true,
             apply: false,
         })
         .unwrap()
@@ -106,8 +112,17 @@ async fn first_run_all_is_not_stale() {
         assert!(v.last_run.is_some(), "{stage:?} ran: {out:?}");
         assert_eq!(v.stale, None, "{stage:?}");
     }
-    let toml = std::fs::read_to_string(d.path().join("porter.toml")).unwrap();
-    assert!(toml.contains("[mapping"), "seeded: {toml}");
+    let cfg = ProjectConfig::load(&d.path().join("porter.toml")).unwrap();
+    assert!(!cfg.mapping.types.is_empty(), "seeded");
+    for stage in [Stage::Schema, Stage::Load] {
+        let run = s.project().store().runs(stage).unwrap().pop();
+        let run = run.unwrap_or_else(|| panic!("{stage:?} started: {out:?}"));
+        assert_eq!(
+            changed(run.config_fp.as_deref(), &cfg, stage),
+            None,
+            "{stage:?} ran with the seeded mapping"
+        );
+    }
 }
 
 #[tokio::test]

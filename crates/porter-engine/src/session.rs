@@ -322,6 +322,54 @@ fn stage_name(s: Stage) -> String {
     format!("{s:?}").to_lowercase()
 }
 
+/// Why the last dry-run load no longer shows what a load with `cfg` would write: it did
+/// not finish, the sections load reads differ from what it recorded, or any stage before
+/// load started after it did. Anything that cannot be checked counts as stale.
+pub fn dry_run_stale(store: &crate::store::Store, cfg: &ProjectConfig) -> Option<String> {
+    let Ok(loads) = store.runs(Stage::Load) else {
+        return Some("the run history could not be read".into());
+    };
+    let Some(dry) = loads.into_iter().rev().find(|r| r.dry_run) else {
+        return Some("there is no record of the dry run".into());
+    };
+    if dry.summary.as_ref().is_none_or(|s| s.interrupted) {
+        return Some("the last dry run did not finish".into());
+    }
+    if let Some(why) = crate::fingerprint::changed(dry.config_fp.as_deref(), cfg, Stage::Load) {
+        return Some(why);
+    }
+    for up in [
+        Stage::Schema,
+        Stage::Normalise,
+        Stage::Extract,
+        Stage::Analyse,
+    ] {
+        let Ok(runs) = store.runs(up) else {
+            return Some("the run history could not be read".into());
+        };
+        if runs.iter().any(|r| r.id > dry.id) {
+            return Some(format!("{} re-ran after it", stage_name(up)));
+        }
+    }
+    None
+}
+
+/// Before a writing load starts: if a dry run was ever made, it must still describe what
+/// this load will write. With no dry run on record the load goes ahead, as `porter load
+/// --apply` always has.
+fn apply_guard(env: &Env) -> Option<String> {
+    let store = env.project.store();
+    match store.runs(Stage::Load) {
+        Ok(r) if !r.iter().any(|r| r.dry_run) => None,
+        Ok(_) => dry_run_stale(store, &env.config()).map(|why| {
+            format!(
+                "refusing to apply: the last dry run no longer matches ({why}); run load without --apply again"
+            )
+        }),
+        Err(e) => Some(format!("refusing to apply: the run history could not be read: {e:#}")),
+    }
+}
+
 type Running = Arc<Mutex<Option<RunInfo>>>;
 
 pub struct Session {
@@ -389,37 +437,13 @@ impl Session {
         Some(Preview { counts, at })
     }
 
-    /// Why a preview can no longer be trusted: the config the dry run used differs from
-    /// porter.toml now (only the sections load reads), or normalise or schema started
-    /// after it did. Fails closed: anything that cannot be checked counts as stale.
+    /// Why a preview can no longer be trusted (`dry_run_stale`), against porter.toml as it
+    /// is now. Fails closed: anything that cannot be checked counts as stale.
     pub fn preview_stale(&self, _p: &Preview) -> Option<String> {
-        let cfg = match ProjectConfig::load(&self.project.dir().join("porter.toml")) {
-            Ok(c) => c,
-            Err(_) => return Some("porter.toml could not be read".into()),
-        };
-        let store = self.project.store();
-        let Ok(loads) = store.runs(Stage::Load) else {
-            return Some("the run history could not be read".into());
-        };
-        let Some(dry) = loads.into_iter().rev().find(|r| r.dry_run) else {
-            return Some("there is no record of the dry run".into());
-        };
-        if dry.summary.as_ref().is_none_or(|s| s.interrupted) {
-            return Some("the last dry run did not finish".into());
+        match ProjectConfig::load(&self.project.dir().join("porter.toml")) {
+            Ok(cfg) => dry_run_stale(self.project.store(), &cfg),
+            Err(_) => Some("porter.toml could not be read".into()),
         }
-        if let Some(why) = crate::fingerprint::changed(dry.config_fp.as_deref(), &cfg, Stage::Load)
-        {
-            return Some(why);
-        }
-        for up in [Stage::Schema, Stage::Normalise] {
-            let Ok(runs) = store.runs(up) else {
-                return Some("the run history could not be read".into());
-            };
-            if runs.iter().any(|r| r.id > dry.id) {
-                return Some(format!("{} re-ran after it", stage_name(up)));
-            }
-        }
-        None
     }
 
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Event> {
@@ -925,7 +949,9 @@ fn lock_out(m: &Mutex<RunOutcome>) -> std::sync::MutexGuard<'_, RunOutcome> {
 }
 
 async fn drive(env: Env, plan: RunPlan) -> RunOutcome {
-    let (steps, keep_going, refresh, skip) = match plan {
+    // `guard`: a writing load on its own, checked against the dry run it follows. `run
+    // --apply` re-runs every stage in one go and makes no dry-run claim, so it is not.
+    let (steps, keep_going, refresh, skip, guard) = match plan {
         RunPlan::Stage(stage, o) => {
             let step = match stage {
                 Stage::Analyse => Step::Analyse,
@@ -935,7 +961,13 @@ async fn drive(env: Env, plan: RunPlan) -> RunOutcome {
                 Stage::Load => Step::Load(o.apply),
                 Stage::Verify => Step::Verify,
             };
-            (vec![step], false, o.refresh, None)
+            (
+                vec![step],
+                false,
+                o.refresh,
+                None,
+                stage == Stage::Load && o.apply,
+            )
         }
         RunPlan::All { keep_going, apply } => {
             let mut steps = vec![
@@ -953,7 +985,7 @@ async fn drive(env: Env, plan: RunPlan) -> RunOutcome {
             } else {
                 Some((Stage::Verify, "dry run".to_string()))
             };
-            (steps, keep_going, false, skip)
+            (steps, keep_going, false, skip, false)
         }
     };
     // A Mutex, not a RefCell: the run future must be Send. Never held across an await.
@@ -962,14 +994,22 @@ async fn drive(env: Env, plan: RunPlan) -> RunOutcome {
         let (env, out) = (&env, &out);
         async move {
             let stage = step.stage();
-            let (code, err) = match exec(env, step, refresh).await {
-                Ok(s) => {
-                    let c = exit_code(&s);
-                    lock_out(out).summaries.push((stage, s));
-                    (c, None)
-                }
-                Err(e) if env.cancel.is_cancelled() => (3, Some(format!("{e:#}"))),
-                Err(e) => (1, Some(format!("{e:#}"))),
+            let refused = if guard && stage == Stage::Load {
+                apply_guard(env)
+            } else {
+                None
+            };
+            let (code, err) = match refused {
+                Some(why) => (1, Some(why)),
+                None => match exec(env, step, refresh).await {
+                    Ok(s) => {
+                        let c = exit_code(&s);
+                        lock_out(out).summaries.push((stage, s));
+                        (c, None)
+                    }
+                    Err(e) if env.cancel.is_cancelled() => (3, Some(format!("{e:#}"))),
+                    Err(e) => (1, Some(format!("{e:#}"))),
+                },
             };
             lock_out(out).per_stage.push((stage, code, err));
             // Seed right after analyse, so the steps after it use (and record) the seed.
@@ -1200,11 +1240,8 @@ mod tests {
             None,
             "extract ignores mapping"
         );
-        let n = stage_view(&ov, Stage::Normalise);
-        assert_eq!(
-            (n.state, n.stale.as_deref()),
-            (StageState::Clean, Some("mapping changed since"))
-        );
+        // Normalise does not read the types: a type edit leaves it standing.
+        assert_eq!(stage_view(&ov, Stage::Normalise).stale, None);
         let l = stage_view(&ov, Stage::Load);
         assert_eq!(
             (l.state, l.stale.as_deref()),
@@ -1217,7 +1254,7 @@ mod tests {
         ov.last_runs[0].1.config_fp = None;
         assert_eq!(
             stage_view(&ov, Stage::Extract).stale.as_deref(),
-            Some("its config was not recorded")
+            Some("ran before settings were recorded; re-run to refresh")
         );
     }
 
@@ -1311,6 +1348,66 @@ mod tests {
             s.preview_stale(&p).as_deref(),
             Some("normalise re-ran after it")
         );
+        // Any stage before load: extract and analyse too.
+        let (_d, s) = dry_run_with(|_| {});
+        s.project.store().begin_run(Stage::Extract).unwrap();
+        assert_eq!(
+            s.preview_stale(&p).as_deref(),
+            Some("extract re-ran after it")
+        );
+    }
+
+    fn apply() -> RunPlan {
+        RunPlan::Stage(
+            Stage::Load,
+            StageOpts {
+                refresh: false,
+                apply: true,
+                schema_mode: SchemaMode::Check,
+            },
+        )
+    }
+
+    /// The engine itself refuses a writing load the dry run no longer describes, whatever
+    /// front end asked: before writing anything, code 1, with why.
+    #[tokio::test]
+    async fn writing_load_refuses_a_stale_dry_run() {
+        let (d, s) = dry_run_with(|_| {});
+        edit_toml(d.path(), |t| t.replace("\"posts\"", "\"articles\""));
+        let out = s.run(apply()).unwrap().wait().await;
+        assert_eq!(out.code, 1, "{out:?}");
+        let (stage, _, err) = &out.per_stage[0];
+        assert_eq!(*stage, Stage::Load);
+        let err = err.as_deref().unwrap();
+        assert!(
+            err.contains("refusing to apply") && err.contains("mapping changed since"),
+            "{err}"
+        );
+        // Refused before the stage began: no load run was started.
+        let loads = s.project.store().runs(Stage::Load).unwrap();
+        assert_eq!(loads.len(), 1, "only the dry run");
+        // An upstream re-run refuses too.
+        let (_d, s) = dry_run_with(|_| {});
+        s.project.store().begin_run(Stage::Schema).unwrap();
+        let out = s.run(apply()).unwrap().wait().await;
+        let err = out.per_stage[0].2.clone().unwrap_or_default();
+        assert!(err.contains("schema re-ran after it"), "{err}");
+    }
+
+    /// With no dry run on record, `load --apply` is not refused by the guard (the
+    /// documented CLI contract); it goes on to the load itself.
+    #[tokio::test]
+    async fn writing_load_without_any_dry_run_is_not_guarded() {
+        let d = tempfile::tempdir().unwrap();
+        Project::init(d.path(), "demo", "wordpress").unwrap();
+        let s = Session::open(d.path()).unwrap();
+        let out = s.run(apply()).unwrap().wait().await;
+        let err = out
+            .per_stage
+            .first()
+            .and_then(|p| p.2.clone())
+            .unwrap_or_default();
+        assert!(!err.contains("refusing to apply"), "{out:?}");
     }
 
     #[tokio::test]

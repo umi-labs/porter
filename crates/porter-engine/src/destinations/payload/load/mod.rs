@@ -22,7 +22,8 @@ use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-const DRY_RUN: &str = "dry run";
+/// What a dry run records for each item it would write (a skip, since nothing was sent).
+pub const DRY_RUN: &str = "dry run";
 const NOT_MAPPED: &str = "no destination mapped";
 
 /// Item -> where it is in the destination, from `dest_ids` plus this run's writes.
