@@ -1,9 +1,10 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -30,13 +31,13 @@ import {
 } from "@porter-hub/db";
 import { runMigrations } from "@porter-hub/db/migrate";
 import { freshDb } from "@porter-hub/db/test-helper";
-import { encryptSecret } from "@porter-hub/porter";
-import { createMultipart, getStream, keys, putFile } from "@porter-hub/storage/s3";
+import { encryptSecret, Tail } from "@porter-hub/porter";
+import { createMultipart, getStream, head, keys, putFile } from "@porter-hub/storage/s3";
 import { extractTarZst, packTarZst } from "@porter-hub/storage/tar";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { claim, reclaimLost } from "./claim";
-import { execute, outcome, type Settings } from "./execute";
+import { cleanScratch, execute, outcome, type Settings } from "./execute";
 import { sweepUploads } from "./sweep";
 
 process.env.HUB_SECRET_KEY = randomBytes(32).toString("base64");
@@ -96,7 +97,7 @@ async function storeVersion(extraToml = "", media: string[] = [], wxr = true) {
 async function runOn(
   base: { id: string },
   stages: string[],
-  opts: { bin?: string; whileRunning?: (runId: string) => Promise<void> } = {},
+  opts: { bin?: string; whileRunning?: (runId: string) => Promise<void>; settings?: Partial<Settings> } = {},
 ) {
   const [q] = await conn.db
     .insert(run)
@@ -105,7 +106,7 @@ async function runOn(
   const r = await claim(conn.db);
   expect(r?.id).toBe(q.id);
   if (!r) throw new Error("not claimed");
-  const done = execute(conn.db, r, { ...s, bin: opts.bin ?? s.bin });
+  const done = execute(conn.db, r, { ...s, ...opts.settings, bin: opts.bin ?? s.bin });
   await opts.whileRunning?.(r.id);
   await done;
   const [after] = await conn.db.select().from(run).where(eq(run.id, r.id));
@@ -133,6 +134,18 @@ function filesContaining(dir: string, needle: string): string[] {
     .map((e) => join(e.parentPath, e.name))
     .filter((f) => readFileSync(f).includes(needle));
 }
+
+/** Waits until the run has stored at least one event (porter has started). */
+async function started(id: string) {
+  for (let i = 0; i < 200; i++) {
+    if ((await conn.db.select().from(runEvent).where(eq(runEvent.runId, id))).length) return;
+    await new Promise((res) => setTimeout(res, 50));
+  }
+  throw new Error("porter never started");
+}
+const versionCount = async () =>
+  (await conn.db.select().from(projectVersion).where(eq(projectVersion.projectId, pid))).length;
+const STARTED = `echo '{"v":1,"event":"stage-started","stage":"analyse","run":"x"}'`;
 
 async function snapshotOf(versionId: string) {
   const [v] = await conn.db.select().from(projectVersion).where(eq(projectVersion.id, versionId));
@@ -298,7 +311,8 @@ describe("worker", () => {
     await conn.db.delete(runSecret).where(eq(runSecret.projectId, pid));
     expect(r.state).toBe("finished");
     const envEv = list.find((e) => e.event === "test-env");
-    expect(envEv?.token).toBe(value);
+    // The env had the value; what got stored is the redaction (I4).
+    expect(envEv?.token).toBe("[secret:MY_TOKEN]");
     expect(envEv?.leak).toBe("");
     // sh adds PWD, SHLVL and _ itself.
     const names = String(envEv?.names)
@@ -320,17 +334,142 @@ describe("worker", () => {
     const { run: r } = await runOn(v, ["analyse"], {
       bin,
       whileRunning: async (id) => {
-        for (let i = 0; i < 100; i++) {
-          const evs = await conn.db.select().from(runEvent).where(eq(runEvent.runId, id));
-          if (evs.length) break;
-          await new Promise((res) => setTimeout(res, 50));
-        }
+        await started(id);
         await conn.db.update(run).set({ cancelRequested: true }).where(eq(run.id, id));
       },
     });
     expect(r.state).toBe("cancelled");
     expect(r.exitCode).toBe(3);
     expect(r.resultVersionId).toBeTruthy();
+  });
+
+  test("cancel: porter ignoring SIGINT is SIGKILLed (whole group) after killAfterMs", async () => {
+    const bin = fakePorter(`trap '' INT\n${STARTED}\nsleep 20 >/dev/null 2>&1 &\nwait $!`);
+    const t0 = Date.now();
+    const { run: r } = await runOn(v1, ["analyse"], {
+      bin,
+      settings: { killAfterMs: 300 },
+      whileRunning: async (id) => {
+        await started(id);
+        await conn.db.update(run).set({ cancelRequested: true }).where(eq(run.id, id));
+      },
+    });
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(r.state).toBe("cancelled");
+    expect(r.exitCode).toBeNull();
+  });
+
+  test("cancel between stages: the rest never runs and the run is cancelled, not finished", async () => {
+    // analyse ignores SIGINT and exits 0 a moment after the cancel, so the cancel lands between stages.
+    const bin = fakePorter(`case "$*" in *" analyse") trap '' INT; ${STARTED}; sleep 1; exit 0;; esac`);
+    const { run: r, list } = await runOn(v1, ["analyse", "extract"], {
+      bin,
+      whileRunning: async (id) => {
+        await started(id);
+        await conn.db.update(run).set({ cancelRequested: true }).where(eq(run.id, id));
+      },
+    });
+    expect(r.state).toBe("cancelled");
+    expect(r.exitCode).toBeNull();
+    expect(list.some((e) => e.stage === "extract")).toBe(false);
+    expect(r.resultVersionId).toBeTruthy(); // analyse ran, so its result is kept
+  });
+
+  test("lease taken away mid-run: heartbeat kills porter, nothing is committed", async () => {
+    const before = await versionCount();
+    const bin = fakePorter(`${STARTED}\nsleep 20 >/dev/null 2>&1 &\nwait $!`);
+    const t0 = Date.now();
+    const { run: r } = await runOn(v1, ["analyse"], {
+      bin,
+      settings: { heartbeatMs: 100 },
+      whileRunning: async (id) => {
+        await started(id);
+        await conn.db.update(run).set({ workerId: "another-worker" }).where(eq(run.id, id));
+      },
+    });
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(r.workerId).toBe("another-worker");
+    expect(r.state).toBe("running"); // untouched: it's the other worker's now
+    expect(r.resultVersionId).toBeNull();
+    expect(await versionCount()).toBe(before);
+    expect(existsSync(join(s.scratchDir, r.id))).toBe(false);
+    await conn.db.update(run).set({ state: "failed" }).where(eq(run.id, r.id));
+  });
+
+  test("reclaimed while porter was still running: the original worker commits nothing", async () => {
+    const before = await versionCount();
+    // Exits 0 by itself; the heartbeat never fires in time, so only the commit guard can stop it.
+    const bin = fakePorter(`${STARTED}\nsleep 1\nexit 0`);
+    const { run: r, list } = await runOn(v1, ["analyse"], {
+      bin,
+      settings: { heartbeatMs: 600_000 },
+      whileRunning: async (id) => {
+        await started(id);
+        await conn.db.execute(
+          sql`update run set heartbeat_at = now() - interval '2 minutes' where id = ${id}`,
+        );
+        expect(await reclaimLost(conn.db)).toEqual([id]);
+      },
+    });
+    expect(r.state).toBe("failed");
+    expect(r.error).toBe("worker lost");
+    expect(r.resultVersionId).toBeNull();
+    expect(await versionCount()).toBe(before);
+    expect(await head(keys.snapshot(pid, r.id))).toBeNull(); // the uploaded snapshot was deleted
+    expect(list.filter((e) => e.event === "hub-result")).toEqual([]);
+    // Every seq is unique and in order despite the reclaim note being written by another writer.
+    expect(new Set(list.map((e) => JSON.stringify(e))).size).toBe(list.length);
+  });
+
+  test("secret values porter echoes are redacted from events, stderr and errors", async () => {
+    const value = `tok_${randomBytes(8).toString("hex")}`;
+    await conn.db
+      .insert(runSecret)
+      .values({ projectId: pid, name: "MY_TOKEN", ...encryptSecret(pid, "MY_TOKEN", value) });
+    const bin = fakePorter(
+      [
+        `echo "{\\"v\\":1,\\"event\\":\\"test-echo\\",\\"t\\":\\"Bearer $MY_TOKEN\\"}"`,
+        `echo "not json $MY_TOKEN"`,
+        `echo "error: auth failed with $MY_TOKEN" >&2`,
+        "exit 1",
+      ].join("\n"),
+    );
+    const { run: r, events, list } = await runOn(v1, ["analyse"], { bin });
+    await conn.db.delete(runSecret).where(eq(runSecret.projectId, pid));
+    expect(r.state).toBe("failed");
+    expect(JSON.stringify(events)).not.toContain(value);
+    expect(String(r.error)).not.toContain(value);
+    expect(list.find((e) => e.event === "test-echo")?.t).toBe("Bearer [secret:MY_TOKEN]");
+    expect(list.find((e) => e.event === "hub-malformed")?.line).toBe("not json [secret:MY_TOKEN]");
+    expect(list.find((e) => e.event === "hub-stderr")?.text).toContain("auth failed with [secret:MY_TOKEN]");
+  });
+
+  test("startup cleanup: scratch dirs of runs that aren't running go, with their stale porter", async () => {
+    const [done] = await conn.db
+      .insert(run)
+      .values({ projectId: pid, baseVersionId: v1.id, stages: ["analyse"], state: "failed" })
+      .returning();
+    const [live] = await conn.db
+      .insert(run)
+      .values({ projectId: pid, baseVersionId: v1.id, stages: ["analyse"], state: "running" })
+      .returning();
+    const stale = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    const exited = new Promise((res) => stale.once("exit", res));
+    for (const id of [done.id, live.id]) mkdirSync(join(s.scratchDir, id, "project"), { recursive: true });
+    writeFileSync(join(s.scratchDir, done.id, "porter.pid"), String(stale.pid));
+    mkdirSync(join(s.scratchDir, "not-a-run"), { recursive: true });
+    expect(await cleanScratch(conn.db, s.scratchDir, [])).toEqual([done.id]);
+    await exited; // SIGKILLed
+    expect(existsSync(join(s.scratchDir, done.id))).toBe(false);
+    expect(existsSync(join(s.scratchDir, live.id))).toBe(true);
+    expect(existsSync(join(s.scratchDir, "not-a-run"))).toBe(true);
+    await conn.db.update(run).set({ state: "failed" }).where(eq(run.id, live.id));
+  });
+
+  test("stderr tail keeps the last 64 KB without splitting a character", () => {
+    const t = new Tail(3);
+    t.push(Buffer.from("éé")); // 4 bytes; the last 3 start mid-character
+    expect(t.toString()).toBe("é");
   });
 
   test("exit mapping", () => {
@@ -349,6 +488,7 @@ describe("worker", () => {
 
   test("a newer version pushed meanwhile: result still appended, with a warning", async () => {
     const v = v1;
+    await storeVersion(); // its own vN+1, so the test doesn't depend on earlier ones
     const { run: r, list } = await runOn(v, ["analyse"]);
     const note = list.find((e) => e.event === "hub-note" && e.kind === "newer-version");
     expect(note?.message).toMatch(/^v\d+ was pushed while this run was going/);

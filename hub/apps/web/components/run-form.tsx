@@ -1,5 +1,5 @@
 "use client";
-import { STAGES } from "@porter-hub/porter/config";
+import { STAGES } from "@porter-hub/porter/stages";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 

@@ -1,4 +1,7 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   auditLog,
   connect,
@@ -14,6 +17,8 @@ import {
 import { runMigrations } from "@porter-hub/db/migrate";
 import { freshDb } from "@porter-hub/db/test-helper";
 import { decryptSecret } from "@porter-hub/porter/secrets";
+import { keys, putFile } from "@porter-hub/storage/s3";
+import { packTarZst } from "@porter-hub/storage/tar";
 import { and, eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { makeApi } from "./api";
@@ -226,6 +231,35 @@ describe("run requests", () => {
     expect((await go({ stages: ["load"] })).status).toBe(201);
   });
 
+  test("apply reads the destination host from the version's real snapshot", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "runs-snap-"));
+    writeFileSync(join(dir, "porter.toml"), TOML);
+    writeFileSync(join(dir, "project.db"), "");
+    const out = join(dir, "..", `${randomUUID()}.tar.zst`);
+    await packTarZst(dir, out);
+    const sha = createHash("sha256").update(readFileSync(out)).digest("hex");
+    const [p] = await conn.db
+      .insert(project)
+      .values({ orgId: "org", name: "Real", slug: "real" })
+      .returning();
+    await conn.db.insert(projectMember).values({ projectId: p.id, userId: "dev", role: "developer" });
+    await putFile(keys.snapshot(p.id, "v1"), out, sha, statSync(out).size);
+    await conn.db.insert(projectVersion).values({
+      projectId: p.id,
+      number: 1,
+      snapshotKey: keys.snapshot(p.id, "v1"),
+      snapshotSha256: sha,
+    });
+    // No readToml injected: versionDir extracts the snapshot and reads porter.toml.
+    const real = makeApi(conn.db, async (r) => ({ id: r.headers.get("x-user") as string }));
+    const go = (host: string) =>
+      real.createRun(req("dev", { stages: ["load"], apply: true, confirm_host: host }), { slug: "real" });
+    expect((await go("cms.example.com")).status).toBe(400);
+    expect((await go("cms.example.com:8443")).status).toBe(201);
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(out, { force: true });
+  });
+
   test("one run per project: API 409 and the database index", async () => {
     const first = await json(await api.createRun(req("dev", { stages: "all" }), slug));
     const again = await api.createRun(req("owner", { stages: ["analyse"] }), slug);
@@ -394,8 +428,38 @@ describe("secrets", () => {
       "LD_PRELOAD",
       "DYLD_INSERT_LIBRARIES",
       "HTTPS_PROXY",
+      // Exact names (one per rule added in fix round 1).
+      "SSLKEYLOGFILE",
+      "OPENSSL_CONF",
+      "GCONV_PATH",
+      "GLIBC_TUNABLES",
+      "HOSTALIASES",
+      "RES_OPTIONS",
+      "LOCALDOMAIN",
+      "LOCPATH",
+      "NLSPATH",
+      "MALLOC_CHECK_",
+      "ZDOTDIR",
+      // Prefixes.
+      "SSL_CERT_FILE",
+      "OPENSSL_MODULES",
+      "GCONV_X",
+      "GLIBC_X",
+      "GIT_SSH_COMMAND",
+      "PYTHONPATH",
+      "PERL5LIB",
+      "RUBYOPT",
+      "JAVA_TOOL_OPTIONS",
+      "CURL_CA_BUNDLE",
+      "REQUESTS_CA_BUNDLE",
+      // The _PROXY suffix.
+      "FTP_PROXY",
+      "SOCKS_PROXY",
     ])
       expect((await api.putSecret(req("dev", { value: "v" }, "PUT"), { ...slug, name })).status).toBe(400);
+    // Ordinary credential names stay allowed.
+    for (const name of ["PORTER_WP_PASSWORD", "MY_API_KEY", "PROXY_TOKEN"])
+      expect((await api.putSecret(req("dev", { value: "v" }, "PUT"), { ...slug, name })).status).toBe(200);
     for (const body of [{}, { value: "" }, { value: 5 }, { value: "a\0b" }])
       expect((await api.putSecret(req("dev", body, "PUT"), { ...slug, name: "OK_NAME" })).status).toBe(400);
   });

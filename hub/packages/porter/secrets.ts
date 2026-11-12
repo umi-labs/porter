@@ -2,7 +2,10 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
 /** Env var names a run secret may use. */
 export const SECRET_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
-/** Names that would change how porter or the OS behaves rather than pass a credential. */
+/**
+ * Names that would change how porter, the loader, libc or TLS behave rather than pass a credential.
+ * Run secrets are still arbitrary env names otherwise: `api_key_env` can name anything.
+ */
 const RESERVED = new Set([
   "PATH",
   "HOME",
@@ -21,19 +24,50 @@ const RESERVED = new Set([
   "BASH_ENV",
   "TERM",
   "TZ",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "NO_PROXY",
-  "SSL_CERT_FILE",
-  "SSL_CERT_DIR",
+  "SSLKEYLOGFILE",
+  "OPENSSL_CONF",
+  "GCONV_PATH",
+  "GLIBC_TUNABLES",
+  "HOSTALIASES",
+  "RES_OPTIONS",
+  "LOCALDOMAIN",
+  "LOCPATH",
+  "NLSPATH",
+  "MALLOC_CHECK_",
+  "ZDOTDIR",
 ]);
-const RESERVED_PREFIX = ["NODE_", "LD_", "DYLD_", "LC_", "RUST_", "CARGO_", "MALLOC_", "XDG_"];
+const RESERVED_PREFIX = [
+  "NODE_",
+  "LD_",
+  "DYLD_",
+  "LC_",
+  "RUST_",
+  "CARGO_",
+  "MALLOC_",
+  "XDG_",
+  "SSL_",
+  "OPENSSL_",
+  "GCONV_",
+  "GLIBC_",
+  "GIT_",
+  "PYTHON",
+  "PERL",
+  "RUBY",
+  "JAVA_",
+  "CURL_",
+  "REQUESTS_",
+];
+/** HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY, FTP_PROXY, ... */
+const RESERVED_SUFFIX = ["_PROXY"];
 
 /** Null if `name` is fine, else why not. */
 export function secretNameProblem(name: string) {
   if (!SECRET_NAME.test(name)) return "must match ^[A-Z][A-Z0-9_]{0,63}$";
-  if (RESERVED.has(name) || RESERVED_PREFIX.some((p) => name.startsWith(p)))
+  if (
+    RESERVED.has(name) ||
+    RESERVED_PREFIX.some((p) => name.startsWith(p)) ||
+    RESERVED_SUFFIX.some((x) => name.endsWith(x))
+  )
     return `${name} is reserved and can't be a run secret`;
   return null;
 }
@@ -61,4 +95,31 @@ export function decryptSecret(projectId: string, name: string, row: { ciphertext
   );
   d.setAuthTag(ct.subarray(ct.length - 16));
   return Buffer.concat([d.update(ct.subarray(0, ct.length - 16)), d.final()]).toString("utf8");
+}
+
+/** Values shorter than this aren't redacted: they'd match ordinary text. */
+export const REDACT_MIN = 6;
+
+/**
+ * Replaces every secret value (>= 6 chars) in `text` with `[secret:NAME]`, also in its JSON-escaped form, so
+ * nothing porter echoes (stdout events, stderr, error messages) stores a value. Longest values first.
+ */
+export function redactor(secrets: Record<string, string>) {
+  const pairs = Object.entries(secrets)
+    .filter(([, v]) => v.length >= REDACT_MIN)
+    .sort((a, b) => b[1].length - a[1].length)
+    .flatMap(([name, v]) => {
+      const escaped = JSON.stringify(v).slice(1, -1);
+      return escaped === v
+        ? [[v, name]]
+        : [
+            [v, name],
+            [escaped, name],
+          ];
+    });
+  return (text: string) => {
+    let out = text;
+    for (const [v, name] of pairs) out = out.split(v).join(`[secret:${name}]`);
+    return out;
+  };
 }

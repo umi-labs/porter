@@ -273,8 +273,9 @@ export async function getStream(key: string, idleMs = 60_000) {
 
 /**
  * Server-side upload of a local file (the worker's result snapshot and new media). The sha256 (hex) is sent as
- * the checksum, so storage rejects bytes that don't match; an object that already exists (412) counts as done,
- * since the checksum pins its content.
+ * the checksum, so storage rejects bytes that don't match what we send. An object that already exists (412) counts
+ * as done: the checksum does not prove *its* content, so this is only safe for keys that name their content
+ * (media by sha256) or are unique to the caller (a run's own snapshot key).
  */
 export async function putFile(key: string, path: string, sha256: string, size: number) {
   await ensureBucket();

@@ -191,6 +191,8 @@ export const run = pgTable(
     cancelRequested: boolean("cancel_requested").notNull().default(false),
     /** Worker lease: refreshed every 15 s while running; older than 60 s means the worker is gone. */
     heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
+    /** Lease owner: the worker that claimed the run. Only it may heartbeat, commit or finish the run. */
+    workerId: text("worker_id"),
     /** Why a failed run failed, in words ("worker lost", "interrupted", porter's own error...). */
     error: text("error"),
     startedAt: timestamp("started_at", { withTimezone: true }),

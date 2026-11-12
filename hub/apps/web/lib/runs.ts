@@ -147,11 +147,18 @@ export async function cancelRun(db: Db, actor: Actor, slug: string, id: string) 
       .set({ state: "cancelled", cancelRequested: true, finishedAt: new Date() })
       .where(and(eq(run.id, row.r.id), eq(run.state, "queued")))
       .returning({ id: run.id });
-    if (!q)
-      await tx
+    if (!q) {
+      const [running] = await tx
         .update(run)
         .set({ cancelRequested: true })
-        .where(and(eq(run.id, row.r.id), eq(run.state, "running")));
+        .where(and(eq(run.id, row.r.id), eq(run.state, "running")))
+        .returning({ id: run.id });
+      if (!running) {
+        // It ended between the read above and these updates.
+        const [now] = await tx.select({ state: run.state }).from(run).where(eq(run.id, row.r.id));
+        throw new HttpError(409, `The run is already ${now?.state}`, { state: now?.state });
+      }
+    }
     await audit(tx, actor, p.id, "run.cancel", row.r.id, { was: q ? "queued" : "running" });
   });
   await notifyRun(db, row.r.id);
@@ -162,6 +169,7 @@ export async function cancelRun(db: Db, actor: Actor, slug: string, id: string) 
  * Server-sent events: replays the run's events after `Last-Event-ID` (or `?after=`), then streams new ones as
  * the worker NOTIFYs. Each message is `id: <seq>` + `data: <event JSON>`. When the run is over and every event
  * has been sent, one `event: end` with the run JSON closes the stream (EventSource clients must then close()).
+ * Access is checked once, at connect: a member removed mid-stream keeps receiving this run's log until it ends.
  */
 export async function runEvents(
   db: Db,

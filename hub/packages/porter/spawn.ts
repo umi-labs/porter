@@ -14,7 +14,12 @@ export class Tail {
   constructor(private max = STDERR_TAIL_BYTES) {}
   push(chunk: Buffer) {
     this.buf = Buffer.concat([this.buf, chunk]);
-    if (this.buf.length > this.max) this.buf = this.buf.subarray(this.buf.length - this.max);
+    if (this.buf.length > this.max) {
+      let start = this.buf.length - this.max;
+      // Don't start mid-character: skip UTF-8 continuation bytes (10xxxxxx).
+      while (start < this.buf.length && (this.buf[start] & 0xc0) === 0x80) start++;
+      this.buf = this.buf.subarray(start);
+    }
   }
   toString() {
     return this.buf.toString("utf8");
@@ -22,16 +27,28 @@ export class Tail {
 }
 
 export type Spawned = {
+  /** Porter's pid, which is also its process group id (it runs detached in its own group). */
+  pid: number | undefined;
   /** Resolves when porter has exited and every stdout line has been handed to `onEvent`. Never rejects. */
   done: Promise<Exit>;
-  /** SIGINT now, SIGKILL if still running after `killAfterMs`. */
+  /** SIGINT to porter's process group now, SIGKILL to the group if porter is still running after `killAfterMs`. */
   interrupt(killAfterMs?: number): void;
+  /** SIGKILL to the whole process group (porter and anything it left behind). */
   kill(): void;
 };
 
+/** Signals a whole process group (porter runs as its own group leader). */
+export function signalGroup(pid: number | undefined, sig: NodeJS.Signals) {
+  if (!pid) return;
+  try {
+    process.kill(-pid, sig);
+  } catch {} // ESRCH: the group is already gone
+}
+
 /**
  * Runs `porter --json --project <dir> ...args` with exactly `env` (no inherited environment). Every stdout line
- * becomes one event, in order; stderr goes to `tail`.
+ * becomes one event, in order; stderr goes to `tail`. Porter runs detached in its own process group, so a
+ * terminal Ctrl-C aimed at the worker doesn't reach it; the worker signals the group itself.
  */
 export function spawnPorter(opts: {
   bin: string;
@@ -45,6 +62,7 @@ export function spawnPorter(opts: {
     env: opts.env,
     cwd: opts.dir,
     stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
   });
   child.stderr.on("data", (c: Buffer) => opts.tail.push(c));
   const lines = createInterface({ input: child.stdout, crlfDelay: Number.POSITIVE_INFINITY });
@@ -62,14 +80,15 @@ export function spawnPorter(opts: {
     return x;
   });
   return {
+    pid: child.pid,
     done,
     interrupt(killAfterMs = KILL_AFTER_MS) {
       if (child.exitCode !== null || child.signalCode !== null || killer) return;
-      child.kill("SIGINT");
-      killer = setTimeout(() => child.kill("SIGKILL"), killAfterMs);
+      signalGroup(child.pid, "SIGINT");
+      killer = setTimeout(() => signalGroup(child.pid, "SIGKILL"), killAfterMs);
     },
     kill() {
-      child.kill("SIGKILL");
+      signalGroup(child.pid, "SIGKILL");
     },
   };
 }
