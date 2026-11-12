@@ -213,6 +213,5 @@ mod typo_tests {
         )
         .unwrap_err();
         assert!(e.to_string().contains("api_key"), "{e}");
-        assert!(!e.to_string().contains("secret") || true);
     }
 }
