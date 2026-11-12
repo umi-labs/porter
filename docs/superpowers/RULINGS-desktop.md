@@ -47,6 +47,8 @@ None of the window behaviour has been run, because this environment has no displ
 
 ## Deferred minors
 
+Some of these were fixed in the final wave: the v4→v5 migration test, the close_step doc comment, the "media" magic string (now an engine constant), bundle.sh CARGO_TARGET_DIR, parent-cycle roots, and the recent-list tmp race (it now uses write_atomic).
+
 - Task 1: minor (deferred): recent::load sync on UI thread (tiny file); stale recents never pruned; corrupt-file log line untested; canonical/symlink dedup untested; fixed tmp name race across two app instances
 - Task 2-3: minor (deferred): runs history_row glyph for dry runs unchecked (text labelled); close_step doc comment displaced; window wiring untested
 - Task 4: minor (deferred): type count vs roots-only expansion (label "top-level"); no v4→v5 migration test; Labels failure leaves links "resolving…"; parent cycles drop both docs from roots; nested toggle stop_propagation unverified visually
