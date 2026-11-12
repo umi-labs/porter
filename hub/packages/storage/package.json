@@ -1,0 +1,10 @@
+{
+  "name": "@porter-hub/storage",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "dependencies": {
+    "@porter-hub/db": "workspace:*",
+    "drizzle-orm": "^0.45.4"
+  }
+}

@@ -18,6 +18,11 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
             <Link href={`/p/${slug}/issues`}>Issues</Link> | <Link href={`/p/${slug}/urls`}>URLs</Link> |{" "}
           </>
         )}
+        {roleCan(role, "upload") && (
+          <>
+            <Link href={`/p/${slug}/uploads`}>Uploads</Link> |{" "}
+          </>
+        )}
         {roleCan(role, "share") && <Link href={`/p/${slug}/settings`}>Settings</Link>}
       </p>
       {snap ? <Overview snap={snap} reportBase={`/p/${slug}/reports`} /> : <NoSnapshot />}

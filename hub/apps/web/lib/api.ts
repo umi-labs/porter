@@ -4,6 +4,7 @@ import type { Db } from "./permissions";
 import * as svc from "./projects";
 import { type Actor, HttpError, parse, schemas } from "./projects";
 import * as sh from "./shares";
+import * as up from "./uploads";
 import * as ver from "./versions";
 
 type GetActor = (req: Request) => Promise<Actor | null>;
@@ -68,6 +69,16 @@ export function makeApi(db: Db, getActor: GetActor) {
     uploadMediaUrls: route<P>(async (a, r, p) =>
       ver.uploadMediaUrls(db, a, slugOf(p), p.upload_id, await body(r)),
     ),
+    createUpload: route<P>(async (a, r, p) => up.createUpload(db, a, slugOf(p), await body(r)), 201),
+    listUploads: route<P>((a, _r, p) => up.listUploads(db, a, slugOf(p))),
+    getUpload: route<P>((a, _r, p) => up.getUpload(db, a, slugOf(p), p.id)),
+    uploadPartUrls: route<P>(async (a, r, p) => up.partUrls(db, a, slugOf(p), p.id, await body(r))),
+    completeUpload: route<P>(
+      async (a, r, p) => up.completeUpload(db, a, slugOf(p), p.id, await body(r)),
+      202,
+    ),
+    abortUpload: route<P>((a, _r, p) => up.abortUpload(db, a, slugOf(p), p.id)),
+    downloadUpload: route<P>((a, _r, p) => up.downloadUpload(db, a, slugOf(p), p.id)),
     mediaUrls: route<P>(async (a, r, p) => ver.mediaUrls(db, a, slugOf(p), await body(r))),
   };
 }

@@ -29,7 +29,16 @@ const updatedAt = () =>
 export const projectRole = pgEnum("project_role", ["owner", "developer", "viewer", "client"]);
 export const runState = pgEnum("run_state", ["queued", "running", "finished", "failed", "cancelled"]);
 export const shareScope = pgEnum("share_scope", ["report", "project-readonly"]);
-export const uploadState = pgEnum("upload_state", ["pending", "uploading", "complete", "failed", "deleted"]);
+export const uploadState = pgEnum("upload_state", [
+  "pending",
+  "uploading",
+  "complete",
+  "failed",
+  "deleted",
+  "verifying",
+  "ready",
+  "aborted",
+]);
 export const uploadPurpose = pgEnum("upload_purpose", ["dump", "wxr", "media-archive", "other"]);
 
 export const project = pgTable(

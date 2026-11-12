@@ -1,12 +1,18 @@
 import type { Readable } from "node:stream";
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
   CreateBucketCommand,
+  CreateMultipartUploadCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
+  ListPartsCommand,
   PutObjectCommand,
   S3Client,
+  UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
@@ -17,6 +23,7 @@ export const keys = {
   snapshot: (projectId: string, uploadId: string) => `projects/${projectId}/snapshots/${uploadId}.tar.zst`,
   media: (projectId: string, sha256: string) => `projects/${projectId}/media/${sha256}`,
   /** Everything a project owns, so retention can delete one project in full. */
+  upload: (projectId: string, uploadId: string) => `projects/${projectId}/uploads/${uploadId}`,
   projectPrefix: (projectId: string) => `projects/${projectId}/`,
 };
 
@@ -87,11 +94,84 @@ export async function presignPut(key: string, sha256: string) {
   );
 }
 
-export async function presignGet(key: string, expiresIn = URL_TTL_SECONDS) {
+export async function presignGet(key: string, expiresIn = URL_TTL_SECONDS, contentDisposition?: string) {
   await ensureBucket();
-  return getSignedUrl(s3Public(), new GetObjectCommand({ Bucket: need("S3_BUCKET"), Key: key }), {
-    expiresIn,
-  });
+  return getSignedUrl(
+    s3Public(),
+    new GetObjectCommand({
+      Bucket: need("S3_BUCKET"),
+      Key: key,
+      ResponseContentDisposition: contentDisposition,
+    }),
+    { expiresIn },
+  );
+}
+
+export async function deleteObject(key: string) {
+  await ensureBucket();
+  await s3().send(new DeleteObjectCommand({ Bucket: need("S3_BUCKET"), Key: key }));
+}
+
+/** Multipart. Parts are PUT straight from the browser to presigned URLs; the server only lists and completes. */
+export async function createMultipart(key: string) {
+  await ensureBucket();
+  const r = await s3().send(new CreateMultipartUploadCommand({ Bucket: need("S3_BUCKET"), Key: key }));
+  if (!r.UploadId) throw new Error("storage returned no multipart upload id");
+  return r.UploadId;
+}
+
+export async function presignPart(key: string, multipartId: string, partNumber: number) {
+  return getSignedUrl(
+    s3Public(),
+    new UploadPartCommand({
+      Bucket: need("S3_BUCKET"),
+      Key: key,
+      UploadId: multipartId,
+      PartNumber: partNumber,
+    }),
+    { expiresIn: URL_TTL_SECONDS },
+  );
+}
+
+/** Every part S3 has for this multipart upload (1000 per call). */
+export async function listParts(key: string, multipartId: string) {
+  const out: { partNumber: number; size: number; etag: string }[] = [];
+  let marker: string | undefined;
+  do {
+    const r = await s3().send(
+      new ListPartsCommand({
+        Bucket: need("S3_BUCKET"),
+        Key: key,
+        UploadId: multipartId,
+        PartNumberMarker: marker,
+      }),
+    );
+    for (const p of r.Parts ?? [])
+      out.push({ partNumber: p.PartNumber ?? 0, size: p.Size ?? 0, etag: p.ETag ?? "" });
+    marker = r.IsTruncated ? String(r.NextPartNumberMarker) : undefined;
+  } while (marker);
+  return out;
+}
+
+export async function completeMultipart(
+  key: string,
+  multipartId: string,
+  parts: { partNumber: number; etag: string }[],
+) {
+  await s3().send(
+    new CompleteMultipartUploadCommand({
+      Bucket: need("S3_BUCKET"),
+      Key: key,
+      UploadId: multipartId,
+      MultipartUpload: { Parts: parts.map((p) => ({ PartNumber: p.partNumber, ETag: p.etag })) },
+    }),
+  );
+}
+
+export async function abortMultipart(key: string, multipartId: string) {
+  await s3().send(
+    new AbortMultipartUploadCommand({ Bucket: need("S3_BUCKET"), Key: key, UploadId: multipartId }),
+  );
 }
 
 /** Size (and stored SHA-256, base64, if any) of an object, or null if it doesn't exist. */

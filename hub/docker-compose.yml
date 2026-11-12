@@ -20,6 +20,8 @@ services:
     environment:
       MINIO_ROOT_USER: porter-dev
       MINIO_ROOT_PASSWORD: porter-dev-secret
+      # Browser PUTs of upload parts come from the app origin; MinIO answers CORS preflights and exposes ETag.
+      MINIO_API_CORS_ALLOW_ORIGIN: "http://localhost:3000"
     ports: ["59100:9000", "59101:9001"]
     volumes: [miniodata:/data]
     healthcheck:
