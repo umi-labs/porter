@@ -165,7 +165,7 @@ fn parse_head(doc: &Html) -> PageHead {
     h
 }
 
-fn site_of(u: &Url) -> Option<String> {
+pub(crate) fn site_of(u: &Url) -> Option<String> {
     normalise_url(u.as_str(), None).map(|k| k.0.split('/').next().unwrap_or_default().to_string())
 }
 

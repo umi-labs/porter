@@ -2,14 +2,17 @@
 //! Redirection rules. Says what it could not see (access-gap issues) rather than guessing.
 use crate::config::ConnectorConfig;
 use crate::connectors::RawItem;
+use crate::connectors::crawl::site_of;
 use crate::http;
 use crate::stage::{Capabilities, Connector, Feature, StageCtx};
 use anyhow::Result;
 use async_trait::async_trait;
 use porter_model::{IssueKind, ItemId, ItemKind, ItemStatus, Severity, SourceRef};
-use reqwest::{Client, RequestBuilder};
+use reqwest::header::{HeaderName, HeaderValue};
+use reqwest::{Client, RequestBuilder, redirect};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
 const NAME: &str = "wp-rest";
@@ -112,7 +115,16 @@ impl Auth {
             Auth::None => r,
             Auth::Basic(u, p) => r.basic_auth(u, Some(p)),
             Auth::Bearer(t) => r.bearer_auth(t),
-            Auth::ApiKey(h, k) => r.header(h.as_str(), k.as_str()),
+            Auth::ApiKey(h, k) => {
+                match (HeaderName::try_from(h.as_str()), HeaderValue::from_str(k)) {
+                    (Ok(n), Ok(mut v)) => {
+                        v.set_sensitive(true);
+                        r.header(n, v)
+                    }
+                    // Unusable header: send nothing; the 401s become access-gaps.
+                    _ => r,
+                }
+            }
         }
     }
 }
@@ -129,8 +141,31 @@ enum Reply {
     Missing,
     Status(u16),
     Fail(String),
+    /// Redirected off the site; not followed, so credentials never leave it.
+    CrossHost,
     Cancelled,
 }
+
+/// A path component made from remote data: `[A-Za-z0-9_-]` only, `/` becomes `_`,
+/// anything else (or empty) becomes `x-` plus 12 hex of the original's sha256.
+fn safe_component(raw: &str) -> String {
+    let mapped = raw.replace('/', "_");
+    let ok = !mapped.is_empty()
+        && mapped
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if ok {
+        return mapped;
+    }
+    let hex: String = Sha256::digest(raw.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("x-{}", &hex[..12])
+}
+
+const MAX_REDIRECTS: usize = 5;
+const MAX_PAGES: u64 = 10_000;
 
 struct Api<'a> {
     ctx: &'a StageCtx,
@@ -184,7 +219,11 @@ impl WpRestConnector {
         let creds = creds.overlaid_by(Creds::from_env(|k| std::env::var(k).ok()));
         Ok(Api {
             ctx,
-            client: http::client(USER_AGENT),
+            // Redirects are followed by hand, same-site only (see `Api::get`).
+            client: Client::builder()
+                .user_agent(USER_AGENT)
+                .redirect(redirect::Policy::none())
+                .build()?,
             base: self.url.clone(),
             auth: creds.into_auth(self.auth.as_deref()),
             cancel: ctx.cancel.clone(),
@@ -213,15 +252,43 @@ impl Api<'_> {
         if self.cancel.is_cancelled() {
             return Reply::Cancelled;
         }
-        let req = self.client.get(format!("{}/wp-json{path}", self.base));
-        let req = self.auth.apply(req.query(query));
-        let sent = tokio::select! {
-            _ = self.cancel.cancelled() => return Reply::Cancelled,
-            r = http::send_with_retry(req, 3) => r,
-        };
-        let r = match sent {
-            Ok(r) => r,
-            Err(e) => return Reply::Fail(format!("{e:#}")),
+        let mut url = format!("{}/wp-json{path}", self.base);
+        let mut query = Some(query);
+        let mut hops = 0;
+        let r = loop {
+            let mut req = self.client.get(&url);
+            if let Some(q) = query.take() {
+                req = req.query(q);
+            }
+            let sent = tokio::select! {
+                _ = self.cancel.cancelled() => return Reply::Cancelled,
+                r = http::send_with_retry(self.auth.apply(req), 3) => r,
+            };
+            let r = match sent {
+                Ok(r) => r,
+                Err(e) => return Reply::Fail(format!("{e:#}")),
+            };
+            if !r.status().is_redirection() {
+                break r;
+            }
+            let here = r.url().clone();
+            let target = r
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|l| here.join(l).ok());
+            let Some(t) = target else {
+                return Reply::Status(r.status().as_u16());
+            };
+            hops += 1;
+            let same = site_of(&t) == site_of(&here) && t.scheme() == here.scheme();
+            if !same {
+                return Reply::CrossHost;
+            }
+            if hops > MAX_REDIRECTS {
+                return Reply::Fail("too many redirects".into());
+            }
+            url = t.to_string();
         };
         match r.status().as_u16() {
             401 | 403 => return Reply::Denied,
@@ -256,44 +323,75 @@ impl Api<'_> {
             Reply::Denied => self.gap(endpoint, "access denied (HTTP 401/403); not extracted")?,
             Reply::Status(c) => self.gap(endpoint, &format!("HTTP {c}; not extracted"))?,
             Reply::Fail(e) => self.gap(endpoint, &format!("request failed: {e}; not extracted"))?,
+            Reply::CrossHost => self.gap(
+                endpoint,
+                "redirected to another host; not followed, not extracted",
+            )?,
             Reply::Missing | Reply::Cancelled | Reply::Ok { .. } => {}
         }
         Ok(!matches!(r, Reply::Ok { .. }))
     }
 
     /// Walks `X-WP-TotalPages` (and stops on an empty or short page), handing each page to `each`.
+    /// Bounded: 10 000 pages, and a page that repeats the previous page's first id means the
+    /// server ignores `page`. A count that disagrees with `X-WP-Total` is reported.
     async fn pages(
         &self,
         path: &str,
         query: &[(&str, String)],
         mut each: impl FnMut(Vec<Value>) -> Result<()>,
     ) -> Result<()> {
-        for page in 1u64.. {
+        let (mut count, mut expected, mut prev_first) = (0u64, None, None::<Value>);
+        for page in 1u64..=MAX_PAGES {
             let mut q = query.to_vec();
             q.push(("per_page", PER_PAGE.to_string()));
             q.push(("page", page.to_string()));
             match self.get(path, &q).await {
-                Reply::Ok { body, pages, .. } => {
+                Reply::Ok { body, pages, total } => {
                     let Value::Array(items) = body else {
                         return self.gap(path, "unexpected response shape; not extracted");
                     };
+                    expected = expected.or(total);
+                    let first = items.first().map(|i| i["id"].clone());
+                    if first.is_some() && first == prev_first {
+                        return self.gap(
+                            path,
+                            &format!(
+                                "server ignores the page parameter; stopped after {count} records"
+                            ),
+                        );
+                    }
+                    prev_first = first;
                     let (n, last) = (items.len(), pages.is_some_and(|p| page >= p));
                     // ponytail: without the header a short page is taken as the last.
                     let short = pages.is_none() && n < PER_PAGE;
+                    count += n as u64;
                     each(items)?;
                     if n == 0 || last || short {
-                        return Ok(());
+                        break;
                     }
                 }
                 // Past the end: WordPress answers 400.
-                Reply::Status(400) if page > 1 => return Ok(()),
+                Reply::Status(400) if page > 1 => break,
                 other => {
                     self.problem(path, &other)?;
                     return Ok(());
                 }
             }
+            if page == MAX_PAGES {
+                return self.gap(
+                    path,
+                    &format!("stopped at {MAX_PAGES} pages ({count} records)"),
+                );
+            }
         }
-        Ok(())
+        match expected {
+            Some(t) if t != count => self.gap(
+                path,
+                &format!("fetched {count} records but X-WP-Total says {t}"),
+            ),
+            _ => Ok(()),
+        }
     }
 
     fn unauthenticated_gaps(&self) -> Result<()> {
@@ -332,26 +430,50 @@ impl Api<'_> {
         vec![("context", ctx.into())]
     }
 
-    /// `(slug, rest_base)` per entry of a `/types` or `/taxonomies` object.
-    async fn listing(&self, path: &str, fallback: &[(&str, &str)]) -> Vec<(String, String)> {
+    /// `(slug, rest_base)` per entry of a `/types` or `/taxonomies` object. When the listing
+    /// cannot be read the fallback is used and the access-gap says so.
+    async fn listing(
+        &self,
+        path: &str,
+        what: &str,
+        fallback: &[(&str, &str)],
+    ) -> Result<Vec<(String, String)>> {
+        let r = self.get(path, &self.edit_query()).await;
         if let Reply::Ok {
             body: Value::Object(m),
             ..
-        } = self.get(path, &self.edit_query()).await
+        } = r
         {
-            return m
+            return Ok(m
                 .into_iter()
                 .map(|(k, v)| {
                     let slug = s(&v, "slug").unwrap_or(k);
                     let base = s(&v, "rest_base").unwrap_or_else(|| slug.clone());
                     (slug, base)
                 })
-                .collect();
+                .collect());
         }
-        fallback
+        let status = match &r {
+            Reply::Denied => "HTTP 401/403".to_string(),
+            Reply::Missing => "HTTP 404".to_string(),
+            Reply::Status(c) => format!("HTTP {c}"),
+            Reply::Fail(e) => e.clone(),
+            Reply::CrossHost => "redirected to another host".into(),
+            Reply::Cancelled => return Ok(vec![]),
+            Reply::Ok { .. } => "unexpected response shape".into(),
+        };
+        let names: Vec<&str> = fallback.iter().map(|f| f.0).collect();
+        self.gap(
+            path,
+            &format!(
+                "{what} unknown ({status}); only {} fetched",
+                names.join("/")
+            ),
+        )?;
+        Ok(fallback
             .iter()
             .map(|(a, b)| (a.to_string(), b.to_string()))
-            .collect()
+            .collect())
     }
 
     async fn namespaces(&self) -> Result<(Vec<String>, usize)> {
@@ -384,6 +506,38 @@ struct Rec<'a> {
     file: String,
 }
 
+/// `root/dir` where every component of `dir` must already be a `safe_component`; anything
+/// else is a bug and refuses to write.
+fn checked_dir(root: &std::path::Path, dir: &str) -> Result<std::path::PathBuf> {
+    let mut out = root.to_path_buf();
+    for c in dir.split('/') {
+        anyhow::ensure!(safe_component(c) == c, "unsafe raw path component {c:?}");
+        out.push(c);
+    }
+    anyhow::ensure!(out.starts_with(root), "raw path escapes the raw folder");
+    Ok(out)
+}
+
+/// Gives an item with no usable id a row and a Failed status, so it is never dropped.
+fn fail_unnumbered(ctx: &StageCtx, kind: ItemKind, label: &str, source_id: String) -> Result<()> {
+    let src = SourceRef {
+        connector: NAME.into(),
+        source_id,
+        url: None,
+    };
+    let id = ItemId::new(kind, &src);
+    let row = RawItem {
+        label: label.into(),
+        title: None,
+        status: None,
+        url: None,
+        raw_path: None,
+    };
+    ctx.project.store().put_item(kind, id, &src, &row)?;
+    let error = "record has no numeric id".to_string();
+    ctx.item_status(id, kind, ItemStatus::Failed { error })
+}
+
 fn record(ctx: &StageCtx, r: Rec<'_>, v: &Value) -> Result<()> {
     let src = SourceRef {
         connector: NAME.into(),
@@ -392,10 +546,11 @@ fn record(ctx: &StageCtx, r: Rec<'_>, v: &Value) -> Result<()> {
     };
     let id = ItemId::new(r.kind, &src);
     let rel = format!("{}/{}.json", r.dir, r.file);
-    let dir = ctx.project.raw_dir(NAME).join(&r.dir);
+    let root = ctx.project.raw_dir(NAME);
+    let dir = checked_dir(&root, &r.dir)?;
     let written = std::fs::create_dir_all(&dir).and_then(|_| {
         std::fs::write(
-            dir.join(format!("{}.json", r.file)),
+            dir.join(format!("{}.json", safe_component(&r.file))),
             serde_json::to_vec_pretty(v)?.as_slice(),
         )
     });
@@ -429,22 +584,7 @@ fn record_all(
     for v in items {
         let n = seen.len() + 1;
         let Some(id) = v.get("id").and_then(Value::as_u64) else {
-            let src = SourceRef {
-                connector: NAME.into(),
-                source_id: format!("{id_prefix}unknown-{n}"),
-                url: None,
-            };
-            let id = ItemId::new(kind, &src);
-            let row = RawItem {
-                label: label.into(),
-                title: None,
-                status: None,
-                url: None,
-                raw_path: None,
-            };
-            ctx.project.store().put_item(kind, id, &src, &row)?;
-            let error = "record has no numeric id".to_string();
-            ctx.item_status(id, kind, ItemStatus::Failed { error })?;
+            fail_unnumbered(ctx, kind, label, format!("{id_prefix}unknown-{n}"))?;
             seen.push((String::new(), Value::Null));
             continue;
         };
@@ -488,11 +628,19 @@ impl Connector for WpRestConnector {
         api.unauthenticated_gaps()?;
         let (namespaces, routes) = api.namespaces().await?;
         let types = api
-            .listing("/wp/v2/types", &[("post", "posts"), ("page", "pages")])
-            .await;
+            .listing(
+                "/wp/v2/types",
+                "custom post types",
+                &[("post", "posts"), ("page", "pages")],
+            )
+            .await?;
         let taxes = api
-            .listing("/wp/v2/taxonomies", &[("category", "categories")])
-            .await;
+            .listing(
+                "/wp/v2/taxonomies",
+                "custom taxonomies",
+                &[("category", "categories")],
+            )
+            .await?;
         let mut out = json!({
             "authenticated": api.auth.is_some(),
             "namespaces": namespaces,
@@ -554,21 +702,26 @@ impl Connector for WpRestConnector {
 
         // Content types.
         let types = api
-            .listing("/wp/v2/types", &[("post", "posts"), ("page", "pages")])
-            .await;
+            .listing(
+                "/wp/v2/types",
+                "custom post types",
+                &[("post", "posts"), ("page", "pages")],
+            )
+            .await?;
         let mut links: Vec<(String, String, String)> = vec![];
         for (slug, base) in types {
             if SKIP_ROUTES.contains(&base.as_str()) || slug == "nav_menu_item" {
                 continue;
             }
             let mut seen = vec![];
+            let dir = safe_component(&base);
             api.pages(&format!("/wp/v2/{base}"), &api.content_query(), |items| {
                 record_all(
                     ctx,
                     ItemKind::Document,
                     &slug,
                     &format!("{base}:"),
-                    &base,
+                    &dir,
                     &items,
                     &mut seen,
                 )
@@ -576,7 +729,7 @@ impl Connector for WpRestConnector {
             .await?;
             links.extend(seen.iter().filter_map(|(id, v)| {
                 (s(v, "status").as_deref() == Some("publish"))
-                    .then(|| s(v, "link").map(|l| (base.clone(), id.clone(), l)))
+                    .then(|| s(v, "link").map(|l| (dir.clone(), id.clone(), l)))
                     .flatten()
             }));
             if cancelled() {
@@ -613,18 +766,22 @@ impl Connector for WpRestConnector {
                 Ok(())
             })
             .await?;
-            for m in menus {
+            let ids: Vec<u64> = menus.iter().filter_map(|m| m["id"].as_u64()).collect();
+            let in_menu = |i: &Value, id: u64| match &i["menus"] {
+                Value::Array(a) => a.iter().any(|x| x.as_u64() == Some(id)),
+                x => x.as_u64() == Some(id),
+            };
+            for (n, m) in menus.iter().enumerate() {
                 let Some(id) = m.get("id").and_then(Value::as_u64) else {
+                    fail_unnumbered(
+                        ctx,
+                        ItemKind::Menu,
+                        "nav_menu",
+                        format!("menus:unknown-{}", n + 1),
+                    )?;
                     continue;
                 };
-                // ponytail: menu items pointing at no listed menu are not kept.
-                let mine: Vec<&Value> = items
-                    .iter()
-                    .filter(|i| match &i["menus"] {
-                        Value::Array(a) => a.iter().any(|x| x.as_u64() == Some(id)),
-                        x => x.as_u64() == Some(id),
-                    })
-                    .collect();
+                let mine: Vec<&Value> = items.iter().filter(|i| in_menu(i, id)).collect();
                 let rec = Rec {
                     kind: ItemKind::Menu,
                     dir: "menus".into(),
@@ -636,6 +793,28 @@ impl Connector for WpRestConnector {
                     ctx,
                     rec,
                     &json!({ "menu": m, "items": mine, "name": m["name"], "url": null }),
+                )?;
+            }
+            let orphans: Vec<&Value> = items
+                .iter()
+                .filter(|i| !ids.iter().any(|id| in_menu(i, *id)))
+                .collect();
+            if !orphans.is_empty() {
+                let dir = checked_dir(&ctx.project.raw_dir(NAME), "menus")?;
+                std::fs::create_dir_all(&dir)?;
+                std::fs::write(
+                    dir.join("orphans.json"),
+                    serde_json::to_vec_pretty(&orphans)?,
+                )?;
+                ctx.issue(
+                    IssueKind::ParentMissing,
+                    Severity::Warning,
+                    None,
+                    format!(
+                        "{} menu items belong to no listed menu; saved in menus/orphans.json",
+                        orphans.len()
+                    ),
+                    json!({ "count": orphans.len() }),
                 )?;
             }
         }
@@ -659,8 +838,12 @@ impl Connector for WpRestConnector {
 
         // Terms per taxonomy.
         let taxes = api
-            .listing("/wp/v2/taxonomies", &[("category", "categories")])
-            .await;
+            .listing(
+                "/wp/v2/taxonomies",
+                "custom taxonomies",
+                &[("category", "categories")],
+            )
+            .await?;
         for (slug, base) in taxes {
             if cancelled() {
                 return Ok(());
@@ -674,7 +857,7 @@ impl Connector for WpRestConnector {
                     ItemKind::Term,
                     &slug,
                     &format!("terms:{slug}:"),
-                    &format!("terms/{slug}"),
+                    &format!("terms/{}", safe_component(&slug)),
                     &items,
                     &mut vec![],
                 )
@@ -705,27 +888,37 @@ impl Connector for WpRestConnector {
         if has("yoast/v1") {
             let dir = ctx.project.raw_dir(NAME).join("yoast");
             std::fs::create_dir_all(&dir)?;
+            let mut misses = 0u64;
             for (route, id, link) in links {
-                let r = api.get("/yoast/v1/get_head", &[("url", link)]).await;
-                match r {
-                    Reply::Ok { body, .. } => {
-                        std::fs::write(
-                            dir.join(format!("{route}-{id}.json")),
-                            serde_json::to_vec_pretty(&body)?,
-                        )?;
-                    }
-                    other => {
-                        api.problem("/yoast/v1/get_head", &other)?;
+                match api.get("/yoast/v1/get_head", &[("url", link)]).await {
+                    Reply::Ok { body, .. } => std::fs::write(
+                        dir.join(format!("{route}-{id}.json")),
+                        serde_json::to_vec_pretty(&body)?,
+                    )?,
+                    Reply::Cancelled => break,
+                    // Every request would be refused the same way.
+                    r @ (Reply::Denied | Reply::CrossHost) => {
+                        api.problem("/yoast/v1/get_head", &r)?;
                         break;
                     }
+                    _ => misses += 1,
                 }
+            }
+            if misses > 0 {
+                ctx.issue(
+                    IssueKind::AccessGap,
+                    Severity::Info,
+                    None,
+                    format!("/yoast/v1/get_head: no SEO head for {misses} published URLs"),
+                    json!({ "count": misses }),
+                )?;
             }
         }
 
         // Redirection rules (0-based pages, `{items, total}` envelope).
         if has("redirection/v1") && !cancelled() {
-            let (mut got, mut page) = (0u64, 0u64);
-            loop {
+            let (mut got, mut prev_first) = (0u64, None::<Value>);
+            for page in 0..MAX_PAGES {
                 let q = [
                     ("page", page.to_string()),
                     ("per_page", PER_PAGE.to_string()),
@@ -736,9 +929,20 @@ impl Connector for WpRestConnector {
                     break;
                 };
                 let items = body["items"].as_array().cloned().unwrap_or_default();
-                let total = body["total"].as_u64().unwrap_or(0);
-                for it in &items {
+                let total = body["total"].as_u64();
+                let first = items.first().map(|i| i["id"].clone());
+                if first.is_some() && first == prev_first {
+                    api.gap(
+                        "/redirection/v1/redirect",
+                        "server ignores the page parameter; stopped early",
+                    )?;
+                    break;
+                }
+                prev_first = first;
+                for (n, it) in items.iter().enumerate() {
                     let Some(id) = it.get("id").and_then(Value::as_u64) else {
+                        let sid = format!("redirection:unknown-{}", got + n as u64 + 1);
+                        fail_unnumbered(ctx, ItemKind::Redirect, "redirect", sid)?;
                         continue;
                     };
                     let mut v = it.clone();
@@ -755,9 +959,15 @@ impl Connector for WpRestConnector {
                     record(ctx, rec, &v)?;
                 }
                 got += items.len() as u64;
-                page += 1;
-                if items.is_empty() || got >= total {
+                // Without `total` the only end is an empty page.
+                if items.is_empty() || total.is_some_and(|t| got >= t) {
                     break;
+                }
+                if page + 1 == MAX_PAGES {
+                    api.gap(
+                        "/redirection/v1/redirect",
+                        &format!("stopped at {MAX_PAGES} pages"),
+                    )?;
                 }
             }
         }
