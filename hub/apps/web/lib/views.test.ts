@@ -223,12 +223,12 @@ describe("report serving", () => {
     expect(listReports(snapDir)).toEqual(["a.html", "data.json"]);
   });
   test("serves with the hardening headers", async () => {
-    const r = serveReport(snapDir, "a.html");
+    const r = await serveReport(snapDir, "a.html");
     expect(r.status).toBe(200);
     for (const [k, v] of Object.entries(REPORT_HEADERS)) expect(r.headers.get(k)).toBe(v);
     expect(r.headers.get("content-type")).toContain("text/html");
     expect(await r.text()).toBe("<h1>report</h1>");
-    expect(serveReport(snapDir, "data.json").headers.get("content-type")).toBe("application/json");
+    expect((await serveReport(snapDir, "data.json")).headers.get("content-type")).toBe("application/json");
   });
   test.each([
     "../project.db",
@@ -241,8 +241,8 @@ describe("report serving", () => {
     "project.db",
     "A.html",
     "",
-  ])("path traversal / non-whitelisted name %j gives 404", (name) => {
-    expect(serveReport(snapDir, name).status).toBe(404);
+  ])("path traversal / non-whitelisted name %j gives 404", async (name) => {
+    expect((await serveReport(snapDir, name)).status).toBe(404);
   });
 });
 
@@ -408,15 +408,15 @@ describe("share links", () => {
     expect(everything).not.toContain("RAW-SUBMISSIONS");
     // Reports are whitelisted to reports/, so raw/ and the snapshot's other files are unreachable by name.
     for (const n of ["raw/dump.sql", "../raw/dump.sql", "project.db", "porter.toml"])
-      expect(serveReport(dir, n, SHARE_HEADERS).status).toBe(404);
+      expect((await serveReport(dir, n, SHARE_HEADERS)).status).toBe(404);
   });
-  test("share headers are the required set", () => {
+  test("share headers are the required set", async () => {
     expect(SHARE_HEADERS).toEqual({
       "Referrer-Policy": "no-referrer",
       "X-Robots-Tag": "noindex",
       "Cache-Control": "private, no-store",
     });
-    const r = serveReport("/nonexistent", "a.html", SHARE_HEADERS);
+    const r = await serveReport("/nonexistent", "a.html", SHARE_HEADERS);
     expect(r.headers.get("x-robots-tag")).toBe("noindex");
   });
   test("share config sets headers on /s/*", async () => {

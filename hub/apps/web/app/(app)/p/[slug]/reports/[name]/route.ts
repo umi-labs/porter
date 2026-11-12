@@ -12,7 +12,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
   if (!s) return new Response("Sign in required", { status: 401 });
   try {
     const { snap } = await loadProject(getDb(), { id: s.user.id }, slug, "view");
-    return snap ? serveReport(snap.dir, name) : new Response("Not found", { status: 404 });
+    return snap ? await serveReport(snap.dir, name) : new Response("Not found", { status: 404 });
   } catch (e) {
     if (e instanceof HttpError) return new Response(e.message, { status: e.status });
     throw e;

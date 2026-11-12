@@ -9,5 +9,5 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
   const v = await loadShare(getDb(), token, "report");
   // Same 404 for unknown, expired, revoked and a missing snapshot or report.
   if (!v?.snap) return new Response("Not found", { status: 404, headers: SHARE_HEADERS });
-  return serveReport(v.snap.dir, name, SHARE_HEADERS);
+  return await serveReport(v.snap.dir, name, SHARE_HEADERS);
 }

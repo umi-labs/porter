@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { listReports } from "./snapshot-reader";
 
@@ -15,11 +15,11 @@ export const SHARE_HEADERS = {
 };
 
 /** Serves one report. `name` must equal a file listed in reports/; it is never joined to a path unchecked. */
-export function serveReport(dir: string, name: string, extra: Record<string, string> = {}) {
+export async function serveReport(dir: string, name: string, extra: Record<string, string> = {}) {
   const hit = listReports(dir).find((n) => n === name);
   if (!hit) return new Response("Not found", { status: 404, headers: extra });
   const type = hit.endsWith(".html") ? "text/html; charset=utf-8" : "application/json";
-  return new Response(readFileSync(join(dir, "reports", hit)), {
+  return new Response(await readFile(join(dir, "reports", hit)), {
     headers: { ...extra, ...REPORT_HEADERS, "Content-Type": type },
   });
 }
