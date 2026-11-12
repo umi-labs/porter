@@ -818,6 +818,52 @@ async fn uploads_symlink_not_followed() {
     );
 }
 
+/// A FIFO in the uploads folder is never opened (reading one with no writer blocks
+/// forever): the attachment is missing media and normalise finishes.
+#[test]
+fn uploads_fifo_not_read() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    // Its own thread and runtime, so a blocked read can't stop the timeout firing.
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let missing = rt.block_on(async {
+            let fx = setup_full(
+                &[],
+                |_| {},
+                false,
+                |cfg| {
+                    let Some(ConnectorConfig::WpDb {
+                        wp_root: Some(root),
+                        ..
+                    }) = cfg.connectors.get(1)
+                    else {
+                        panic!("no wp-db connector")
+                    };
+                    let a = root.join("wp-content/uploads/2024/03/a.jpg");
+                    std::fs::remove_file(&a).unwrap();
+                    let ok = std::process::Command::new("mkfifo")
+                        .arg(&a)
+                        .status()
+                        .unwrap();
+                    assert!(ok.success());
+                },
+            )
+            .await;
+            issues(&fx, IssueKind::MissingMedia)
+        });
+        let _ = tx.send(missing);
+    });
+    let missing = rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("normalise blocked reading a FIFO in uploads");
+    assert!(
+        missing.iter().any(
+            |i| i.message.contains("2024/03/a.jpg") && i.message.contains("not a regular file")
+        ),
+        "{missing:#?}"
+    );
+}
+
 /// An entry whose date doesn't parse keeps no date (never 1970) and says so.
 #[tokio::test]
 async fn submission_bad_date_is_none_with_issue() {

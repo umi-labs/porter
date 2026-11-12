@@ -226,7 +226,10 @@ pub(crate) fn attachments(
             if !regular {
                 case_miss.insert(p.id, String::new());
             }
-            if let (true, Ok(()), Ok(bytes)) = (regular, exact, std::fs::read(&path)) {
+            // Read only once it's known to be a regular file: a FIFO or a device (say a
+            // link to /dev/zero) would block or exhaust memory.
+            let bytes = (regular && exact.is_ok()).then(|| std::fs::read(&path));
+            if let Some(Ok(bytes)) = bytes {
                 let url = p.link.clone().or_else(|| urls.first().cloned());
                 let name = file.rsplit('/').next().unwrap_or(&file);
                 found = Some(
