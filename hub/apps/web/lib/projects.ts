@@ -238,6 +238,12 @@ export async function createInvitation(
 ) {
   const { project: p } = await access(db, actor, slug, "manage_members");
   return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({ id: user.id })
+      .from(user)
+      .innerJoin(projectMember, and(eq(projectMember.userId, user.id), eq(projectMember.projectId, p.id)))
+      .where(sql`lower(${user.email}) = ${input.email}`);
+    if (existing) throw new HttpError(409, "Already a member; change their role instead");
     const [dupe] = await tx
       .select({ id: projectInvitation.id })
       .from(projectInvitation)

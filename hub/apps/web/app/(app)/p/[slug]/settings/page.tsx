@@ -1,4 +1,4 @@
-import { connect } from "@porter-hub/db";
+import { getDb } from "@porter-hub/db";
 import { notFound } from "next/navigation";
 import { HttpError, listInvitations, listMembers } from "../../../../../lib/projects";
 import { requireUser } from "../../../../../lib/session";
@@ -11,7 +11,7 @@ const inline = { display: "inline" };
 export default async function Settings({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const user = await requireUser();
-  const db = connect().db;
+  const db = getDb();
   let members: Awaited<ReturnType<typeof listMembers>>;
   let invitations: Awaited<ReturnType<typeof listInvitations>>;
   try {
@@ -70,6 +70,8 @@ export default async function Settings({ params }: { params: Promise<{ slug: str
       <h2>Share links</h2>
       <p>Coming soon.</p>
       <h2>Run secrets</h2>
+      <p>Coming soon.</p>
+      <h2>Retention</h2>
       <p>Coming soon.</p>
     </main>
   );

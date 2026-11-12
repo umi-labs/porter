@@ -98,13 +98,27 @@ describe("every per-project route", () => {
       expect(await status(call("stranger"))).toBe(404);
       expect(await status(call("staff"))).toBe(404);
     });
-    test(`${name}: unknown project is 404`, async () => {
-      const r = name.includes("project")
-        ? api.getProject(req("owner"), { slug: "nope" })
-        : api.listMembers(req("owner"), { slug: "nope" });
-      expect(await status(r)).toBe(404);
-    });
   }
+
+  test("an unknown project is 404 on every route, even with a malformed body", async () => {
+    const nope = { slug: "nope" };
+    const bad = { email: "x", role: "root" };
+    const calls = [
+      api.getProject(req("owner"), nope),
+      api.listMembers(req("owner"), nope),
+      api.addMember(req("owner", "POST", bad), nope),
+      api.updateMember(req("owner", "PATCH", bad), { ...nope, userId: "dev" }),
+      api.removeMember(req("owner", "DELETE"), { ...nope, userId: "dev" }),
+      api.listInvitations(req("owner"), nope),
+      api.createInvitation(req("owner", "POST", bad), nope),
+      api.revokeInvitation(req("owner", "DELETE"), { ...nope, id: "not-a-uuid" }),
+      // A real project, but the caller is not a member: also 404, not 400.
+      api.addMember(req("stranger", "POST", bad), slug),
+      api.updateMember(req("stranger", "PATCH", bad), { ...slug, userId: "dev" }),
+      api.createInvitation(req("stranger", "POST", bad), slug),
+    ];
+    for (const r of calls) expect(await status(r)).toBe(404);
+  });
 
   test("members without manage_members get 403 on member and invitation routes", async () => {
     for (const [name, call] of routes.slice(1)) {
@@ -265,6 +279,9 @@ describe("invitations", () => {
     expect(await status(api.revokeInvitation(req("owner", "DELETE"), { ...slug, id: inv.id }))).toBe(404);
     expect(await audited("invitation.create")).toBe(1);
     expect(await audited("invitation.revoke")).toBe(1);
+  });
+  test("inviting an existing member is a 409", async () => {
+    expect(await status(api.createInvitation(req("owner", "POST", { email: "dev@x.test" }), slug))).toBe(409);
   });
   test("an invitation of another project cannot be revoked through this one", async () => {
     const [other] = await conn.db

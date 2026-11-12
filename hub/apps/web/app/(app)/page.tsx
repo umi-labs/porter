@@ -1,4 +1,4 @@
-import { connect } from "@porter-hub/db";
+import { getDb } from "@porter-hub/db";
 import Link from "next/link";
 import { listProjects } from "../../lib/projects";
 import { requireUser } from "../../lib/session";
@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const user = await requireUser();
-  const projects = await listProjects(connect().db, user);
+  const projects = await listProjects(getDb(), user);
   return (
     <main>
       <h1>Projects</h1>

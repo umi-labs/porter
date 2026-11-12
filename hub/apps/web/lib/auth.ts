@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
   account,
-  connect,
+  auditLog,
+  type connect,
+  getDb,
   invitation,
   member,
   organization as org,
@@ -139,10 +141,23 @@ async function acceptProjectInvites(db: Db, userId: string) {
       .where(pendingProjectInvite(u.email))
       .returning();
     if (accepted.length === 0) return;
-    await tx
+    const added = await tx
       .insert(projectMember)
       .values(accepted.map((i) => ({ projectId: i.projectId, userId: u.id, role: i.role })))
-      .onConflictDoNothing();
+      .onConflictDoNothing()
+      .returning({ projectId: projectMember.projectId });
+    const inserted = new Set(added.map((a) => a.projectId));
+    await tx.insert(auditLog).values(
+      accepted.map((i) => ({
+        projectId: i.projectId,
+        actorId: u.id,
+        action: "invitation.accept",
+        targetType: "invitation",
+        targetId: i.id,
+        // alreadyMember: the user already had a role, which was kept.
+        detail: { role: i.role, alreadyMember: !inserted.has(i.projectId) },
+      })),
+    );
   });
 }
 
@@ -158,7 +173,7 @@ export function createAuth(
       throw new Error("BETTER_AUTH_SECRET must be at least 32 characters in production");
     }
   }
-  const db = deps.db ?? connect().db;
+  const db = deps.db ?? getDb();
   const sendMail = deps.sendMail ?? smtpMailer();
   const domain = (env.STAFF_EMAIL_DOMAIN ?? "").toLowerCase();
 

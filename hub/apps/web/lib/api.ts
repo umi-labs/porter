@@ -1,4 +1,4 @@
-import { connect } from "@porter-hub/db";
+import { getDb } from "@porter-hub/db";
 import { getAuth } from "./auth";
 import type { Db } from "./permissions";
 import * as svc from "./projects";
@@ -36,19 +36,20 @@ export function makeApi(db: Db, getActor: GetActor) {
     ),
     getProject: route<P>((a, _r, p) => svc.getProject(db, a, slugOf(p))),
     listMembers: route<P>((a, _r, p) => svc.listMembers(db, a, slugOf(p))),
-    addMember: route<P>(
-      async (a, r, p) => svc.addMember(db, a, slugOf(p), parse(schemas.addMember, await body(r))),
-      201,
-    ),
-    updateMember: route<P>(async (a, r, p) =>
-      svc.setRole(db, a, slugOf(p), p.userId, parse(schemas.setRole, await body(r)).role),
-    ),
+    addMember: route<P>(async (a, r, p) => {
+      await svc.access(db, a, slugOf(p), "manage_members");
+      return svc.addMember(db, a, slugOf(p), parse(schemas.addMember, await body(r)));
+    }, 201),
+    updateMember: route<P>(async (a, r, p) => {
+      await svc.access(db, a, slugOf(p), "manage_members");
+      return svc.setRole(db, a, slugOf(p), p.userId, parse(schemas.setRole, await body(r)).role);
+    }),
     removeMember: route<P>((a, _r, p) => svc.removeMember(db, a, slugOf(p), p.userId)),
     listInvitations: route<P>((a, _r, p) => svc.listInvitations(db, a, slugOf(p))),
-    createInvitation: route<P>(
-      async (a, r, p) => svc.createInvitation(db, a, slugOf(p), parse(schemas.invite, await body(r))),
-      201,
-    ),
+    createInvitation: route<P>(async (a, r, p) => {
+      await svc.access(db, a, slugOf(p), "manage_members");
+      return svc.createInvitation(db, a, slugOf(p), parse(schemas.invite, await body(r)));
+    }, 201),
     revokeInvitation: route<P>(async (a, _r, p) => {
       // Permission first (403/404), then the id shape, so a non-member learns nothing.
       await svc.access(db, a, slugOf(p), "manage_members");
@@ -60,7 +61,7 @@ export function makeApi(db: Db, getActor: GetActor) {
 let instance: ReturnType<typeof makeApi> | undefined;
 /** The app's API, bound to the real database and Better Auth session. */
 export const getApi = () => {
-  instance ??= makeApi(connect().db, async (req) => {
+  instance ??= makeApi(getDb(), async (req) => {
     const s = await getAuth().api.getSession({ headers: req.headers });
     return s ? { id: s.user.id } : null;
   });

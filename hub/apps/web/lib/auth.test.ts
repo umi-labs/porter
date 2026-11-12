@@ -1,4 +1,5 @@
 import {
+  auditLog,
   connect,
   member,
   organization,
@@ -211,6 +212,16 @@ describe("magic link", () => {
       .from(projectInvitation)
       .where(eq(projectInvitation.email, "client@acme.example"));
     expect(inv.acceptedAt).not.toBeNull();
+    // Accepting is audited, by the invitee, against the invitation.
+    const log = await conn.db.select().from(auditLog).where(eq(auditLog.targetId, inv.id));
+    expect(log).toEqual([
+      expect.objectContaining({
+        action: "invitation.accept",
+        projectId,
+        actorId: u.id,
+        detail: { role: "client", alreadyMember: false },
+      }),
+    ]);
 
     // An existing client user can ask again.
     expect(await ask("client@acme.example")).toEqual({ status: true });
