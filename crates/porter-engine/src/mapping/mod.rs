@@ -406,10 +406,7 @@ pub fn write_seed_if_empty(project_dir: &Path, seed: &MappingConfig) -> Result<b
          # `drop_reason` (and remove `to`) to drop a type, rename fields, add transforms.\n",
     );
     base.push_str(&block);
-    let mut tmp = tempfile::NamedTempFile::new_in(project_dir).context("temp file")?;
-    std::io::Write::write_all(&mut tmp, base.as_bytes())?;
-    tmp.persist(&file)
-        .with_context(|| format!("write {}", file.display()))?;
+    edit::write_atomic(&file, &base)?;
     Ok(true)
 }
 

@@ -279,15 +279,25 @@ impl MappingDoc {
 
 /// Temp file in the same directory, then rename over: a reader sees the old file or the
 /// new one, never half. The file's permissions are kept.
-fn write_atomic(path: &Path, text: &str) -> Result<()> {
-    let dir = path.parent().unwrap_or(Path::new("."));
+pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<()> {
+    let dir = match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
     let mut tmp = tempfile::NamedTempFile::new_in(dir).context("temp file")?;
     std::io::Write::write_all(&mut tmp, text.as_bytes())?;
     if let Ok(m) = std::fs::metadata(path) {
         tmp.as_file().set_permissions(m.permissions())?;
     }
+    // On disk before the rename, so a crash can't leave an empty or partial file.
+    tmp.as_file().sync_all().context("sync temp file")?;
     tmp.persist(path)
         .with_context(|| format!("writing {}", path.display()))?;
+    // The rename itself, durable too (best-effort: not every filesystem allows it).
+    #[cfg(unix)]
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
     Ok(())
 }
 
@@ -309,7 +319,7 @@ fn sub<'a>(parent: &'a mut dyn TableLike, key: &str) -> &'a mut dyn TableLike {
 /// one-value edit changes nothing else on its line.
 fn set_value(t: &mut dyn TableLike, key: &str, v: Value) {
     match t.get_mut(key).and_then(Item::as_value_mut) {
-        Some(old) if old.to_string().trim() == v.to_string().trim() => {}
+        Some(old) if same(old, &v) => {}
         Some(old) => {
             let decor = old.decor().clone();
             *old = v;
@@ -319,6 +329,16 @@ fn set_value(t: &mut dyn TableLike, key: &str, v: Value) {
             t.insert(key, Item::Value(v));
         }
     }
+}
+
+/// Equal as TOML values, however each is written (`'a'` and `"a"` are the same).
+fn same(a: &Value, b: &Value) -> bool {
+    let plain = |v: &Value| {
+        let mut v = v.clone();
+        v.decor_mut().clear();
+        format!("x = {v}").parse::<toml::Table>().ok()
+    };
+    plain(a).is_some_and(|x| Some(x) == plain(b))
 }
 
 fn set_str(t: &mut dyn TableLike, key: &str, v: Option<&str>) {
@@ -660,6 +680,98 @@ fields = { title = "heading" }
         assert_eq!(doc.save(), Vec::<String>::new());
         let text = std::fs::read_to_string(&p).unwrap();
         assert!(text.contains("# Isaac was here") && text.contains("/y/{slug}/"));
+    }
+
+    /// Deletions take their own lines (and the comment that leads them) and nothing else:
+    /// the next table's comment stays.
+    #[test]
+    fn deletions_remove_only_their_own_lines() {
+        let commented = FIXTURE.replace(
+            "\n[mapping.types.post.fields.\"meta.subtitle\"]",
+            "\n# Subtitles are trimmed.\n[mapping.types.post.fields.\"meta.subtitle\"]",
+        );
+        let text = format!(
+            "{commented}\n# Galleries too.\n[[mapping.blocks]]\nmatch = {{ kind = \"gallery\" }}\nto = \"gallery\"\n"
+        );
+        let save = |f: &dyn Fn(&mut MappingDoc)| {
+            let (_d, p) = fixture(&text);
+            let mut doc = MappingDoc::open(&p).unwrap();
+            f(&mut doc);
+            assert_eq!(doc.save(), Vec::<String>::new());
+            std::fs::read_to_string(&p).unwrap()
+        };
+        let field = "\n# Subtitles are trimmed.\n[mapping.types.post.fields.\"meta.subtitle\"]\nto = \"subtitle\"\ntransform = [{ op = \"trim\" }]\n";
+        assert!(text.contains(field));
+        assert_eq!(
+            save(&|d| d.remove_field("post", "meta.subtitle")),
+            text.replacen(field, "", 1)
+        );
+        let hero = "\n[[mapping.blocks]]\nmatch = { module = \"hero_banner\" }   # the big one\nto = \"hero\"\nfields = { title = \"heading\" }\n";
+        assert!(text.contains(hero));
+        let m = BlockMatch {
+            kind: None,
+            module: Some("hero_banner".into()),
+        };
+        assert_eq!(save(&|d| d.set_block(&m, None)), text.replacen(hero, "", 1));
+        assert_eq!(
+            save(&|d| d.drop_type("post", Some("x"))),
+            text.replacen(
+                "to   = \"pages\"        # renamed in 2025\npath = \"/{slug}/\"\n",
+                "path = \"/{slug}/\"\ndrop_reason = \"x\"\n",
+                1
+            )
+        );
+    }
+
+    /// Quotes, backslashes, newlines and non-ASCII survive a write and read; nothing else
+    /// is added.
+    #[test]
+    fn awkward_values_round_trip() {
+        let (_d, p) = fixture(FIXTURE);
+        let mut doc = MappingDoc::open(&p).unwrap();
+        let v = "a \"quoted\" \\path\\ \nline two é 🚀 'single'";
+        doc.set_type_to("post", Some(v));
+        doc.set_field(
+            "post",
+            "title",
+            FieldMapEdit {
+                to: v.into(),
+                transform: vec![],
+            },
+        );
+        assert_eq!(doc.save(), Vec::<String>::new());
+        let m = crate::config::ProjectConfig::load(&p).unwrap().mapping;
+        assert_eq!(m.types["post"].to.as_deref(), Some(v));
+        assert_eq!(m.types["post"].fields["title"].to, v);
+        let raw: toml::Table = toml::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        let post = raw["mapping"]["types"]["post"].as_table().unwrap();
+        let keys: Vec<_> = post.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["fields", "path", "to"]);
+        let title = post["fields"]["title"].as_table().unwrap();
+        assert_eq!(title.keys().collect::<Vec<_>>(), ["to"]);
+    }
+
+    /// An unchanged value is left as written, quoting style included.
+    #[test]
+    fn unchanged_value_keeps_its_quoting() {
+        let text = FIXTURE.replace("to = \"title\"   # keep", "to = 'title'   # keep");
+        let (_d, p) = fixture(&text);
+        let mut doc = MappingDoc::open(&p).unwrap();
+        doc.set_field(
+            "post",
+            "title",
+            FieldMapEdit {
+                to: "title".into(),
+                transform: vec![Transform::Trim],
+            },
+        );
+        assert_eq!(doc.save(), Vec::<String>::new());
+        let after = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            after.contains("to = 'title'   # keep\ntransform = { op = \"trim\" }\n"),
+            "{after}"
+        );
+        assert_eq!(after.lines().count(), text.lines().count() + 1);
     }
 
     #[test]

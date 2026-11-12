@@ -8,13 +8,14 @@ use std::sync::{Arc, OnceLock};
 use porter_engine::destinations::payload::schema_check;
 use porter_engine::destinations::payload::ts::read_payload_config;
 use porter_engine::events::Event;
+use porter_engine::html::PendingIssue;
 use porter_engine::mapping::edit::MappingDoc;
 use porter_engine::mapping::summary::TypeSummary;
 use porter_engine::report::{Coverage, read_coverage};
 use porter_engine::session::{
     IssueQuery, MediaRow, Overview, Page, RunOutcome, RunPlan, STAGES, Session,
 };
-use porter_model::{ItemId, ItemKind, Resolution, SourceRef};
+use porter_model::{IssueKind, ItemId, ItemKind, Resolution, Severity, SourceRef};
 use tokio::runtime::Runtime;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio_util::sync::CancellationToken;
@@ -363,7 +364,7 @@ impl Bridge {
                 mapping::Reply::Loaded(
                     MappingDoc::open(&path)
                         .map_err(|e| format!("{e:#}"))
-                        .and_then(|doc| mapping_check(&session, doc)),
+                        .map(|doc| checked(doc, |d| mapping_check(&session, d))),
                 )
             })
             .await
@@ -382,13 +383,38 @@ impl Bridge {
                     return mapping::Reply::Refused(refused);
                 }
                 session.reload_config();
-                mapping::Reply::Loaded(mapping_check(&session, doc))
+                mapping::Reply::Loaded(Ok(checked(doc, |d| mapping_check(&session, d))))
             })
             .await
             .unwrap_or_else(|e| mapping::Reply::Refused(vec![e]));
             let _ = tx.send(UiEvent::Data(DataResult::Mapping(reply)));
         });
     }
+}
+
+/// The check after an open or a save that landed. If it fails or panics, the document
+/// is still what the editor shows (and edits), with the failure as a general issue.
+fn checked(
+    doc: MappingDoc,
+    check: impl FnOnce(MappingDoc) -> Result<Box<mapping::Loaded>, String>,
+) -> Box<mapping::Loaded> {
+    let saved = doc.clone();
+    let why = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check(doc))) {
+        Ok(Ok(l)) => return l,
+        Ok(Err(e)) => e,
+        Err(_) => "the check crashed".into(),
+    };
+    Box::new(mapping::Loaded {
+        doc: saved,
+        summary: TypeSummary::default(),
+        dest: Err(format!("not read: {why}")),
+        issues: vec![PendingIssue {
+            kind: IssueKind::SchemaMismatch,
+            severity: Severity::Error,
+            message: format!("the schema check failed (porter.toml is as shown): {why}"),
+            details: serde_json::json!({}),
+        }],
+    })
 }
 
 /// `porter schema check` without the run: offline, nothing written to the store. The
@@ -570,6 +596,33 @@ mod tests {
         bridge.refresh();
         let got = rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
         assert!(matches!(got, UiEvent::Data(DataResult::Overview(Ok(_)))));
+    }
+
+    /// A save that landed stays landed: a check failing (or crashing) afterwards shows as
+    /// a general issue on the saved document, not as an editor error.
+    #[test]
+    fn failed_post_save_check_keeps_the_save() {
+        use crate::vm::mapping::{Mapping, Reply};
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("porter.toml");
+        std::fs::write(&p, "[mapping.types.post]\nto = \"posts\"\n").unwrap();
+        let doc = MappingDoc::open(&p).unwrap();
+        for l in [
+            checked(doc.clone(), |_| Err("store is locked".into())),
+            checked(doc, |_| panic!("boom")),
+        ] {
+            let mut m = Mapping::default();
+            m.open();
+            m.land(Reply::Loaded(Ok(l)));
+            assert_eq!(m.error(), None);
+            assert_eq!(m.type_rows()[0].to.as_deref(), Some("posts"));
+            let g = m.general_issues();
+            assert!(g.len() == 1 && g[0].error, "{g:?}");
+            assert!(
+                g[0].message
+                    .starts_with("the schema check failed (porter.toml is as shown): ")
+            );
+        }
     }
 
     /// The mapping editor's save path on the real engine, off the UI thread: open, save
