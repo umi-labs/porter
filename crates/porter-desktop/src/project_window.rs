@@ -14,7 +14,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{ActiveTheme, Disableable, Root, h_flex, v_flex};
 use porter_engine::events::Event;
 use porter_engine::report::Coverage;
-use porter_engine::session::{MediaRow, RouteFilter, RunPlan, Session, StageOpts};
+use porter_engine::session::{MediaRow, RouteFilter, RunOutcome, RunPlan, Session, StageOpts};
 use porter_engine::stage::SchemaMode;
 use porter_model::{ItemId, Stage};
 
@@ -24,6 +24,8 @@ use crate::thumbs::{Cache, Thumb};
 use crate::views;
 use crate::vm::apply::{ApplySheet, age};
 use crate::vm::content::{Content, NodeKey, Query};
+use crate::vm::destination::Mode;
+use crate::vm::issues::{Choice, Issues, Jump, jump_target};
 use crate::vm::mapping::Mapping;
 use crate::vm::media::{self, Media};
 use crate::vm::pipeline::{CLOSE_WAIT, CloseStep, KindCount, Pipeline, name};
@@ -42,6 +44,14 @@ pub struct ProjectWindow {
     pub(crate) media: Media,
     pub(crate) urls: Urls,
     pub(crate) mapping: Mapping,
+    pub(crate) issues: Issues,
+    pub(crate) resolve_choice: Choice,
+    pub(crate) issues_filter: Entity<InputState>,
+    pub(crate) resolve_note: Entity<InputState>,
+    /// The schema mode whose run is in flight: its folder opens when it finishes.
+    pending_mode: Option<Mode>,
+    /// How the last Destination action went, verbatim.
+    pub(crate) dest_note: Option<String>,
     pub(crate) mapping_inputs: views::mapping::Inputs,
     thumbs: Arc<Cache>,
     pub(crate) coverage: Option<Result<Option<Coverage>, String>>,
@@ -63,9 +73,20 @@ impl ProjectWindow {
         let (bridge, rx) = Bridge::new(session);
         let apply_input = cx.new(|cx| InputState::new(window, cx));
         let mapping_inputs = views::mapping::Inputs::new(window, cx);
+        let issues_filter =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter by message or kind"));
+        let resolve_note = cx.new(|cx| InputState::new(window, cx).placeholder("Note"));
         // Redraw on typing so the Apply button follows the box. Enter does nothing:
         // applying always takes a click.
-        let subs = vec![cx.subscribe(&apply_input, |_, _, _: &InputEvent, cx| cx.notify())];
+        let subs = vec![
+            cx.subscribe(&apply_input, |_, _, _: &InputEvent, cx| cx.notify()),
+            cx.subscribe(&issues_filter, |this, input, e: &InputEvent, cx| {
+                if matches!(e, InputEvent::Change) {
+                    this.issues.text = input.read(cx).value().to_string();
+                    cx.notify();
+                }
+            }),
+        ];
         let mut this = ProjectWindow {
             bridge,
             section: Section::default(),
@@ -75,6 +96,12 @@ impl ProjectWindow {
             media: Media::default(),
             urls: Urls::default(),
             mapping: Mapping::default(),
+            issues: Issues::default(),
+            resolve_choice: Choice::HandledManually,
+            issues_filter,
+            resolve_note,
+            pending_mode: None,
+            dest_note: None,
             mapping_inputs,
             thumbs: Arc::default(),
             coverage: None,
@@ -111,6 +138,7 @@ impl ProjectWindow {
                 let q = self.urls.open();
                 self.ask_urls(q);
             }
+            Section::Issues | Section::Destination => self.read_issues(true),
             Section::Mapping if self.mapping.open() => self.bridge.mapping_open(),
             _ => {}
         }
@@ -126,6 +154,7 @@ impl ProjectWindow {
         self.ask_media(q);
         let q = self.urls.invalidate();
         self.ask_urls(q);
+        self.read_issues(false);
         // A stage changed what the documents hold: check the mapping again.
         if self.mapping.invalidate() {
             self.bridge.mapping_open();
@@ -168,6 +197,84 @@ impl ProjectWindow {
         self.mapping.selected_block = block;
         self.mapping_inputs.fill(&self.mapping, window, cx);
         cx.notify();
+    }
+
+    /// Reads the issues: the first time the section is shown, or again after the store
+    /// changed (`first` false), when something already read them.
+    fn read_issues(&mut self, first: bool) {
+        let go = if first {
+            self.issues.open()
+        } else {
+            self.issues.invalidate()
+        };
+        if go {
+            self.bridge.issues(self.issues.generation);
+        }
+    }
+
+    /// Resolves the selected issues with the form's choice and note.
+    pub(crate) fn issues_resolve(&mut self, cx: &mut Context<Self>) {
+        let note = self.resolve_note.read(cx).value().to_string();
+        match self.issues.plan(self.resolve_choice, &note) {
+            Ok((ids, r)) => {
+                self.issues.note = Some(format!("resolving {}…", ids.len()));
+                self.bridge.resolve(ids, r);
+            }
+            Err(e) => self.issues.note = Some(e),
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn issues_jump(&mut self, id: ItemId, cx: &mut Context<Self>) {
+        self.issues.note = Some("looking up the item…".into());
+        self.bridge.jump(id);
+        cx.notify();
+    }
+
+    pub(crate) fn issues_filters(&mut self, f: impl FnOnce(&mut Issues), cx: &mut Context<Self>) {
+        f(&mut self.issues);
+        cx.notify();
+    }
+
+    /// Runs a schema mode as a normal run; its output folder opens when it finishes.
+    pub(crate) fn run_schema(&mut self, mode: Mode, cx: &mut Context<Self>) {
+        self.dest_note = None;
+        match self.start_run(mode.plan()) {
+            Ok(()) => self.pending_mode = Some(mode),
+            Err(e) => self.dest_note = Some(e),
+        }
+        cx.notify();
+    }
+
+    /// After a schema run: open its folder when it finished cleanly, else say why not.
+    fn schema_done(&mut self, o: &RunOutcome) {
+        let Some(mode) = self.pending_mode.take() else {
+            return;
+        };
+        let session = self.bridge.session();
+        let dir = mode.output_dir(session.project().dir(), &session.project().reports_dir());
+        self.dest_note = Some(match (o.code, dir) {
+            (0, Some(d)) => {
+                self.bridge.open_path(d.clone());
+                format!("{} done; opening {}", mode.label(), d.display())
+            }
+            (0, None) => format!("{} done", mode.label()),
+            // Check finishes with 2 when it opened error issues: the results are below.
+            (2, None) => format!("{} done; see the issues below", mode.label()),
+            (code, _) => {
+                let why: Vec<_> = o
+                    .per_stage
+                    .iter()
+                    .filter_map(|(_, _, e)| e.clone())
+                    .chain(o.messages.iter().cloned())
+                    .collect();
+                format!(
+                    "{} did not finish (exit {code}): {}",
+                    mode.label(),
+                    why.join("; ")
+                )
+            }
+        });
     }
 
     fn ask_media(&self, qs: Vec<media::Query>) {
@@ -261,6 +368,7 @@ impl ProjectWindow {
                 self.refresh();
             }
             UiEvent::RunDone(o) => {
+                self.schema_done(&o);
                 for line in self.pipeline.on_run_done(o) {
                     self.runs.push(line);
                 }
@@ -293,6 +401,32 @@ impl ProjectWindow {
                 self.ask_media(q);
             }
             DataResult::Urls { generation, reply } => self.urls.land(generation, reply),
+            DataResult::Issues { generation, result } => self.issues.land(generation, result),
+            DataResult::Resolved(results) => {
+                self.issues.note = Some(self.issues.resolved(results));
+                // The overview counts and the table both changed.
+                self.refresh();
+            }
+            DataResult::Jump(id, kind) => match kind.and_then(jump_target) {
+                Ok(Jump::Content) => {
+                    self.select(Section::Content, cx);
+                    let q = self.content.select(id);
+                    self.ask(q);
+                    self.issues.note = None;
+                }
+                Ok(Jump::Media) => {
+                    self.select(Section::Media, cx);
+                    let q = self.media.select(id);
+                    self.ask_media(q);
+                    self.issues.note = None;
+                }
+                Err(e) => self.issues.note = Some(e),
+            },
+            DataResult::Opened(path, r) => {
+                if let Err(e) = r {
+                    self.dest_note = Some(format!("could not open {}: {e}", path.display()));
+                }
+            }
             DataResult::Mapping(r) => {
                 self.mapping.land(r);
                 self.mapping_inputs.fill(&self.mapping, window, cx);
@@ -329,14 +463,18 @@ impl ProjectWindow {
     }
 
     pub(crate) fn start(&mut self, plan: RunPlan, cx: &mut Context<Self>) {
-        match self.pipeline.start(&plan) {
-            Ok(()) => {
-                self.runs.start_run(describe(&plan));
-                self.bridge.run(plan);
-            }
-            Err(e) => self.runs.push(e),
+        if let Err(e) = self.start_run(plan) {
+            self.runs.push(e);
         }
         cx.notify();
+    }
+
+    /// Starts `plan`, or says why not (one run at a time).
+    fn start_run(&mut self, plan: RunPlan) -> Result<(), String> {
+        self.pipeline.start(&plan)?;
+        self.runs.start_run(describe(&plan));
+        self.bridge.run(plan);
+        Ok(())
     }
 
     pub(crate) fn cancel(&mut self, cx: &mut Context<Self>) {
@@ -657,12 +795,13 @@ fn poll(rx: Receiver<UiEvent>, window: &mut Window, cx: &mut Context<ProjectWind
 impl Render for ProjectWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let main: gpui::AnyElement = match self.section.view() {
-            View::NotBuilt(name) => not_built(name, cx).into_any_element(),
             View::Overview => views::overview::render(self, cx).into_any_element(),
             View::Content => views::content::render(self, cx).into_any_element(),
             View::Media => views::media::render(self, cx).into_any_element(),
             View::Urls => views::urls::render(self, cx).into_any_element(),
             View::Mapping => views::mapping::render(self, cx).into_any_element(),
+            View::Issues => views::issues::render(self, cx).into_any_element(),
+            View::Destination => views::destination::render(self, cx).into_any_element(),
             View::Runs => views::runs::render(self, cx).into_any_element(),
         };
         let sheet = self
@@ -688,11 +827,4 @@ impl Render for ProjectWindow {
             .children(closing)
             .children(Root::render_dialog_layer(window, cx))
     }
-}
-
-fn not_built(name: &'static str, cx: &mut Context<ProjectWindow>) -> impl IntoElement {
-    div()
-        .p_6()
-        .text_color(cx.theme().muted_foreground)
-        .child(format!("{name} is not built yet."))
 }

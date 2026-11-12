@@ -5410,6 +5410,7 @@ dependencies = [
  "image",
  "indexmap",
  "libc",
+ "open",
  "porter-engine",
  "porter-model",
  "serde",

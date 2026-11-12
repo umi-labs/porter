@@ -2,6 +2,7 @@
 //! `Bridge` that runs stages and store queries on it and sends results back over a
 //! channel. The window drains that channel on a GPUI task; nothing here touches GPUI.
 
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, OnceLock};
 
@@ -15,10 +16,11 @@ use porter_engine::report::{Coverage, read_coverage};
 use porter_engine::session::{
     IssueQuery, MediaRow, Overview, Page, RunOutcome, RunPlan, STAGES, Session,
 };
-use porter_model::{IssueKind, ItemId, ItemKind, Resolution, Severity, SourceRef};
+use porter_model::{Issue, IssueKind, ItemId, ItemKind, Resolution, Severity, SourceRef};
 use tokio::runtime::Runtime;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::thumbs::{self, Cache};
 use crate::vm::apply::{PreviewInfo, preview_info};
@@ -69,6 +71,17 @@ pub enum DataResult {
     ThumbReady,
     /// porter.toml opened, or an edit saved (or refused), with the schema check's issues.
     Mapping(mapping::Reply),
+    /// Every issue, for the Issues and Destination views.
+    Issues {
+        generation: u64,
+        result: Result<Vec<Issue>, String>,
+    },
+    /// A bulk resolve, one result per issue.
+    Resolved(Vec<(Uuid, Result<(), String>)>),
+    /// The kind of the item an issue is about, for the jump.
+    Jump(ItemId, Result<ItemKind, String>),
+    /// An output folder was handed to the OS (or could not be).
+    Opened(PathBuf, Result<(), String>),
 }
 
 /// The app's one tokio runtime (multi-thread), created on first use.
@@ -273,6 +286,72 @@ impl Bridge {
                 Query::Labels(ids) => Reply::Labels(read_labels(&session, ids).await),
             };
             let _ = tx.send(UiEvent::Data(DataResult::Content { generation, reply }));
+        });
+    }
+}
+
+impl Bridge {
+    /// Reads every issue; the reply comes back as `DataResult::Issues`.
+    // ponytail: all issues in one read and filtered in the view model, as `refresh` does;
+    // a filtered, paged query when a project holds 100k+ issues.
+    pub fn issues(&self, generation: u64) {
+        let (session, tx) = (self.session.clone(), self.tx.clone());
+        runtime().spawn(async move {
+            let all = Page {
+                offset: 0,
+                limit: u64::MAX,
+            };
+            let result = session
+                .issues(IssueQuery::default(), all)
+                .await
+                .map(|p| p.rows)
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(UiEvent::Data(DataResult::Issues { generation, result }));
+        });
+    }
+
+    /// Resolves each issue in turn off the UI thread; one failing does not stop the rest.
+    pub fn resolve(&self, ids: Vec<Uuid>, r: Resolution) {
+        let (session, tx) = (self.session.clone(), self.tx.clone());
+        runtime().spawn(async move {
+            let results = blocking(move || {
+                ids.into_iter()
+                    .map(|id| {
+                        let r = session
+                            .resolve_issue(id, r.clone())
+                            .map_err(|e| format!("{e:#}"));
+                        (id, r)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .unwrap_or_default();
+            let _ = tx.send(UiEvent::Data(DataResult::Resolved(results)));
+        });
+    }
+
+    /// Looks up what kind of item `id` is.
+    pub fn jump(&self, id: ItemId) {
+        let (session, tx) = (self.session.clone(), self.tx.clone());
+        runtime().spawn(async move {
+            let kind = session
+                .item(id)
+                .await
+                .map(|d| d.row.kind)
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(UiEvent::Data(DataResult::Jump(id, kind)));
+        });
+    }
+
+    /// Opens a folder in the OS file manager.
+    pub fn open_path(&self, path: PathBuf) {
+        let tx = self.tx.clone();
+        runtime().spawn(async move {
+            let p = path.clone();
+            let r = blocking(move || open::that_detached(&p).map_err(|e| e.to_string()))
+                .await
+                .and_then(|r| r);
+            let _ = tx.send(UiEvent::Data(DataResult::Opened(path, r)));
         });
     }
 }

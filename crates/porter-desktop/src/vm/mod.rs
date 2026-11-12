@@ -2,6 +2,8 @@
 
 pub mod apply;
 pub mod content;
+pub mod destination;
+pub mod issues;
 pub mod mapping;
 pub mod media;
 pub mod pipeline;
