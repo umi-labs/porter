@@ -16,6 +16,8 @@ export class HttpError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** Extra JSON fields for the response body, e.g. `{ latest }` on a 409. */
+    public extra: object = {},
   ) {
     super(message);
   }
@@ -53,8 +55,8 @@ const slugify = (s: string) =>
     .slice(0, 60)
     .replace(/-+$/, "");
 
-type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
-const audit = (
+export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+export const audit = (
   tx: Tx | Db,
   actor: Actor,
   projectId: string,

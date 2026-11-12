@@ -3,6 +3,7 @@ import { getAuth } from "./auth";
 import type { Db } from "./permissions";
 import * as svc from "./projects";
 import { type Actor, HttpError, parse, schemas } from "./projects";
+import * as ver from "./versions";
 
 type GetActor = (req: Request) => Promise<Actor | null>;
 type P = Record<string, string>;
@@ -20,7 +21,8 @@ export function makeApi(db: Db, getActor: GetActor) {
         if (!actor) throw new HttpError(401, "Sign in required");
         return Response.json(await fn(actor, req, params), { status });
       } catch (e) {
-        if (e instanceof HttpError) return Response.json({ error: e.message }, { status: e.status });
+        if (e instanceof HttpError)
+          return Response.json({ ...e.extra, error: e.message }, { status: e.status });
         console.error(e);
         return Response.json({ error: "Internal error" }, { status: 500 });
       }
@@ -55,6 +57,11 @@ export function makeApi(db: Db, getActor: GetActor) {
       await svc.access(db, a, slugOf(p), "manage_members");
       return svc.revokeInvitation(db, a, slugOf(p), parse(schemas.id, p.id));
     }),
+    listVersions: route<P>((a, _r, p) => ver.listVersions(db, a, slugOf(p))),
+    getVersion: route<P>((a, _r, p) => ver.getVersion(db, a, slugOf(p), p.n)),
+    initVersion: route<P>(async (a, r, p) => ver.initVersion(db, a, slugOf(p), await body(r))),
+    commitVersion: route<P>(async (a, r, p) => ver.commitVersion(db, a, slugOf(p), await body(r)), 201),
+    mediaUrls: route<P>(async (a, r, p) => ver.mediaUrls(db, a, slugOf(p), await body(r))),
   };
 }
 

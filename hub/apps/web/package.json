@@ -8,6 +8,8 @@
     "start": "next start"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1167.0",
+    "@aws-sdk/s3-request-presigner": "^3.1167.0",
     "@porter-hub/db": "workspace:*",
     "better-auth": "1.7.21",
     "drizzle-orm": "^0.45.4",

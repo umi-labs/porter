@@ -2,6 +2,7 @@ import { relations, sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -124,6 +125,40 @@ export const mediaObject = pgTable(
   },
   (t) => [primaryKey({ columns: [t.projectId, t.sha256] })],
 );
+
+/** Which media hashes a version references (media_object is per project, not per version). */
+export const versionMedia = pgTable(
+  "version_media",
+  {
+    versionId: uuid("version_id")
+      .notNull()
+      .references(() => projectVersion.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").notNull(),
+    sha256: text("sha256").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.versionId, t.sha256] }),
+    foreignKey({
+      columns: [t.projectId, t.sha256],
+      foreignColumns: [mediaObject.projectId, mediaObject.sha256],
+    }).onDelete("cascade"),
+  ],
+);
+
+/** An init'd push awaiting commit; its id names the snapshot object. Bound to one project and user. */
+export const versionUpload = pgTable("version_upload", {
+  id: id(),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => project.id, { onDelete: "cascade" }),
+  userId: text("user_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  /** Every hash the push references, and the subset that was missing at init. */
+  mediaHashes: text("media_hashes").array().notNull(),
+  missing: text("missing").array().notNull(),
+  createdAt: createdAt(),
+});
 
 export const run = pgTable(
   "run",
