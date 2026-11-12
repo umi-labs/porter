@@ -41,6 +41,9 @@ pub struct DestField {
     pub name: String,
     pub kind: String,
     pub required: bool,
+    /// `required` is an expression the reader couldn't evaluate.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub required_unknown: bool,
     /// `hasMany`.
     pub many: bool,
     /// More than one entry = a polymorphic relation (`{relationTo, value}` on write).
@@ -99,6 +102,7 @@ pub fn read_payload_config(dir: &Path) -> anyhow::Result<DestSchema> {
         mods: HashMap::new(),
         stack: vec![],
         out: DestSchema::default(),
+        cur: String::new(),
     };
     let mut files = vec![];
     walk(dir, &mut files);
@@ -110,6 +114,7 @@ pub fn read_payload_config(dir: &Path) -> anyhow::Result<DestSchema> {
     });
     for f in files {
         let Some(m) = r.load(&f) else { continue };
+        r.cur = r.rel(&f);
         if f.file_name().is_some_and(|n| n == "payload.config.ts") {
             let cfg = r.export(&m, "default");
             for b in arr(&cfg["blocks"]) {
@@ -193,6 +198,7 @@ fn tsconfig(cm: &Lrc<SourceMap>, dir: &Path) -> (PathBuf, Option<Vec<PathAlias>>
         mods: HashMap::new(),
         stack: vec![],
         out: DestSchema::default(),
+        cur: String::new(),
     };
     let v = r.eval(&Rc::new(Mod::default()), &Env::new(), &e.expr);
     let opts = &v["compilerOptions"];
@@ -214,6 +220,33 @@ fn tsconfig(cm: &Lrc<SourceMap>, dir: &Path) -> (PathBuf, Option<Vec<PathAlias>>
     (base, aliases)
 }
 
+fn stmt_kind(s: &Stmt) -> &'static str {
+    match s {
+        Stmt::If(_) => "if",
+        Stmt::Expr(_) => "expression",
+        Stmt::For(_) | Stmt::ForIn(_) | Stmt::ForOf(_) | Stmt::While(_) | Stmt::DoWhile(_) => {
+            "loop"
+        }
+        Stmt::Switch(_) => "switch",
+        Stmt::Try(_) => "try",
+        Stmt::Decl(_) => "declaration",
+        _ => "other",
+    }
+}
+
+fn unres(v: &Value) -> Option<&str> {
+    v.get(UNRESOLVED).and_then(Value::as_str)
+}
+
+/// `true`/`false`, None when it's an expression we couldn't evaluate (absent = false).
+fn flag(v: &Value) -> Option<bool> {
+    match v {
+        Value::Bool(b) => Some(*b),
+        Value::Null => Some(false),
+        _ => None,
+    }
+}
+
 struct Reader {
     dir: PathBuf,
     resolver: ImportResolver,
@@ -222,6 +255,8 @@ struct Reader {
     /// (file, name) being evaluated: cycle guard.
     stack: Vec<(PathBuf, String)>,
     out: DestSchema,
+    /// The file whose configs are being read, for warnings.
+    cur: String,
 }
 
 fn atom(w: &swc_atoms::Wtf8Atom) -> String {
@@ -404,6 +439,16 @@ fn collect(m: &mut Mod, module: &Module) {
 impl Reader {
     fn rel(&self, p: &Path) -> String {
         p.strip_prefix(&self.dir).unwrap_or(p).display().to_string()
+    }
+
+    /// A warning about the file whose configs are being read.
+    fn warn_at(&mut self, w: String) {
+        let w = if self.cur.is_empty() {
+            w
+        } else {
+            format!("{}: {w}", self.cur)
+        };
+        self.warn(w);
     }
 
     fn warn(&mut self, w: String) {
@@ -686,7 +731,12 @@ impl Reader {
             None => unresolved(format!("{name}()")),
         };
         self.stack.pop();
-        v
+        match v.get(UNRESOLVED).and_then(Value::as_str) {
+            Some(w) if w.starts_with("statement") => {
+                unresolved(format!("{name}(): unsupported {w}"))
+            }
+            _ => v,
+        }
     }
 
     fn block(&mut self, m: &Rc<Mod>, mut env: Env, stmts: &[Stmt]) -> Value {
@@ -709,7 +759,9 @@ impl Reader {
                         .map(|e| self.eval(m, &env, e))
                         .unwrap_or(Value::Null);
                 }
-                _ => {}
+                Stmt::Empty(_) => {}
+                // An `if`, loop or `push` could change what's returned: don't guess.
+                s => return unresolved(format!("statement {}", stmt_kind(s))),
             }
         }
         Value::Null
@@ -766,6 +818,11 @@ impl Reader {
         if map.contains_key(&slug) {
             return;
         }
+        if let Some(what) = unres(v) {
+            self.warn_at(format!(
+                "collection `{slug}` is only partly resolved (`{what}`): fields from it may be missing"
+            ));
+        }
         let fields = self.fields(&v["fields"], &slug);
         let c = CollectionSchema {
             fields,
@@ -782,6 +839,11 @@ impl Reader {
     /// A block config: its `DestField` (`kind = "block"`), recorded in `blocks` on first sight.
     fn add_block(&mut self, v: &Value) -> Option<DestField> {
         let slug = v["slug"].as_str()?.to_string();
+        if let Some(what) = unres(v) {
+            self.warn_at(format!(
+                "block `{slug}` is only partly resolved (`{what}`): fields from it may be missing"
+            ));
+        }
         let fields = self.fields(&v["fields"], &format!("block {slug}"));
         self.out
             .blocks
@@ -796,17 +858,46 @@ impl Reader {
     }
 
     fn fields(&mut self, v: &Value, ctx: &str) -> Vec<DestField> {
+        if let Some(what) = unres(v) {
+            self.warn_at(format!("could not resolve the fields of {ctx} (`{what}`)"));
+            return vec![];
+        }
+        if !v.is_null() && !v.is_array() {
+            self.warn_at(format!("the fields of {ctx} are not a list"));
+            return vec![];
+        }
         let mut out = vec![];
-        for f in arr(v) {
-            if let Some(what) = f.get(UNRESOLVED).and_then(Value::as_str) {
-                self.warn(format!("could not resolve `{what}` (a field of {ctx})"));
+        for (i, f) in arr(v).iter().enumerate() {
+            let label = f["name"]
+                .as_str()
+                .map(|n| format!("{ctx}.{n}"))
+                .unwrap_or_else(|| format!("{ctx}[{i}]"));
+            let Some(kind) = f["type"].as_str() else {
+                match unres(f).or_else(|| unres(&f["type"])) {
+                    Some(what) => {
+                        self.warn_at(format!("could not resolve `{what}` (field {label})"))
+                    }
+                    None => self.warn_at(format!("could not read the type of field {label}")),
+                }
                 continue;
+            };
+            if let Some(what) = unres(f) {
+                self.warn_at(format!(
+                    "field {label} is only partly resolved (`{what}`): some of its settings may be missing"
+                ));
             }
-            let kind = f["type"].as_str().unwrap_or_default();
             match kind {
                 "row" | "collapsible" => out.extend(self.fields(&f["fields"], ctx)),
                 "tabs" => {
+                    if let Some(what) = unres(&f["tabs"]) {
+                        self.warn_at(format!("could not resolve the tabs of {label} (`{what}`)"));
+                    }
                     for tab in arr(&f["tabs"]) {
+                        if let Some(what) = unres(&tab["name"]) {
+                            self.warn_at(format!(
+                                "could not resolve a tab name in {ctx} (`{what}`)"
+                            ));
+                        }
                         let inner = self.fields(&tab["fields"], ctx);
                         match tab["name"].as_str() {
                             Some(n) => out.push(DestField {
@@ -819,9 +910,12 @@ impl Reader {
                         }
                     }
                 }
-                "" | "ui" | "join" => {}
+                "ui" | "join" => {}
                 _ => {
                     let Some(name) = f["name"].as_str() else {
+                        self.warn_at(format!(
+                            "could not read the name of the {kind} field {label}"
+                        ));
                         continue;
                     };
                     let path = format!("{ctx}.{name}");
@@ -830,8 +924,10 @@ impl Reader {
                         "blocks" => {
                             let mut bs = vec![];
                             for b in arr(&f["blocks"]) {
-                                if let Some(what) = b.get(UNRESOLVED).and_then(Value::as_str) {
-                                    self.warn(format!("could not resolve block `{what}` ({path})"));
+                                if let Some(what) = unres(b) {
+                                    self.warn_at(format!(
+                                        "could not resolve block `{what}` ({path})"
+                                    ));
                                 } else if let Some(d) = self.add_block(b) {
                                     bs.push(d);
                                 }
@@ -857,11 +953,23 @@ impl Reader {
                             .collect(),
                         _ => vec![],
                     };
+                    let required = flag(&f["required"]);
+                    let many = flag(&f["hasMany"]);
+                    if many.is_none() {
+                        self.warn_at(format!("could not determine if {path} has many values (`hasMany` is an expression)"));
+                    }
+                    if !f["relationTo"].is_null() && relation_to.is_empty() {
+                        self.warn_at(format!("could not resolve `relationTo` of {path}"));
+                    }
+                    if let Some(what) = unres(&f["blocks"]) {
+                        self.warn_at(format!("could not resolve the blocks of {path} (`{what}`)"));
+                    }
                     out.push(DestField {
                         name: name.into(),
                         kind: kind.into(),
-                        required: f["required"] == Value::Bool(true),
-                        many: f["hasMany"] == Value::Bool(true),
+                        required: required.unwrap_or(false),
+                        required_unknown: required.is_none(),
+                        many: many.unwrap_or(false),
                         relation_to,
                         fields,
                     });

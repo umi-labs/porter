@@ -18,8 +18,10 @@ static EMAIL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+").expect("valid regex")
 });
 // Seven or more digits with phone punctuation between: also catches long ids, which is fine.
+static NUM_ENTITY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"&#([xX][0-9a-fA-F]+|[0-9]+);").expect("valid regex"));
 static PHONE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\+?\(?\d[\d\s().-]{5,}\d").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"\+?\(?\d[\d\s()./-]{5,}\d").expect("valid regex"));
 
 static DATE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\d{4}-\d{2}-\d{2}$").expect("valid regex"));
@@ -34,6 +36,17 @@ pub fn clean_sample(s: &str) -> String {
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'");
+    // `&#64;` / `&#x40;` would otherwise hide an `@` from the email pattern.
+    let s = NUM_ENTITY.replace_all(&s, |c: &regex::Captures| {
+        let n = &c[1];
+        let code = match n.strip_prefix(['x', 'X']) {
+            Some(h) => u32::from_str_radix(h, 16).ok(),
+            None => n.parse().ok(),
+        };
+        code.and_then(char::from_u32)
+            .map(String::from)
+            .unwrap_or_default()
+    });
     let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
     let s = EMAIL.replace_all(&s, "[redacted]");
     let s = PHONE.replace_all(&s, |c: &regex::Captures| {
@@ -135,7 +148,7 @@ fn plan(
         let c = &mut colls[i];
         c.from
             .push((ty.clone(), stats.map(|s| s.count).unwrap_or(0)));
-        for (src, fm) in &tm.fields {
+        for (src, fm) in tm.fields.iter().filter(|(_, fm)| !fm.drop) {
             if c.rows.iter().any(|r| r.field == fm.to) {
                 continue;
             }

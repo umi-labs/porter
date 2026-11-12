@@ -75,10 +75,17 @@ pub enum KeyType {
     Number,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// `{ to = "dest.path" }`, or `{ drop = true, reason = "..." }` to leave a field behind
+/// on purpose (no unmapped-field warning). Exactly one of the two; `validate` checks.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FieldMap {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub to: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub drop: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     /// One inline table or a list of them.
     #[serde(
         default,
@@ -193,6 +200,11 @@ impl MappingConfig {
         let mut errs = Vec::new();
         for (ty, tm) in &self.types {
             for (field, fm) in &tm.fields {
+                if fm.drop == !fm.to.is_empty() {
+                    errs.push(format!(
+                        "mapping.types.{ty}.fields.{field}: set exactly one of `to` or `drop = true`"
+                    ));
+                }
                 for (i, t) in fm.transform.iter().enumerate() {
                     if let Transform::Regex { pattern, .. } = t
                         && let Err(e) = transforms::compiled(pattern)
@@ -236,7 +248,7 @@ impl MappingConfig {
             for k in d.fields.keys() {
                 tm.fields.entry(k.clone()).or_insert_with(|| FieldMap {
                     to: k.clone(),
-                    transform: vec![],
+                    ..FieldMap::default()
                 });
             }
         }
@@ -439,6 +451,25 @@ retire = ["contact"]
         let src = "[types.p.fields.f]\nto = \"x\"\ntransform = { op = \"trim\", extra = 1 }\n";
         let e = toml::from_str::<MappingConfig>(src).unwrap_err();
         assert!(e.to_string().contains("extra"), "{e}");
+    }
+
+    #[test]
+    fn field_drop_parses_and_validates() {
+        let m: MappingConfig = toml::from_str(
+            "[types.p.fields.a]\ndrop = true\nreason = \"legacy\"\n[types.p.fields.b]\nto = \"x\"\n",
+        )
+        .unwrap();
+        assert!(m.types["p"].fields["a"].drop);
+        assert!(m.validate().is_empty(), "{:?}", m.validate());
+        let back: MappingConfig = toml::from_str(&toml::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back, m);
+        for bad in [
+            "[types.p.fields.a]\nreason = \"x\"\n",
+            "[types.p.fields.a]\nto = \"x\"\ndrop = true\n",
+        ] {
+            let m: MappingConfig = toml::from_str(bad).unwrap();
+            assert!(m.validate()[0].contains("exactly one"), "{bad}");
+        }
     }
 
     #[test]

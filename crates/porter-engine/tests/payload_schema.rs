@@ -63,7 +63,7 @@ fn mapping(ty: &str, to: &str, fields: &[(&str, &str)]) -> MappingConfig {
                         k.to_string(),
                         FieldMap {
                             to: v.to_string(),
-                            transform: vec![],
+                            ..FieldMap::default()
                         },
                     )
                 })
@@ -471,4 +471,220 @@ fn summary_from_store_counts_variants_fill_and_samples() {
     assert!((hero.fill_rate - 0.5).abs() < 1e-9);
     assert_eq!(hero.samples, ["<p>One</p>"]);
     assert!(t.fields["body"].variants.contains("RichText"));
+}
+
+fn warnings(issues: &[porter_engine::html::PendingIssue]) -> Vec<String> {
+    issues
+        .iter()
+        .filter(|i| i.severity == Severity::Warning)
+        .map(|i| i.message.clone())
+        .collect()
+}
+
+#[test]
+fn reader_warns_on_partial_configs() {
+    let d = tempfile::tempdir().unwrap();
+    write(
+        d.path(),
+        "src/Pages.ts",
+        r#"
+import type { CollectionConfig } from 'payload'
+import { SOME_TYPE, pkgFields, base, isProd } from 'some-pkg'
+const helper = () => {
+  const out = []
+  if (isProd) { out.push({ name: 'secret', type: 'text', required: true }) }
+  return out
+}
+export const Pages: CollectionConfig = {
+  slug: 'pages',
+  admin: {},
+  fields: [
+    { name: 'a', type: isProd ? 'text' : 'textarea' },
+    { name: `x${isProd}`, type: 'text' },
+    { name: 'b', type: SOME_TYPE },
+    { name: 'c', type: 'text', required: isProd, hasMany: isProd },
+    ...helper(),
+    { name: 'g', type: 'group', fields: pkgFields },
+  ],
+}
+export const Things: CollectionConfig = { ...base, slug: 'things' }
+"#,
+    );
+    let s = read_payload_config(d.path()).unwrap();
+    let w = s.warnings.join("\n");
+    let has = |needles: &[&str]| {
+        assert!(
+            s.warnings
+                .iter()
+                .any(|w| w.contains("Pages.ts") && needles.iter().all(|n| w.contains(n))),
+            "{needles:?} not in:\n{w}"
+        )
+    };
+    // (a) type / name unresolved
+    has(&["pages.a", "expression"]);
+    has(&["pages[1]"]);
+    has(&["SOME_TYPE", "pages.b"]);
+    // (b) required / hasMany behind an expression
+    has(&["pages.c", "hasMany"]);
+    let c = field(&s.collections["pages"].fields, "c");
+    assert!(c.required_unknown && !c.required);
+    // (c) unresolved spread into the collection
+    has(&["things", "partly"]);
+    // (d) helper with an `if`
+    has(&["helper()", "if"]);
+    // (e) group with unresolved fields
+    has(&["pages.g", "pkgFields"]);
+
+    let issues = schema_check::check(&TypeSummary::default(), &mapping("post", "pages", &[]), &s);
+    assert!(
+        warnings(&issues)
+            .iter()
+            .any(|m| m.contains("could not determine if") && m.contains("pages.c")),
+        "{issues:?}"
+    );
+}
+
+#[test]
+fn mapping_typo_is_reported() {
+    let d = tempfile::tempdir().unwrap();
+    write(d.path(), "Pages.ts", PAGES_WITH_HERO);
+    let dest = read_payload_config(d.path()).unwrap();
+    let mut sum = summary("post", &[("acf.hero", stats(&["Text"], &[]))]);
+    sum.types.insert(
+        "empty".into(),
+        TypeStats {
+            count: 0,
+            ..Default::default()
+        },
+    );
+    let mut map = mapping("post", "pages", &[("acf.heor", "hero")]);
+    map.types.insert(
+        "event".into(),
+        TypeMap {
+            to: Some("pages".into()),
+            ..TypeMap::default()
+        },
+    );
+    let w = warnings(&schema_check::check(&sum, &map, &dest));
+    assert!(
+        w.iter()
+            .any(|m| m.contains("post.acf.heor") && m.contains("none of 3 post documents")),
+        "{w:?}"
+    );
+    assert!(
+        w.iter()
+            .any(|m| m.contains("type `event` is mapped but has no normalised documents")),
+        "{w:?}"
+    );
+}
+
+#[test]
+fn nested_required_fields_checked() {
+    let d = tempfile::tempdir().unwrap();
+    write(
+        d.path(),
+        "Pages.ts",
+        r#"
+export const Pages = { slug: 'pages', admin: {}, fields: [
+  { name: 'legacyId', type: 'text' },
+  { name: 'hero', type: 'group', fields: [
+    { name: 'heading', type: 'text', required: true },
+    { name: 'image', type: 'upload', relationTo: 'media' },
+  ] },
+  { name: 'meta', type: 'group', fields: [{ name: 'keywords', type: 'text', required: true }] },
+  { name: 'layout', type: 'blocks', blocks: [
+    { slug: 'cta', fields: [{ name: 'label', type: 'text', required: true }, { name: 'url', type: 'text', required: true }] },
+  ] },
+] }
+"#,
+    );
+    let dest = read_payload_config(d.path()).unwrap();
+    let mut map = mapping(
+        "post",
+        "pages",
+        &[("acf.img", "hero.image"), ("acf.meta", "meta")],
+    );
+    map.blocks.push(BlockMap {
+        r#match: BlockMatch {
+            kind: Some("button".into()),
+            module: None,
+        },
+        to: "cta".into(),
+        fields: [("text".to_string(), "label".to_string())]
+            .into_iter()
+            .collect(),
+    });
+    let issues = schema_check::check(&TypeSummary::default(), &map, &dest);
+    let errs = errors(&issues);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("pages.hero.heading") && e.contains("required")),
+        "{errs:?}"
+    );
+    assert!(
+        errs.iter().any(|e| e.contains("cta") && e.contains("url")),
+        "{errs:?}"
+    );
+    assert!(!errs.iter().any(|e| e.contains("label")), "{errs:?}");
+    assert!(
+        warnings(&issues)
+            .iter()
+            .any(|w| w.contains("meta.keywords") && w.contains("can't be verified")),
+        "{issues:?}"
+    );
+}
+
+#[test]
+fn dropped_field_is_not_unmapped_and_pii_is_masked() {
+    let d = tempfile::tempdir().unwrap();
+    write(d.path(), "Pages.ts", PAGES_WITH_HERO);
+    let dest = read_payload_config(d.path()).unwrap();
+    let sum = summary(
+        "post",
+        &[
+            ("acf.old", stats(&["Text"], &[])),
+            ("acf.new", stats(&["Text"], &[])),
+        ],
+    );
+    let mut map = mapping("post", "pages", &[]);
+    map.types["post"].fields.insert(
+        "acf.old".into(),
+        FieldMap {
+            drop: true,
+            reason: Some("retired".into()),
+            ..FieldMap::default()
+        },
+    );
+    let issues = schema_check::check(&sum, &map, &dest);
+    let unmapped: Vec<_> = issues
+        .iter()
+        .filter(|i| i.kind == IssueKind::UnmappedField)
+        .map(|i| i.message.clone())
+        .collect();
+    assert!(
+        unmapped.iter().any(|m| m.contains("acf.new")),
+        "{unmapped:?}"
+    );
+    assert!(
+        !unmapped.iter().any(|m| m.contains("acf.old")),
+        "{unmapped:?}"
+    );
+    assert!(errors(&issues).is_empty(), "{issues:?}");
+
+    for raw in [
+        "call 020/7946/0958 now",
+        "mail jane&#64;example.com",
+        "mail jane&#x40;example.com",
+    ] {
+        let c = schema_prompt::clean_sample(raw);
+        assert!(c.contains("[redacted]"), "{raw} -> {c}");
+        assert!(
+            !c.contains("7946") && !c.contains("example.com"),
+            "{raw} -> {c}"
+        );
+    }
+    assert_eq!(
+        schema_prompt::clean_sample("on 2024-01-02"),
+        "on 2024-01-02"
+    );
 }

@@ -248,7 +248,7 @@ pub fn generate(
         };
         let entry = colls.entry(coll).or_insert_with(|| (tm.key_type, vec![]));
         let stats = summary.types.get(ty);
-        for (src, fm) in &tm.fields {
+        for (src, fm) in tm.fields.iter().filter(|(_, fm)| !fm.drop) {
             if fm.to == tm.key_field || ["title", "slug"].contains(&fm.to.as_str()) {
                 continue;
             }

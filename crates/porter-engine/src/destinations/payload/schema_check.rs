@@ -82,6 +82,17 @@ fn issue(kind: IssueKind, severity: Severity, message: String, details: Value) -
     }
 }
 
+const PLUGIN: &str = " (defined by a plugin? plugin-added collections and fields aren't read)";
+
+fn warning(message: String, details: Value) -> PendingIssue {
+    issue(
+        IssueKind::SchemaMismatch,
+        Severity::Warning,
+        message,
+        details,
+    )
+}
+
 fn error(message: String, details: Value) -> PendingIssue {
     issue(IssueKind::SchemaMismatch, Severity::Error, message, details)
 }
@@ -107,7 +118,7 @@ pub fn check(
         let Some(coll) = &tm.to else { continue };
         let Some(c) = dest.collections.get(coll) else {
             out.push(error(
-                format!("collection `{coll}` (mapped from source type `{ty}`) is not defined in the Payload config"),
+                format!("collection `{coll}` (mapped from source type `{ty}`) is not defined in the Payload config{PLUGIN}"),
                 json!({"type": ty, "collection": coll}),
             ));
             continue;
@@ -128,12 +139,29 @@ pub fn check(
             )),
             Some(_) => {}
         }
-        let stats = model_types.types.get(ty);
-        for (src, fm) in &tm.fields {
+        let stats = model_types.types.get(ty).filter(|s| s.count > 0);
+        if stats.is_none() {
+            out.push(warning(
+                format!("type `{ty}` is mapped but has no normalised documents"),
+                json!({"type": ty}),
+            ));
+        }
+        for (src, fm) in tm.fields.iter().filter(|(_, fm)| !fm.drop) {
+            if let Some(s) = stats
+                && !s.fields.contains_key(src)
+            {
+                out.push(warning(
+                    format!(
+                        "`{ty}.{src}` is mapped but appears in none of {} {ty} documents",
+                        s.count
+                    ),
+                    json!({"type": ty, "field": src}),
+                ));
+            }
             let Some(f) = find(&c.fields, &fm.to) else {
                 out.push(error(
                     format!(
-                        "field `{coll}.{}` (mapped from `{ty}.{src}`) does not exist",
+                        "field `{coll}.{}` (mapped from `{ty}.{src}`) does not exist{PLUGIN}",
                         fm.to
                     ),
                     json!({"collection": coll, "field": fm.to, "source": src, "type": ty}),
@@ -157,21 +185,17 @@ pub fn check(
                 }
             }
         }
-        // ponytail: top-level required fields only; nested required ones surface at load.
-        for f in c.fields.iter().filter(|f| f.required) {
-            let covered = IMPLICIT.contains(&f.name.as_str())
-                || &f.name == key
-                || tm
-                    .fields
-                    .values()
-                    .any(|fm| fm.to.split('.').next() == Some(f.name.as_str()));
-            if !covered {
-                out.push(error(
-                    format!("`{coll}.{}` is required but nothing maps to it", f.name),
-                    json!({"collection": coll, "field": f.name}),
-                ));
-            }
-        }
+        let mapped: Vec<&str> = tm
+            .fields
+            .values()
+            .filter(|fm| !fm.drop)
+            .map(|fm| fm.to.as_str())
+            .chain(IMPLICIT)
+            .chain([key.as_str()])
+            .collect();
+        let mut gaps = Gaps::default();
+        gaps.walk(&c.fields, "", &mapped);
+        gaps.report(&mut out, coll, &format!("`{coll}."), "nothing maps to it");
         if let Some(s) = stats {
             for (k, fs) in &s.fields {
                 if !tm.fields.contains_key(k) {
@@ -210,12 +234,105 @@ pub fn check(
         );
     let mut seen = BTreeSet::new();
     for (slug, from) in slugs {
-        if seen.insert(slug) && !dest.blocks.contains_key(slug) {
+        if !seen.insert(slug) {
+            continue;
+        }
+        let Some(fields) = dest.blocks.get(slug) else {
             out.push(error(
-                format!("block `{slug}` ({from}) is not defined in the Payload config"),
+                format!("block `{slug}` ({from}) is not defined in the Payload config{PLUGIN}"),
                 json!({"block": slug}),
+            ));
+            continue;
+        };
+        let mut mapped: Vec<&str> = mapping
+            .blocks
+            .iter()
+            .filter(|b| b.to == slug)
+            .flat_map(|b| b.fields.values().map(String::as_str))
+            .collect();
+        if mapping.raw_block.as_deref() == Some(slug) {
+            mapped.push("html");
+        }
+        let mut gaps = Gaps::default();
+        gaps.walk(fields, "", &mapped);
+        gaps.report(
+            &mut out,
+            slug,
+            &format!("block `{slug}` field `"),
+            "no [[mapping.blocks]] field maps to it",
+        );
+    }
+    out
+}
+
+/// Required destination fields nothing writes to, found by walking every group or array
+/// the mapping reaches into.
+#[derive(Default)]
+struct Gaps {
+    missing: Vec<String>,
+    unknown: Vec<String>,
+    /// Required fields inside a group/array mapped as a whole: can't tell from here.
+    unverifiable: Vec<String>,
+}
+
+impl Gaps {
+    fn walk(&mut self, fields: &[DestField], prefix: &str, mapped: &[&str]) {
+        for f in fields {
+            let path = format!("{prefix}{}", f.name);
+            let inside = format!("{path}.");
+            let whole = mapped.contains(&path.as_str());
+            let into = mapped.iter().any(|p| p.starts_with(&inside));
+            if !whole && !into {
+                if f.required {
+                    self.missing.push(path.clone());
+                } else if f.required_unknown {
+                    self.unknown.push(path.clone());
+                }
+            }
+            if !matches!(f.kind.as_str(), "group" | "array") {
+                continue;
+            }
+            if into {
+                self.walk(&f.fields, &inside, mapped);
+            } else if whole {
+                required_under(&f.fields, &inside, &mut self.unverifiable);
+            }
+        }
+    }
+
+    fn report(&self, out: &mut Vec<PendingIssue>, owner: &str, lead: &str, why: &str) {
+        for p in &self.missing {
+            out.push(error(
+                format!("{lead}{p}` is required but {why}"),
+                json!({"owner": owner, "field": p}),
+            ));
+        }
+        for p in &self.unknown {
+            out.push(warning(
+                format!("could not determine if {lead}{p}` is required (`required` is an expression), and {why}"),
+                json!({"owner": owner, "field": p}),
+            ));
+        }
+        if !self.unverifiable.is_empty() {
+            out.push(warning(
+                format!(
+                    "{owner}: required fields inside fields mapped as a whole can't be verified: {}",
+                    self.unverifiable.join(", ")
+                ),
+                json!({"owner": owner, "fields": self.unverifiable}),
             ));
         }
     }
-    out
+}
+
+fn required_under(fields: &[DestField], prefix: &str, out: &mut Vec<String>) {
+    for f in fields {
+        let path = format!("{prefix}{}", f.name);
+        if f.required || f.required_unknown {
+            out.push(path.clone());
+        }
+        if matches!(f.kind.as_str(), "group" | "array") {
+            required_under(&f.fields, &format!("{path}."), out);
+        }
+    }
 }
