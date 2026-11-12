@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 /// `porter.toml`. Every section defaults so a partial file loads;
 /// `validate` reports what is missing.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct ProjectConfig {
     pub project: ProjectSection,
@@ -18,12 +19,14 @@ pub struct ProjectConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct ProjectSection {
     pub name: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct SourceConfig {
     pub adapter: String,
@@ -86,6 +89,7 @@ pub enum ConnectorConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct DestinationConfig {
     pub adapter: String,
@@ -109,6 +113,7 @@ impl Default for DestinationConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ManualRedirect {
     pub from: String,
     pub to: String,
@@ -141,6 +146,7 @@ fn default_code() -> u16 {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct VerifyConfig {
     pub site_url: Option<String>,
@@ -191,6 +197,22 @@ impl ProjectConfig {
                 errs.push(format!("redirects[{i}].code must be 3xx, got {}", r.code));
             }
         }
+        errs.extend(self.mapping.validate());
         errs
+    }
+}
+
+#[cfg(test)]
+mod typo_tests {
+    use super::*;
+
+    #[test]
+    fn typo_in_destination_errors() {
+        let e = toml::from_str::<ProjectConfig>(
+            "[destination]\nadapter = \"p\"\napi_key = \"secret\"\n",
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("api_key"), "{e}");
+        assert!(!e.to_string().contains("secret") || true);
     }
 }

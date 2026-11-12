@@ -25,6 +25,7 @@ indexmap = { version = "2", features = ["serde"] }
 rusqlite = { version = "0.42", features = ["bundled"] }
 toml = "1"
 toml_edit = "0.25"
+unicode-normalization = "0.1"
 url = "2"
 percent-encoding = "2"
 tempfile = "3"

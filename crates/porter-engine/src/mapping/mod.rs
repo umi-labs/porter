@@ -14,6 +14,7 @@ use std::path::Path;
 pub use transforms::{Transform, apply};
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct MappingConfig {
     /// Source type -> how it maps. A type with no entry here is unmapped.
@@ -26,6 +27,7 @@ pub struct MappingConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct TypeMap {
     /// Destination collection; omitted = drop this type (give `drop_reason`).
@@ -69,6 +71,7 @@ pub enum KeyType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct FieldMap {
     pub to: String,
     /// One inline table or a list of them.
@@ -81,19 +84,31 @@ pub struct FieldMap {
 }
 
 fn one_or_many<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Transform>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum OneOrMany {
-        Many(Vec<Transform>),
-        One(Transform),
+    use serde::de::Error;
+    // Via toml::Value so a bad inline table errors naming the key, not "no variant matched".
+    let one = |v: toml::Value| {
+        // serde ignores extra keys on unit variants of tagged enums; check by hand.
+        if let toml::Value::Table(t) = &v
+            && matches!(
+                t.get("op").and_then(|o| o.as_str()),
+                Some("trim" | "lower" | "upper" | "slugify" | "number")
+            )
+            && let Some(k) = t.keys().find(|k| *k != "op")
+        {
+            return Err(D::Error::custom(format!(
+                "unknown field `{k}` in transform"
+            )));
+        }
+        Transform::deserialize(v).map_err(D::Error::custom)
+    };
+    match toml::Value::deserialize(d)? {
+        toml::Value::Array(a) => a.into_iter().map(one).collect(),
+        v => one(v).map(|t| vec![t]),
     }
-    Ok(match OneOrMany::deserialize(d)? {
-        OneOrMany::Many(v) => v,
-        OneOrMany::One(t) => vec![t],
-    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct BlockMap {
     pub r#match: BlockMatch,
     /// Destination block slug.
@@ -103,6 +118,7 @@ pub struct BlockMap {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct BlockMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,7 +129,7 @@ pub struct BlockMatch {
 
 /// `locales = { mode = "skip" }` or `{ mode = "map", default = "en", others = ["fr"] }`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "mode", rename_all = "kebab-case")]
+#[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum LocaleMode {
     #[default]
     Skip,
@@ -125,6 +141,7 @@ pub enum LocaleMode {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct FormsMap {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -134,6 +151,7 @@ pub struct FormsMap {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct MediaMap {
     pub collection: String,
@@ -150,6 +168,7 @@ impl Default for MediaMap {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct RedirectsMap {
     pub collection: String,
@@ -164,6 +183,24 @@ impl Default for RedirectsMap {
 }
 
 impl MappingConfig {
+    /// Empty means valid. Reports bad regex patterns with their key path.
+    pub fn validate(&self) -> Vec<String> {
+        let mut errs = Vec::new();
+        for (ty, tm) in &self.types {
+            for (field, fm) in &tm.fields {
+                for (i, t) in fm.transform.iter().enumerate() {
+                    if let Transform::Regex { pattern, .. } = t
+                        && let Err(e) = transforms::compiled(pattern)
+                    {
+                        errs.push(format!(
+                            "mapping.types.{ty}.fields.{field}.transform[{i}].pattern: {e}"
+                        ));
+                    }
+                }
+            }
+        }
+        errs
+    }
     /// One TypeMap per source type, mapped to itself. Uses normalised Documents when there
     /// are any (every observed field path maps to itself); before normalise, falls back to
     /// the connectors' raw labels (types only). Nothing is dropped; the user edits.
@@ -216,21 +253,32 @@ pub fn write_seed_if_empty(project_dir: &Path, seed: &MappingConfig) -> Result<b
     let text =
         std::fs::read_to_string(&file).with_context(|| format!("read {}", file.display()))?;
     let mut doc: toml_edit::DocumentMut = text.parse().context("parse porter.toml")?;
-    if let Some(m) = doc.get("mapping")
-        && m.as_table_like().is_none_or(|t| !t.is_empty())
-    {
-        return Ok(false);
+    let mut base = text.clone();
+    if let Some(m) = doc.get("mapping") {
+        if m.as_table_like().is_none_or(|t| !t.is_empty()) {
+            return Ok(false);
+        }
+        // An empty [mapping] header: drop it, the seed block replaces it.
+        doc.remove("mapping");
+        base = doc.to_string();
     }
-    let mut table = toml::to_string(seed)
-        .context("serialise mapping")?
-        .parse::<toml_edit::DocumentMut>()?
-        .into_table();
-    table.decor_mut().set_prefix(
+    #[derive(Serialize)]
+    struct Wrap<'a> {
+        mapping: &'a MappingConfig,
+    }
+    let block = toml::to_string(&Wrap { mapping: seed }).context("serialise mapping")?;
+    if !base.is_empty() && !base.ends_with('\n') {
+        base.push('\n');
+    }
+    base.push_str(
         "\n# Seeded by `porter analyse`: every source type maps to itself. Edit `to`, set\n\
          # `drop_reason` (and remove `to`) to drop a type, rename fields, add transforms.\n",
     );
-    doc["mapping"] = toml_edit::Item::Table(table);
-    std::fs::write(&file, doc.to_string()).with_context(|| format!("write {}", file.display()))?;
+    base.push_str(&block);
+    let mut tmp = tempfile::NamedTempFile::new_in(project_dir).context("temp file")?;
+    std::io::Write::write_all(&mut tmp, base.as_bytes())?;
+    tmp.persist(&file)
+        .with_context(|| format!("write {}", file.display()))?;
     Ok(true)
 }
 
@@ -323,5 +371,81 @@ retire = ["contact"]
         assert_eq!(m, seed);
         assert!(!write_seed_if_empty(dir.path(), &seed).unwrap());
         assert_eq!(std::fs::read_to_string(&f).unwrap(), text);
+    }
+
+    #[test]
+    fn seed_is_one_contiguous_block_at_the_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("porter.toml");
+        let orig = "# top\n[project]\nname = \"x\"\n\n[source]\nadapter = \"a\"\n\n[destination]\n# url = \"u\"\n\n# [mapping]\n\n# [[redirects]]\n# from = \"/a\"\n";
+        std::fs::write(&f, orig).unwrap();
+        let mut seed = MappingConfig::default();
+        for t in ["post", "page"] {
+            seed.types.insert(
+                t.into(),
+                TypeMap {
+                    to: Some(t.into()),
+                    ..TypeMap::default()
+                },
+            );
+        }
+        assert!(write_seed_if_empty(dir.path(), &seed).unwrap());
+        let text = std::fs::read_to_string(&f).unwrap();
+        assert!(text.starts_with(orig));
+        let tail = &text[orig.len()..];
+        let first = tail
+            .lines()
+            .position(|l| l.starts_with("[mapping"))
+            .unwrap();
+        let lines: Vec<&str> = tail.lines().collect();
+        assert!(lines[first - 1].starts_with('#'), "comment precedes block");
+        assert!(
+            lines[first..]
+                .iter()
+                .all(|l| l.is_empty() || l.starts_with("[mapping") || !l.starts_with('['))
+        );
+        assert!(!lines[..first].iter().any(|l| l.starts_with('[')));
+    }
+
+    #[test]
+    fn empty_mapping_table_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("porter.toml");
+        std::fs::write(&f, "[project]\nname = \"x\"\n\n[mapping]\n").unwrap();
+        let mut seed = MappingConfig::default();
+        seed.types.insert("p".into(), TypeMap::default());
+        assert!(write_seed_if_empty(dir.path(), &seed).unwrap());
+        let t = std::fs::read_to_string(&f).unwrap();
+        assert_eq!(t.matches("[mapping]").count(), 1);
+        toml::from_str::<toml::Table>(&t).unwrap();
+    }
+
+    #[test]
+    fn typo_in_type_map_errors() {
+        let e = toml::from_str::<MappingConfig>("[types.post]\ntoo = \"pages\"\n").unwrap_err();
+        assert!(e.to_string().contains("too"), "{e}");
+    }
+
+    #[test]
+    fn typo_in_transform_errors() {
+        let src = "[types.p.fields.f]\nto = \"x\"\ntransform = [{ op = \"regex\", patern = \"a\", replace = \"b\" }]\n";
+        let e = toml::from_str::<MappingConfig>(src).unwrap_err();
+        assert!(e.to_string().contains("patern"), "{e}");
+        let src = "[types.p.fields.f]\nto = \"x\"\ntransform = { op = \"trim\", extra = 1 }\n";
+        let e = toml::from_str::<MappingConfig>(src).unwrap_err();
+        assert!(e.to_string().contains("extra"), "{e}");
+    }
+
+    #[test]
+    fn validate_reports_bad_regex_path() {
+        let m: MappingConfig = toml::from_str(
+            "[types.p.fields.f]\nto = \"x\"\ntransform = [{ op = \"regex\", pattern = \"(\", replace = \"\" }]\n",
+        )
+        .unwrap();
+        let e = m.validate();
+        assert!(
+            e[0].starts_with("mapping.types.p.fields.f.transform[0].pattern"),
+            "{e:?}"
+        );
     }
 }

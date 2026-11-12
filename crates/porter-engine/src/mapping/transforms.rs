@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// One step of a field transform; TOML inline table `{ op = "regex", pattern = "..", replace = ".." }`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(tag = "op", rename_all = "kebab-case")]
+#[serde(tag = "op", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Transform {
     Trim,
     Lower,
@@ -41,16 +41,40 @@ impl Transform {
     }
 }
 
-pub fn slugify(s: &str) -> String {
+/// NFC, lowercase, runs of non-alphanumerics become one `-`; combining marks stay with
+/// their base character. Errors when nothing is left, so callers can raise an issue.
+pub fn slugify(s: &str) -> Result<String, String> {
+    use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
     let mut out = String::new();
-    for c in s.chars().flat_map(char::to_lowercase) {
-        if c.is_alphanumeric() {
+    for c in s.nfc().collect::<String>().to_lowercase().nfc() {
+        if c.is_alphanumeric() || (is_combining_mark(c) && !out.is_empty() && !out.ends_with('-')) {
             out.push(c);
         } else if !out.is_empty() && !out.ends_with('-') {
             out.push('-');
         }
     }
-    out.trim_end_matches('-').to_string()
+    let out = out.trim_end_matches('-').to_string();
+    if out.is_empty() {
+        return Err(format!("slugify produced an empty slug from \"{s}\""));
+    }
+    Ok(out)
+}
+
+/// Compiled regexes, cached by pattern.
+pub fn compiled(pattern: &str) -> Result<regex::Regex, String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, regex::Regex>>> = OnceLock::new();
+    let mut cache = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(r) = cache.get(pattern) {
+        return Ok(r.clone());
+    }
+    let re = regex::Regex::new(pattern).map_err(|e| format!("bad pattern \"{pattern}\": {e}"))?;
+    cache.insert(pattern.to_string(), re.clone());
+    Ok(re)
 }
 
 fn text_of(v: &FieldValue) -> Option<String> {
@@ -115,7 +139,7 @@ fn step(v: &FieldValue, t: &Transform) -> Result<FieldValue, String> {
         Transform::Trim => FieldValue::Text(s.trim().to_string()),
         Transform::Lower => FieldValue::Text(s.to_lowercase()),
         Transform::Upper => FieldValue::Text(s.to_uppercase()),
-        Transform::Slugify => FieldValue::Text(slugify(&s)),
+        Transform::Slugify => FieldValue::Text(slugify(&s)?),
         Transform::DateParse { format } => FieldValue::Date(
             parse_date(&s, format)
                 .ok_or_else(|| fail(&format!("does not match format \"{format}\"")))?,
@@ -136,8 +160,7 @@ fn step(v: &FieldValue, t: &Transform) -> Result<FieldValue, String> {
             })
         }
         Transform::Regex { pattern, replace } => {
-            let re = regex::Regex::new(pattern)
-                .map_err(|e| format!("regex: bad pattern \"{pattern}\": {e}"))?;
+            let re = compiled(pattern).map_err(|e| format!("regex: {e}"))?;
             FieldValue::Text(re.replace_all(&s, replace.as_str()).into_owned())
         }
         Transform::Lookup { table } => FieldValue::Text(
@@ -183,6 +206,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, t("hello-world"));
+    }
+
+    #[test]
+    fn slugify_unicode() {
+        assert_eq!(
+            slugify("caf\u{e9}").unwrap(),
+            slugify("cafe\u{301}").unwrap()
+        );
+        assert_eq!(slugify("\u{e9}t").unwrap(), "\u{e9}t");
+        assert_eq!(slugify("Stra\u{df}e Hotel").unwrap(), "stra\u{df}e-hotel");
+        assert_eq!(
+            slugify("\u{4f1a}\u{8b70} \u{5ba4}").unwrap(),
+            "\u{4f1a}\u{8b70}-\u{5ba4}"
+        );
+        assert_eq!(slugify("\u{130}stanbul").unwrap(), "i\u{307}stanbul");
+        assert!(slugify("?!").unwrap_err().contains("empty slug"));
+        assert!(apply(&t("..."), &[Transform::Slugify]).is_err());
     }
 
     #[test]
