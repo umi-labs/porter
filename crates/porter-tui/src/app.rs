@@ -237,6 +237,8 @@ impl App {
     fn on_event(&mut self, e: Event) {
         let st = &mut self.panels.stages;
         match e {
+            // Late: the run already ended, so nothing is running.
+            Event::StageStarted { .. } if self.running.is_none() => {}
             Event::StageStarted { stage, .. } => {
                 st.running = Some(stage);
                 st.progress[idx(stage)] = None;
@@ -1376,6 +1378,26 @@ mod tests {
         assert!(matches!(cmds[2], Cmd::Items { .. }));
         let cmds = update(&mut app, Msg::RunDone(Default::default()));
         assert_eq!(cmds, [Cmd::Refresh(RefreshScope::All)]);
+    }
+
+    #[test]
+    fn a_stage_start_after_the_run_ended_is_ignored() {
+        use porter_engine::events::Event;
+        use porter_engine::store::RunId;
+        let (mut app, _d) = live_app();
+        press(&mut app, KeyCode::Char('R'));
+        update(&mut app, Msg::RunDone(Default::default()));
+        update(
+            &mut app,
+            Msg::Engine(Event::StageStarted {
+                stage: porter_model::Stage::Load,
+                run: RunId(uuid::Uuid::nil()),
+            }),
+        );
+        assert!(
+            app.panels.stages.running.is_none(),
+            "stage shown running after RunDone"
+        );
     }
 
     #[test]

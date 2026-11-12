@@ -313,6 +313,12 @@ mod tests {
     #[test]
     fn stages_running_with_progress() {
         let (mut app, _d) = app_with(None, false);
+        app.running = Some(porter_engine::session::RunInfo {
+            plan: porter_engine::session::RunPlan::All {
+                keep_going: false,
+                apply: false,
+            },
+        });
         update(
             &mut app,
             Msg::Engine(Event::StageStarted {

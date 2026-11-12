@@ -7,13 +7,20 @@ use crate::{term, ui};
 use anyhow::Result;
 use crossterm::event::{Event as TermEvent, EventStream};
 use futures::StreamExt;
+use porter_engine::events::Event;
 use porter_engine::session::{IssueQuery, Page, RunOutcome, Session};
 use porter_model::Severity;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast::error::RecvError, mpsc};
+use tokio::sync::{
+    broadcast::{
+        Receiver,
+        error::{RecvError, TryRecvError},
+    },
+    mpsc,
+};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, timeout};
 use tokio_util::sync::CancellationToken;
@@ -103,13 +110,32 @@ pub async fn run_tui(dir: &Path) -> Result<i32> {
             if matches!(msg, Msg::RunDone(_)) {
                 run = RunSlot::default();
             }
-            cmds = update(&mut app, msg);
+            cmds = deliver(&mut app, engine.as_mut(), msg);
         }
     };
     if let Some(n) = note {
         eprintln!("{n}");
     }
     Ok(code)
+}
+
+/// Applies `msg`. RunDone travels on its own channel, so it can overtake the run's own
+/// engine events; those are already queued by then, so drain them first and the stage
+/// never shows running after its run ended.
+fn deliver(app: &mut App, engine: Option<&mut Receiver<Event>>, msg: Msg) -> Vec<Cmd> {
+    let mut cmds = vec![];
+    if let (Msg::RunDone(_), Some(rx)) = (&msg, engine) {
+        loop {
+            let m = match rx.try_recv() {
+                Ok(e) => Msg::Engine(e),
+                Err(TryRecvError::Lagged(n)) => Msg::Lagged(n),
+                Err(_) => break,
+            };
+            cmds.extend(update(app, m));
+        }
+    }
+    cmds.extend(update(app, msg));
+    cmds
 }
 
 /// SIGTERM on unix. Windows has no SIGTERM (a console close kills the process), so there
@@ -409,5 +435,34 @@ mod tests {
             stopped.load(Ordering::SeqCst),
             "returned before the run stopped"
         );
+    }
+
+    #[tokio::test]
+    async fn run_done_is_ordered_after_the_runs_own_events() {
+        use porter_engine::events::Event;
+        use porter_engine::store::RunId;
+        let d = tempfile::tempdir().unwrap();
+        porter_engine::project::Project::init(d.path(), "demo", "wordpress").unwrap();
+        let mut app = App::new(Some(Arc::new(Session::open(d.path()).unwrap())), (120, 40));
+        update(
+            &mut app,
+            Msg::Key(crossterm::event::KeyEvent::from(
+                crossterm::event::KeyCode::Char('R'),
+            )),
+        );
+        let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+        tx.send(Event::StageStarted {
+            stage: porter_model::Stage::Load,
+            run: RunId(uuid::Uuid::nil()),
+        })
+        .unwrap();
+        // RunDone arrives on its own channel, possibly before the event is received.
+        deliver(&mut app, Some(&mut rx), Msg::RunDone(Default::default()));
+        assert!(
+            rx.try_recv().is_err(),
+            "RunDone overtook a queued run event"
+        );
+        assert!(app.running.is_none());
+        assert!(app.panels.stages.running.is_none());
     }
 }
