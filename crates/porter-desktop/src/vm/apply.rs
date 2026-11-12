@@ -90,11 +90,15 @@ impl ApplySheet {
     }
 
     /// The recheck landed: the real load to run, or why it is refused.
-    pub fn finish(&mut self, fresh: Option<PreviewInfo>) -> Result<RunPlan, String> {
+    pub fn finish(&mut self, url: &str, fresh: Option<PreviewInfo>) -> Result<RunPlan, String> {
         let typed = self.pending.take();
         self.preview = fresh;
         let r = match typed {
             None => Err("Apply was not pressed".into()),
+            // porter.toml changed under the sheet: what was confirmed is not what would run.
+            Some(_) if url != self.url => Err(format!(
+                "the destination is now {url}, not the one confirmed: open Apply load… again"
+            )),
             Some(t) => self.check(&t).map(|()| apply_plan()),
         };
         self.error = r.as_ref().err().cloned();
@@ -154,9 +158,23 @@ mod tests {
         }
     }
 
+    const URL: &str = "https://cms.example.com/admin";
+
+    #[test]
+    fn recheck_refuses_a_changed_destination() {
+        let mut s = ApplySheet::new(URL.into(), Some(fresh()));
+        s.begin_confirm("cms.example.com").unwrap();
+        // porter.toml now points elsewhere, even if the dry run still looks fresh.
+        let why = s
+            .finish("https://other.example.com/admin", Some(fresh()))
+            .unwrap_err();
+        assert!(why.contains("destination"), "{why}");
+        assert!(!s.confirming());
+    }
+
     #[test]
     fn apply_sheet_requires_host() {
-        let url = "https://cms.example.com/admin";
+        let url = URL;
         let mut s = ApplySheet::new(url.into(), Some(fresh()));
         assert_eq!(s.host(), Some("cms.example.com"));
         // Never by default: an empty box or the wrong host is refused.
@@ -169,20 +187,20 @@ mod tests {
         // Typed right, but the dry run went stale while the sheet was open: refused.
         s.begin_confirm("cms.example.com").unwrap();
         assert!(s.confirming());
-        let why = s.finish(Some(stale())).unwrap_err();
+        let why = s.finish(URL, Some(stale())).unwrap_err();
         assert!(why.contains("normalise ran after it"), "{why}");
         assert!(!s.confirming());
         // ...and when the dry run has gone away entirely.
         s.preview = Some(fresh());
         s.begin_confirm("cms.example.com").unwrap();
-        assert!(s.finish(None).is_err());
+        assert!(s.finish(URL, None).is_err());
 
         // Typed right, still fresh at confirm: the real load, and only that.
         s.preview = Some(fresh());
         s.begin_confirm("cms.example.com").unwrap();
-        assert_eq!(s.finish(Some(fresh())), Ok(apply_plan()));
+        assert_eq!(s.finish(URL, Some(fresh())), Ok(apply_plan()));
         // A recheck with no Apply pressed runs nothing.
-        assert!(s.finish(Some(fresh())).is_err());
+        assert!(s.finish(URL, Some(fresh())).is_err());
 
         // No dry run, or a stale one, refuses even with the host typed.
         assert!(

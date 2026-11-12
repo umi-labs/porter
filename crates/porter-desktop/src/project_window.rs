@@ -22,7 +22,7 @@ use crate::bridge::{Bridge, DataResult, UiEvent, coalesce};
 use crate::sidebar::{self, Section, View};
 use crate::views;
 use crate::vm::apply::{ApplySheet, age};
-use crate::vm::pipeline::{KindCount, Pipeline, name};
+use crate::vm::pipeline::{CLOSE_WAIT, CloseStep, KindCount, Pipeline, name};
 use crate::vm::runs::Runs;
 
 /// How often the window drains engine events: at most 20 redraws a second.
@@ -39,6 +39,11 @@ pub struct ProjectWindow {
     apply: Option<ApplySheet>,
     apply_input: Entity<InputState>,
     _subs: Vec<Subscription>,
+    /// Closing: the run was cancelled and the window goes once it has stopped.
+    closing: bool,
+    /// Asking whether to cancel a writing load and close.
+    close_prompt: bool,
+    _close_timeout: Option<Task<()>>,
     _poll: Task<()>,
 }
 
@@ -59,8 +64,16 @@ impl ProjectWindow {
             apply: None,
             apply_input,
             _subs: subs,
+            closing: false,
+            close_prompt: false,
+            _close_timeout: None,
             _poll: poll(rx, window, cx),
         };
+        let weak = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            weak.update(cx, |this, cx| this.request_close(false, window, cx))
+                .unwrap_or(true)
+        });
         this.refresh();
         this
     }
@@ -94,6 +107,10 @@ impl ProjectWindow {
                 for line in self.pipeline.on_run_done(o) {
                     self.runs.push(line);
                 }
+                if self.closing {
+                    window.remove_window();
+                    return;
+                }
                 self.refresh();
             }
             UiEvent::Data(d) => self.on_data(d, window, cx),
@@ -122,13 +139,13 @@ impl ProjectWindow {
             // The recheck after Apply was pressed: only acts while the sheet is open.
             DataResult::Preview {
                 confirm: true,
+                url,
                 preview,
-                ..
             } => {
                 let Some(sheet) = &mut self.apply else {
                     return;
                 };
-                match sheet.finish(preview) {
+                match sheet.finish(&url, preview) {
                     Ok(plan) => {
                         self.apply = None;
                         self.start(plan, cx);
@@ -177,6 +194,90 @@ impl ProjectWindow {
             self.bridge.preview(true);
         }
         cx.notify();
+    }
+
+    /// True when the window may close now. With a run in flight it cancels and waits for
+    /// a safe stop (at most `CLOSE_WAIT`), asking first if the run writes to the CMS.
+    fn request_close(
+        &mut self,
+        confirmed: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match self.pipeline.close_step(confirmed, self.closing) {
+            CloseStep::Close => return true,
+            CloseStep::ConfirmApply => self.close_prompt = true,
+            CloseStep::CancelAndWait => {
+                self.close_prompt = false;
+                self.closing = true;
+                self.cancel(cx);
+                self._close_timeout = Some(cx.spawn_in(window, async move |this, cx| {
+                    cx.background_executor().timer(CLOSE_WAIT).await;
+                    let _ = this.update_in(cx, |_, window, _| window.remove_window());
+                }));
+            }
+            CloseStep::Wait => {}
+        }
+        cx.notify();
+        false
+    }
+
+    fn close_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let theme = cx.theme();
+        let card = v_flex()
+            .w_128()
+            .p_6()
+            .gap_3()
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_lg();
+        let card = if self.closing {
+            card.child(div().text_lg().child("Closing"))
+                .child(div().child(format!(
+                    "cancelling… the window closes once the run stops safely (at most {} s).",
+                    CLOSE_WAIT.as_secs()
+                )))
+        } else if self.close_prompt {
+            let url = self.bridge.session().config().destination.url.clone();
+            let host = url::Url::parse(&url)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_string))
+                .unwrap_or(url);
+            card.child(div().text_lg().child("A load is writing"))
+                .child(div().text_color(theme.danger).child(format!(
+                    "A load is writing to {host}. Cancel it and close the window?"
+                )))
+                .child(
+                    div()
+                        .text_sm()
+                        .child("It stops at the next safe point and can be resumed."),
+                )
+                .child(
+                    h_flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(Button::new("close-keep").label("Keep running").on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.close_prompt = false;
+                                cx.notify();
+                            }),
+                        ))
+                        .child(
+                            Button::new("close-cancel")
+                                .danger()
+                                .label("Cancel and close")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if this.request_close(true, window, cx) {
+                                        window.remove_window();
+                                    }
+                                })),
+                        ),
+                )
+        } else {
+            return None;
+        };
+        Some(overlay(card).into_any_element())
     }
 
     fn close_apply(&mut self, cx: &mut Context<Self>) {
@@ -321,17 +422,22 @@ impl ProjectWindow {
                             .on_click(cx.listener(|this, _, _, cx| this.confirm_apply(cx))),
                     ),
             );
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(hsla(0., 0., 0., 0.45))
-            .child(card)
+        overlay(card)
     }
+}
+
+/// Dims the window and centres `card` over it.
+fn overlay(card: impl IntoElement) -> gpui::Div {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(hsla(0., 0., 0., 0.45))
+        .child(card)
 }
 
 /// A stage run that never writes to the destination.
@@ -387,6 +493,7 @@ impl Render for ProjectWindow {
             .apply
             .as_ref()
             .map(|s| self.apply_sheet(s, cx).into_any_element());
+        let closing = self.close_overlay(cx);
         let theme = cx.theme();
         v_flex()
             .relative()
@@ -402,6 +509,7 @@ impl Render for ProjectWindow {
                     .child(div().flex_1().h_full().min_w_0().child(main)),
             )
             .children(sheet)
+            .children(closing)
             .children(Root::render_dialog_layer(window, cx))
     }
 }

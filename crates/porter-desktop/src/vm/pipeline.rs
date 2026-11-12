@@ -32,6 +32,21 @@ pub struct StageRow {
     pub summary: Option<Summary>,
 }
 
+/// How long a closing window waits for a cancelled run to reach a safe point.
+pub const CLOSE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseStep {
+    /// Nothing is running: close now.
+    Close,
+    /// A load is writing to the destination: ask before cancelling it.
+    ConfirmApply,
+    /// Cancel the run and keep the window open until it stops (or `CLOSE_WAIT` passes).
+    CancelAndWait,
+    /// Already cancelling: keep waiting.
+    Wait,
+}
+
 #[derive(Default)]
 pub struct Pipeline {
     pub overview: Option<Overview>,
@@ -230,6 +245,23 @@ impl Pipeline {
     }
 
     /// Live states (running, could not run, just finished) win over the stored run.
+    /// What closing the window should do now. `confirmed`: the user already agreed to
+    /// cancel a writing load; `closing`: a cancel-and-wait is already under way.
+    pub fn close_step(&self, confirmed: bool, closing: bool) -> CloseStep {
+        let writing = match &self.plan {
+            Some(RunPlan::Stage(_, o)) => o.apply,
+            Some(RunPlan::All { apply, .. }) => *apply,
+            None => return CloseStep::Close,
+        };
+        if closing {
+            CloseStep::Wait
+        } else if writing && !confirmed {
+            CloseStep::ConfirmApply
+        } else {
+            CloseStep::CancelAndWait
+        }
+    }
+
     pub fn rows(&self) -> Vec<StageRow> {
         let empty = Overview::default();
         let ov = self.overview.as_ref().unwrap_or(&empty);
@@ -264,10 +296,15 @@ impl Pipeline {
                     (None, StageState::Running) if self.cancelling => "cancelling…".into(),
                     (None, StageState::Running) => "starting…".into(),
                     (None, StageState::CouldNotRun(e)) => format!("could not run: {e}"),
+                    (None, StageState::Clean) if dry => "dry run — nothing written".into(),
                     (None, s) if dry => format!("{} (dry run)", state_text(s)),
                     (None, s) => state_text(s).into(),
                 };
-                let (glyph, tone) = glyph(&state);
+                // A clean dry run wrote nothing: it must not look like a finished load.
+                let (glyph, tone) = match &state {
+                    StageState::Clean if dry => ("◌", Tone::Muted),
+                    s => glyph(s),
+                };
                 StageRow {
                     stage,
                     name: name(stage),
@@ -409,7 +446,11 @@ mod tests {
         assert_eq!(rows[0].tone, Tone::Success);
         assert_eq!(rows[2].tone, Tone::Danger);
         assert_ne!(rows[2].glyph, "✓");
-        assert_eq!(rows[4].status, "clean (dry run)");
+        // A clean dry-run load wrote nothing: never the green "written" look.
+        assert_eq!(rows[4].state, StageState::Clean);
+        assert_ne!(rows[4].tone, Tone::Success);
+        assert_ne!(rows[4].glyph, "✓");
+        assert_eq!(rows[4].status, "dry run — nothing written");
         assert_eq!(rows[5].status, "not run");
         // The shared rule for a single run agrees.
         assert_eq!(
@@ -496,5 +537,39 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn close_waits_for_a_safe_stop() {
+        let mut p = Pipeline::default();
+        assert_eq!(p.close_step(false, false), CloseStep::Close);
+
+        p.start(&stage_plan(Stage::Load)).unwrap();
+        assert_eq!(p.close_step(false, false), CloseStep::CancelAndWait);
+        assert_eq!(p.close_step(false, true), CloseStep::Wait);
+        p.on_run_done(RunOutcome::default());
+        assert_eq!(p.close_step(false, true), CloseStep::Close);
+
+        let apply = RunPlan::Stage(
+            Stage::Load,
+            StageOpts {
+                refresh: false,
+                apply: true,
+                schema_mode: SchemaMode::Check,
+            },
+        );
+        p.start(&apply).unwrap();
+        assert_eq!(p.close_step(false, false), CloseStep::ConfirmApply);
+        assert_eq!(p.close_step(true, false), CloseStep::CancelAndWait);
+        assert_eq!(p.close_step(true, true), CloseStep::Wait);
+        p.on_run_done(RunOutcome::default());
+
+        // Run all with apply writes too.
+        p.start(&RunPlan::All {
+            keep_going: false,
+            apply: true,
+        })
+        .unwrap();
+        assert_eq!(p.close_step(false, false), CloseStep::ConfirmApply);
     }
 }
