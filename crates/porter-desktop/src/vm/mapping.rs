@@ -303,10 +303,13 @@ impl Mapping {
     }
 
     /// (errors, warnings) over `problems()`: the numbers in the header.
+    /// Row-less issues (`general_issues`) count too: they block Apply all the same.
     pub fn counts(&self) -> (usize, usize) {
-        let p = self.problems();
-        let e = p.iter().filter(|p| p.error).count();
-        (e, p.len() - e)
+        let rows = self.problems().into_iter().map(|p| p.error);
+        let general = self.general_issues().iter().map(|i| i.error);
+        let all: Vec<bool> = rows.chain(general).collect();
+        let e = all.iter().filter(|e| **e).count();
+        (e, all.len() - e)
     }
 
     /// The row the editor is on.
@@ -323,7 +326,8 @@ impl Mapping {
         }
     }
 
-    /// The first problem on a row after `after`, wrapping round; a row with several
+    /// The first problem on a row after `after`, wrapping round (from a row with no
+    /// problem it starts again at the first); a row with several
     /// problems is one stop. With a single problem row it is that row again.
     pub fn next_problem(&self, after: Option<&Target>) -> Option<Problem> {
         let all = self.problems();
@@ -946,7 +950,19 @@ fields = { title = "heading" }
         assert!(p[1].why.contains("does not exist"));
         assert_eq!(p[1].target, Target::Field("post".into(), "title".into()));
         assert_eq!(p[4].target, Target::Block(0));
-        assert_eq!(m.counts(), (3, 2));
+        assert_eq!(m.counts(), (3, 3), "2 row warnings plus the general one");
+    }
+
+    #[test]
+    fn row_less_errors_count_and_block_too() {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = loaded(d.path(), Ok(Some(dest())));
+        m.placed.general.push(RowIssue {
+            error: true,
+            message: "collection `x` has no key field".into(),
+        });
+        assert_eq!(m.counts(), (4, 3));
+        assert_eq!(m.problem_counts(), Some(m.counts()));
     }
 
     #[test]

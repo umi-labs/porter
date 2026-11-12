@@ -94,6 +94,8 @@ fn history(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> gpui::AnyEleme
         ("Outcome", Col::Fixed(210.)),
         ("Counts", Col::Flex),
     ];
+    // Not linked: a run's counts (done, failed, errors, warnings) describe that run, and
+    // Issues has no per-run filter, so a link would land on rows that are not its own.
     let sections = all.iter().enumerate().map(|(si, (stage, runs))| {
         let rows = runs.iter().enumerate().map(|(i, r)| {
             let h = history_row(r);

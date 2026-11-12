@@ -167,7 +167,19 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
                                             this.issues_filters(|s| s.toggle(id), cx)
                                         })),
                                 )
-                                .child(table::mark(it.severity, cx))
+                                .child(
+                                    h_flex()
+                                        .w(px(84.))
+                                        .flex_none()
+                                        .gap(px(6.))
+                                        .items_center()
+                                        .child(table::mark(it.severity, cx))
+                                        .child(match it.severity {
+                                            Severity::Error => "Error",
+                                            Severity::Warning => "Warning",
+                                            Severity::Info => "Info",
+                                        }),
+                                )
                                 .child(table::cell(
                                     ("issue-kind", i),
                                     kind_name(it.kind),
@@ -224,7 +236,7 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
         .child(table::header(
             &[
                 ("", Col::Fixed(24.)),
-                ("", Col::Fixed(14.)),
+                ("Severity", Col::Fixed(84.)),
                 ("Kind", Col::Fixed(150.)),
                 ("Message", Col::Flex),
                 ("Status", Col::Fixed(150.)),

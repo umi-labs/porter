@@ -306,7 +306,10 @@ fn plural(n: usize) -> &'static str {
 /// Why Apply cannot go ahead: every error that sits on a row, each a link to its row.
 fn blocked(m: &Mapping, cx: &mut Context<ProjectWindow>) -> Option<gpui::Div> {
     let errors: Vec<_> = m.problems().into_iter().filter(|p| p.error).collect();
-    if errors.is_empty() {
+    // Row-less errors block Apply too; they have no row to jump to.
+    let general: Vec<_> = m.general_issues().iter().filter(|i| i.error).collect();
+    let total = errors.len() + general.len();
+    if total == 0 {
         return None;
     }
     let t = tokens(cx);
@@ -329,8 +332,8 @@ fn blocked(m: &Mapping, cx: &mut Context<ProjectWindow>) -> Option<gpui::Div> {
                     .child(table::mark(Severity::Error, cx))
                     .child(format!(
                         "Apply is blocked: {} mapping error{}",
-                        errors.len(),
-                        plural(errors.len())
+                        total,
+                        plural(total)
                     )),
             )
             .children(
@@ -358,6 +361,22 @@ fn blocked(m: &Mapping, cx: &mut Context<ProjectWindow>) -> Option<gpui::Div> {
                             }))
                     }),
             )
+            .children(general.into_iter().enumerate().map(|(i, g)| {
+                h_flex()
+                    .h(ROW_TABLE)
+                    .items_center()
+                    .gap(space::S3)
+                    .text_size(text::DENSE)
+                    .child(table::cell(
+                        ("blocked-gen", i),
+                        "Schema check",
+                        Col::Fixed(180.),
+                    ))
+                    .child(
+                        table::cell(("blocked-gen-why", i), g.message.clone(), Col::Flex)
+                            .text_color(t.muted),
+                    )
+            }))
             .children((more > 0).then(|| {
                 div()
                     .text_size(text::DENSE)
@@ -368,7 +387,7 @@ fn blocked(m: &Mapping, cx: &mut Context<ProjectWindow>) -> Option<gpui::Div> {
                 div()
                     .text_size(text::DENSE)
                     .text_color(t.muted)
-                    .child("Each line jumps to its row."),
+                    .child("Each line with a row jumps to it; the rest are under Schema check."),
             ),
     )
 }

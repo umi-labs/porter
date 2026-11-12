@@ -60,6 +60,21 @@ impl StageRow {
         }
     }
 
+    /// The run's error and warning counts that are not zero, each a link to the issues of
+    /// that severity. (Issues has no per-stage filter, so the rows are all open ones.)
+    pub fn severity_links(&self) -> Vec<(Severity, u64, &'static str)> {
+        let Some(s) = self.summary.as_ref() else {
+            return vec![];
+        };
+        [
+            (Severity::Error, s.errors, "errors"),
+            (Severity::Warning, s.warnings, "warnings"),
+        ]
+        .into_iter()
+        .filter(|(_, n, _)| *n > 0)
+        .collect()
+    }
+
     /// The run's counts; a dry run's are what it would write.
     pub fn counts(&self) -> Option<String> {
         let s = self.summary.as_ref()?;
@@ -686,6 +701,27 @@ mod tests {
             Some("5 done · 2 failed · 3 errors · 0 warnings")
         );
         assert_eq!(row(&p, Stage::Extract).stale, None);
+    }
+
+    #[test]
+    fn a_stage_links_its_nonzero_error_and_warning_counts() {
+        let mut p = Pipeline::default();
+        p.overview_landed(Ok(Overview {
+            last_runs: vec![
+                (Stage::Extract, run(Some(sum(9, 0, 3, 2)), false)),
+                (Stage::Normalise, run(Some(sum(9, 0, 0, 0)), false)),
+            ],
+            ..Default::default()
+        }));
+        assert_eq!(
+            row(&p, Stage::Extract).severity_links(),
+            [
+                (Severity::Error, 3, "errors"),
+                (Severity::Warning, 2, "warnings")
+            ]
+        );
+        assert!(row(&p, Stage::Normalise).severity_links().is_empty());
+        assert!(row(&p, Stage::Load).severity_links().is_empty());
     }
 
     #[test]
