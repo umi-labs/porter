@@ -7,6 +7,8 @@ use porter_engine::project::Project;
 use porter_engine::registry;
 use porter_engine::stage::{SchemaMode, run_stage};
 use porter_model::Stage;
+use std::cell::RefCell;
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -202,11 +204,11 @@ fn table(rows: &[(Stage, Summary)]) {
 }
 
 /// One stage's exit code. A stage that errors, or is cancelled, maps to 1 / 3.
-async fn code_of(env: &Env, cmd: StageCmd, rows: &mut Vec<(Stage, Summary)>) -> i32 {
+async fn code_of(env: &Env, cmd: StageCmd, rows: &RefCell<Vec<(Stage, Summary)>>) -> i32 {
     match exec(env, cmd).await {
         Ok(s) => {
             let c = exit_code(&s);
-            rows.push((cmd.stage(), s));
+            rows.borrow_mut().push((cmd.stage(), s));
             c
         }
         Err(_) if env.cancel.is_cancelled() => 3,
@@ -215,6 +217,35 @@ async fn code_of(env: &Env, cmd: StageCmd, rows: &mut Vec<(Stage, Summary)>) -> 
             1
         }
     }
+}
+
+/// Runs `items` in order, returning the worst exit code. Never starts an item
+/// once the token is cancelled, and stops after code 3, even with `keep_going`.
+async fn run_loop<T: Copy, F, Fut>(
+    cancel: &CancellationToken,
+    items: &[T],
+    keep_going: bool,
+    mut f: F,
+) -> i32
+where
+    F: FnMut(T) -> Fut,
+    Fut: Future<Output = i32>,
+{
+    let mut worst = 0;
+    for &item in items {
+        if cancel.is_cancelled() {
+            return worse(worst, 3);
+        }
+        let c = f(item).await;
+        worst = worse(worst, c);
+        if c == 3 || cancel.is_cancelled() {
+            return worse(worst, 3);
+        }
+        if c != 0 && !keep_going {
+            break;
+        }
+    }
+    worst
 }
 
 async fn drive(dir: &Path, json: bool, cmds: &[StageCmd], keep_going: bool) -> Result<i32> {
@@ -226,14 +257,12 @@ async fn drive(dir: &Path, json: bool, cmds: &[StageCmd], keep_going: bool) -> R
             return Err(e);
         }
     };
-    let (mut worst, mut rows) = (0, Vec::new());
-    for &cmd in cmds {
-        let c = code_of(&env, cmd, &mut rows).await;
-        worst = worse(worst, c);
-        if c != 0 && !keep_going {
-            break;
-        }
-    }
+    let rows = RefCell::new(Vec::new());
+    let worst = run_loop(&env.cancel, cmds, keep_going, |cmd| {
+        code_of(&env, cmd, &rows)
+    })
+    .await;
+    let rows = rows.into_inner();
     drop(env);
     printer.finish().await;
     if !json && !rows.is_empty() {
@@ -260,7 +289,37 @@ pub async fn run_all(dir: &Path, json: bool, keep_going: bool, apply: bool) -> R
 
 #[cfg(test)]
 mod tests {
-    use super::worse;
+    use super::{run_loop, worse};
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn interrupt_stops_run_even_with_keep_going() {
+        let cancel = CancellationToken::new();
+        let called = std::cell::RefCell::new(Vec::new());
+        let code = run_loop(&cancel, &[1, 2, 3], true, |n| {
+            called.borrow_mut().push(n);
+            if n == 2 {
+                cancel.cancel();
+            }
+            async move { if n == 2 { 3 } else { 2 } }
+        })
+        .await;
+        assert_eq!(code, 3);
+        assert_eq!(*called.borrow(), vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn pre_cancelled_token_calls_nothing() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let called = std::cell::Cell::new(0);
+        let code = run_loop(&cancel, &[1, 2], true, |_| {
+            called.set(called.get() + 1);
+            async { 0 }
+        })
+        .await;
+        assert_eq!((code, called.get()), (3, 0));
+    }
 
     #[test]
     fn exit_precedence_is_1_3_2_0() {
