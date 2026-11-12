@@ -1336,7 +1336,9 @@ version = "2.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "ego-tree",
  "globset",
+ "indexmap",
  "keyring",
  "maud",
  "percent-encoding",

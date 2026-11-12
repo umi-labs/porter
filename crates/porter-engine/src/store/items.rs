@@ -22,6 +22,9 @@ impl Store {
             ),
             params![id.to_string(), kind.as_str(), src.connector, src.source_id, src.url, serde_json::to_string(data)?],
         )?;
+        if matches!(kind, ItemKind::Route | ItemKind::Document) {
+            self.drop_url_index();
+        }
         Ok(())
     }
 

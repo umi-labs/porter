@@ -1,13 +1,20 @@
 pub mod analyse;
+pub mod autop;
 pub mod db;
+pub mod divi;
+pub mod gutenberg;
 pub mod rest;
+pub mod shortcodes;
+pub mod texturize;
 pub mod wxr;
 
 use crate::config::{ConnectorConfig, ProjectConfig};
 use crate::connectors::crawl::CrawlConnector;
+use crate::html::{HtmlCtx, html_to_richtext};
 use crate::stage::{Capabilities, Connector, Source, StageCtx};
 use anyhow::{Result, bail};
 use async_trait::async_trait;
+use porter_model::RichText;
 
 pub struct WordPressSource;
 
@@ -64,5 +71,74 @@ impl Connector for Merge {
 
     async fn extract(&self, _ctx: &StageCtx) -> Result<()> {
         Ok(())
+    }
+}
+
+/// Classic-editor content as WordPress renders it: `[caption]`s as figures, wptexturize,
+/// wpautop, then HTML. Other shortcodes stay as text.
+pub fn classic_to_richtext(content: &str, ctx: &mut HtmlCtx) -> RichText {
+    html_to_richtext(
+        &autop::autop(&texturize::texturize(&captions(content))),
+        ctx,
+    )
+}
+
+fn captions(content: &str) -> std::borrow::Cow<'_, str> {
+    static CAPTION: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new("^caption$").expect("valid regex"));
+    if !content.contains("[caption") {
+        return content.into();
+    }
+    shortcodes::parse_shortcodes(content, &CAPTION)
+        .iter()
+        .map(|n| match n.tag.as_str() {
+            "caption" => shortcodes::caption_html(n),
+            _ => shortcodes::to_source(n),
+        })
+        .collect::<String>()
+        .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::html::tests::{ctx, fixture};
+    use porter_model::{IssueKind, RtBlock};
+
+    #[test]
+    fn classic_content() {
+        let f = fixture();
+        let mut issues = vec![];
+        let rt = classic_to_richtext(
+            include_str!("../../../tests/fixtures/wp-content/classic.txt"),
+            &mut ctx(&f, &mut issues),
+        );
+        let text = rt.plain_text();
+        assert!(
+            text.starts_with(
+                "Opening hours\nWe’re open from 9–5, Monday to Friday.\nClosed on “bank holidays”."
+            ),
+            "{text}"
+        );
+        assert!(matches!(
+            rt.blocks[2],
+            RtBlock::Media {
+                width: Some(300),
+                ..
+            }
+        ));
+        assert!(matches!(rt.blocks[3], RtBlock::List { .. }));
+        assert!(matches!(rt.blocks[4], RtBlock::Raw { .. }));
+        match &rt.blocks[5] {
+            RtBlock::Media {
+                caption: Some(c), ..
+            } => assert_eq!(c.plain_text(), "The reading lamp"),
+            b => panic!("{b:?}"),
+        }
+        assert_eq!(rt.blocks.len(), 6);
+        assert!(
+            issues.iter().all(|i| i.kind != IssueKind::MissingMedia),
+            "{issues:?}"
+        );
     }
 }

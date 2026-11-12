@@ -1,5 +1,6 @@
 mod issues;
 mod items;
+mod lookup;
 mod media;
 mod runs;
 
@@ -28,6 +29,7 @@ pub struct RunId(pub Uuid);
 pub struct Store {
     conn: Mutex<Connection>,
     media_dir: PathBuf,
+    url_index: Mutex<Option<std::sync::Arc<lookup::UrlIndex>>>,
 }
 
 impl Store {
@@ -50,6 +52,7 @@ impl Store {
         Ok(Store {
             conn: Mutex::new(conn),
             media_dir,
+            url_index: Mutex::new(None),
         })
     }
 

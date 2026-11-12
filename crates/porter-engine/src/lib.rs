@@ -4,6 +4,7 @@
 pub mod config;
 pub mod connectors;
 pub mod events;
+pub mod html;
 pub mod http;
 pub mod mapping;
 pub mod project;
