@@ -13,10 +13,12 @@ Last updated 2026-11-11. This is the single place to pick work back up. The deta
 | 1.x fixes: seed `_status`, duplicate titles, credentials, debug flag, seed test | Done: commit `b2215fd`, on `fix/audit-findings`, not pushed or released |
 | 1.x `porter clean` deleting the working directory | **Not fixed.** Offered, not yet done. Dangerous on the current Homebrew release. |
 | Engine design | Approved |
-| Engine phase 1 plan | Written, being built (subagent-driven) on branch `porter-2.0` |
-| Terminal UI design | Not started; needs its own design conversation (with mockups) |
-| Desktop app design | Not started; needs its own design conversation (with mockups) |
-| Hub design | Not started; needs its own design conversation |
+| Engine phase 1 | Built and reviewed on branch `porter-2.0` (RULINGS-engine-phase-1.md) |
+| Terminal UI | Built and reviewed (RULINGS-tui.md); real-terminal checklist pending |
+| Desktop app (GPUI) | Built and reviewed (RULINGS-desktop.md); smoke checklist needs a display |
+| Hub (Next.js + Better Auth, Docker/Dokploy) | Built and reviewed; production compose smoke passed locally; not deployed (RULINGS-hub.md: decisions D2–D10 open) |
+| Design (Isaac's Claude Design boards) | Applied to desktop and hub, plus engine stage views and config fingerprints (RULINGS-design.md) |
+| Merge `porter-2.0` / release 2.0 | Not done; Isaac's call |
 | Later engine phases (other sources/destinations) | Not planned yet; listed below |
 
 ## The vision (in Isaac's words, condensed)
