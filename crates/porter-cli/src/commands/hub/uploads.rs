@@ -77,7 +77,13 @@ pub async fn get(ctx: &Ctx, hub: &Hub, id: &str, out: Option<PathBuf>) -> Result
         bail!("upload {id} downloaded with the wrong sha256 (got {got}, want {want})");
     }
     // Hard link, then drop the temp name: fails rather than overwrite a file that appeared meanwhile.
-    std::fs::hard_link(&tmp, &out).with_context(|| format!("writing {}", out.display()))?;
+    // No hard links on this file system (exFAT, some mounts): rename if still absent.
+    if let Err(e) = std::fs::hard_link(&tmp, &out) {
+        if std::fs::symlink_metadata(&out).is_ok() {
+            return Err(e).with_context(|| format!("writing {}", out.display()));
+        }
+        std::fs::rename(&tmp, &out).with_context(|| format!("writing {}", out.display()))?;
+    }
     drop(tmp);
     if ctx.json {
         print_json(

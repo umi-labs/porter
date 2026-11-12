@@ -69,6 +69,36 @@ fn project(dir: &Path, media: &[&[u8]]) -> Vec<String> {
         .collect()
 }
 
+/// A WAL-mode db with one committed row, its connection left open (the row stays in the WAL).
+fn wal_db(dir: &Path) -> rusqlite::Connection {
+    let c = rusqlite::Connection::open(dir.join("project.db")).unwrap();
+    c.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))
+        .unwrap();
+    c.execute_batch("PRAGMA wal_autocheckpoint = 0; CREATE TABLE t(x); INSERT INTO t VALUES (1);")
+        .unwrap();
+    assert!(dir.join("project.db-wal").exists());
+    c
+}
+
+/// The CLI's db hash: sha256 with the volatile header fields zeroed.
+fn db_hash(p: &Path) -> String {
+    let mut b = std::fs::read(p).unwrap();
+    for r in [18..20, 24..28, 40..44, 92..100] {
+        b[r].fill(0);
+    }
+    sha(&b)
+}
+
+/// A small closed db file.
+fn db_bytes() -> Vec<u8> {
+    let d = tempfile::tempdir().unwrap();
+    let c = rusqlite::Connection::open(d.path().join("x.db")).unwrap();
+    c.execute_batch("CREATE TABLE t(x); INSERT INTO t VALUES (7);")
+        .unwrap();
+    drop(c);
+    std::fs::read(d.path().join("x.db")).unwrap()
+}
+
 fn api(p: &str) -> String {
     format!("/api/projects/{SLUG}/{p}")
 }
@@ -112,6 +142,10 @@ async fn push_uploads_only_missing_media_and_treats_412_as_uploaded() {
     let d = tempfile::tempdir().unwrap();
     let hashes = project(d.path(), &[b"one", b"two"]);
     let (have, missing) = (&hashes[0], &hashes[1]);
+    std::fs::create_dir_all(d.path().join("uploads")).unwrap();
+    std::fs::write(d.path().join("uploads/dump.sql"), "client data").unwrap();
+    // A writer that stays open: its commit lives only in project.db-wal.
+    let db = wal_db(d.path());
     Mock::given(method("POST"))
         .and(path(api("versions/init")))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -190,7 +224,26 @@ async fn push_uploads_only_missing_media_and_treats_412_as_uploaded() {
         .unwrap()
         .map(|e| e.unwrap().path().unwrap().display().to_string())
         .collect();
-    assert_eq!(names, ["notes.txt", "porter.toml"]);
+    assert_eq!(
+        names,
+        ["notes.txt", "porter.toml", "project.db"],
+        "no media/, uploads/, dot-entries or -wal/-shm"
+    );
+    // The packed db is a consistent copy that includes the WAL-only commit.
+    let mut ar = tar::Archive::new(zstd::Decoder::new(&snap[..]).unwrap());
+    let packed = tempfile::tempdir().unwrap();
+    for e in ar.entries().unwrap() {
+        let mut e = e.unwrap();
+        if e.path().unwrap().to_str() == Some("project.db") {
+            e.unpack(packed.path().join("project.db")).unwrap();
+        }
+    }
+    let copy = rusqlite::Connection::open(packed.path().join("project.db")).unwrap();
+    let n: i64 = copy
+        .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1);
+    drop((copy, db));
     let commit: Value = serde_json::from_slice(&hub_reqs.last().unwrap().body).unwrap();
     assert_eq!(commit["message"], "hi");
 
@@ -202,6 +255,11 @@ async fn push_uploads_only_missing_media_and_treats_412_as_uploaded() {
     assert_eq!(
         sync["porter_toml_sha256"],
         sha(b"[project]\nname = \"demo\"\n")
+    );
+    assert_eq!(
+        sync["project_db_sha256"],
+        db_hash(&packed.path().join("project.db")),
+        "the sync records the bytes that were pushed"
     );
 }
 
@@ -260,13 +318,14 @@ async fn serve_version(hub: &MockServer, s3: &MockServer, n: u64, snap: &[u8], m
 #[tokio::test(flavor = "multi_thread")]
 async fn pull_downloads_verifies_and_records_the_sync() {
     let (hub, s3) = (MockServer::start().await, MockServer::start().await);
+    let dbb = db_bytes();
     let snap = tar_zst(&[
         ("porter.toml", b"[project]\nname = \"p\"\n"),
+        ("project.db", &dbb),
         ("raw/a.json", b"{}"),
     ]);
     serve_version(&hub, &s3, 7, &snap, &[b"img"]).await;
     let d = tempfile::tempdir().unwrap();
-    std::fs::write(d.path().join("project.db-wal"), "stale").unwrap();
     let (code, out, err) = run(
         d.path(),
         &hub,
@@ -289,9 +348,49 @@ async fn pull_downloads_verifies_and_records_the_sync() {
         b"img"
     );
     no_auth(&s3.received_requests().await.unwrap());
-    // A clean pull is followed by another one without --force.
+    // A clean pull is followed by another one without --force, even after the db was
+    // opened in WAL mode (which changes header bytes, not data).
+    drop(wal_db_open_close(d.path()));
     let (code, _, err) = run(d.path(), &hub, &["hub", "pull", "--version", "7"]).await;
     assert_eq!(code, 0, "{err}");
+    // A real change to the db is caught.
+    let c = rusqlite::Connection::open(d.path().join("project.db")).unwrap();
+    c.execute("INSERT INTO t VALUES (8)", []).unwrap();
+    drop(c);
+    let (code, _, err) = run(d.path(), &hub, &["hub", "pull", "--version", "7"]).await;
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("project.db changed since the last sync (v7)"),
+        "{err}"
+    );
+    // And the sync-file fallback: no --url/--slug needed after a pull.
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_porter"));
+    c.arg("--project")
+        .arg(d.path())
+        .args(["hub", "pull", "--force"]);
+    c.env("PORTER_HUB_TOKEN", TOKEN)
+        .env("PORTER_HUB_URL", hub.uri());
+    let out = tokio::task::spawn_blocking(move || c.output().unwrap())
+        .await
+        .unwrap();
+    // No version list is mocked: reaching the hub at all proves url+slug came from the sync file.
+    assert!(
+        hub.received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .any(|r| r.url.path() == api("versions")),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Opens the db the way the engine does (WAL), then closes it.
+fn wal_db_open_close(dir: &Path) -> rusqlite::Connection {
+    let c = rusqlite::Connection::open(dir.join("project.db")).unwrap();
+    c.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))
+        .unwrap();
+    c
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -322,22 +421,29 @@ async fn pull_refuses_on_local_changes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn pull_rejects_an_unsafe_tar_entry() {
-    let (hub, s3) = (MockServer::start().await, MockServer::start().await);
-    let snap = tar_zst(&[("porter.toml", b"x"), ("../escaped.txt", b"pwned")]);
-    serve_version(&hub, &s3, 1, &snap, &[]).await;
     let parent = tempfile::tempdir().unwrap();
-    let d = parent.path().join("proj");
-    std::fs::create_dir(&d).unwrap();
-    let (code, _, err) = run(&d, &hub, &["hub", "pull", "--version", "1"]).await;
-    assert_eq!(code, 1, "{err}");
-    assert!(
-        err.contains("unsafe path in snapshot: ../escaped.txt"),
-        "{err}"
-    );
-    assert!(!parent.path().join("escaped.txt").exists());
-    assert!(!d.join("porter.toml").exists(), "nothing is swapped in");
-    let leftovers: Vec<_> = std::fs::read_dir(&d).unwrap().collect();
-    assert!(leftovers.is_empty(), "temp dir cleaned up");
+    let abs = parent.path().join("abs.txt");
+    let abs_s = abs.to_str().unwrap().to_string();
+    for (n, bad, msg) in [
+        (1u64, "../../../escaped.txt", "unsafe path"),
+        (2, abs_s.as_str(), "unsafe path"),
+        (3, "Media/x", "unexpected entry"),
+        (4, "uploads/dump.sql", "unexpected entry"),
+    ] {
+        let (hub, s3) = (MockServer::start().await, MockServer::start().await);
+        let snap = tar_zst(&[("porter.toml", b"x"), (bad, b"pwned")]);
+        serve_version(&hub, &s3, n, &snap, &[]).await;
+        let d = parent.path().join(format!("proj{n}/a/b/c"));
+        std::fs::create_dir_all(&d).unwrap();
+        let (code, _, err) = run(&d, &hub, &["hub", "pull", "--version", &n.to_string()]).await;
+        assert_eq!(code, 1, "{bad}: {err}");
+        assert!(err.contains(msg), "{bad}: {err}");
+        assert!(!parent.path().join(format!("proj{n}/escaped.txt")).exists());
+        assert!(!abs.exists());
+        assert!(!d.join("porter.toml").exists(), "nothing is swapped in");
+        let leftovers: Vec<_> = std::fs::read_dir(&d).unwrap().collect();
+        assert!(leftovers.is_empty(), "staging cleaned up");
+    }
 }
 
 const EV1: &str = r#"{"v":1,"event":"stage-started","stage":"analyse","run":"0192f3a0-0000-7000-8000-000000000000"}"#;
@@ -377,7 +483,7 @@ async fn run_streams_events_as_ndjson() {
     Mock::given(method("GET"))
         .and(path(api(&format!("runs/{RUN_ID}/events"))))
         .respond_with(sse(format!(
-            "retry: 10\n\nid: 1\ndata: {EV1}\n\n: ping\n\nid: 2\ndata: {EV2}\n\n{}",
+            "retry: 10\n\nid: 1\ndata: {EV1}\n\n: ping\n\nid: 2\ndata: {EV2}\n\nid: 3\ndata: not json\n\n{}",
             end_event("finished", 2)
         )))
         .mount(&hub)
@@ -387,9 +493,18 @@ async fn run_streams_events_as_ndjson() {
     assert_eq!(code, 2, "finished with porter exit 2: {err}");
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[1], EV1, "porter events verbatim");
-    assert_eq!(lines[2], EV2, "hub events too");
+    assert_eq!(
+        serde_json::from_str::<Value>(lines[2]).unwrap(),
+        json!({"v": 1, "event": "hub-note", "kind": "access-gap", "message": "wp-db skipped"}),
+        "hub events get v:1"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(lines[3]).unwrap(),
+        json!({"v": 1, "event": "hub-malformed", "line": "not json"})
+    );
     for l in &lines {
-        serde_json::from_str::<Value>(l).expect("pure NDJSON");
+        let v: Value = serde_json::from_str(l).expect("pure NDJSON");
+        assert_eq!(v["v"], 1, "{l}");
     }
     let post: Value =
         serde_json::from_slice(&hub.received_requests().await.unwrap()[0].body).unwrap();
@@ -432,7 +547,9 @@ async fn run_reconnects_with_last_event_id() {
     let (code, out, err) = run(d.path(), &hub, &["--json", "hub", "run", "all"]).await;
     assert_eq!(code, 3, "cancelled maps to 3: {err}");
     let lines: Vec<&str> = out.lines().collect();
-    assert_eq!(&lines[1..4], &[EV1, EV2, EV3]);
+    assert_eq!(lines[1], EV1);
+    assert!(lines[2].contains("\"hub-note\""));
+    assert_eq!(lines[3], EV3);
     let post: Value =
         serde_json::from_slice(&hub.received_requests().await.unwrap()[0].body).unwrap();
     assert_eq!(post["stages"], "all");
@@ -563,6 +680,314 @@ async fn link_keeps_comments() {
         t.contains("[hub]\nurl = \"https://hub.example.com\"\nproject = \"acme\""),
         "{t}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pull_refuses_while_another_process_has_the_db_open() {
+    let hub = MockServer::start().await;
+    let d = tempfile::tempdir().unwrap();
+    project(d.path(), &[]);
+    let db = wal_db(d.path());
+    // Even with --force: replacing an open db would lose that process's writes.
+    let (code, _, err) = run(d.path(), &hub, &["hub", "pull", "--force"]).await;
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("open in another porter process"), "{err}");
+    assert!(hub.received_requests().await.unwrap().is_empty());
+    let n: i64 = db
+        .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1, "the open connection's data is intact");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(unix)]
+async fn push_refuses_a_nested_symlink() {
+    let hub = MockServer::start().await;
+    let d = tempfile::tempdir().unwrap();
+    project(d.path(), &[]);
+    std::fs::create_dir_all(d.path().join("raw")).unwrap();
+    std::os::unix::fs::symlink("../porter.toml", d.path().join("raw/link")).unwrap();
+    let (code, _, err) = run(d.path(), &hub, &["hub", "push"]).await;
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err.contains("raw/link is a symlink or special file"),
+        "{err}"
+    );
+    assert!(hub.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[cfg(unix)]
+async fn a_failed_swap_rolls_back() {
+    use std::os::unix::fs::PermissionsExt;
+    let (hub, s3) = (MockServer::start().await, MockServer::start().await);
+    let snap = tar_zst(&[("porter.toml", b"new"), ("reports/r.html", b"new")]);
+    serve_version(&hub, &s3, 1, &snap, &[]).await;
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("porter.toml"), "old").unwrap();
+    let reports = d.path().join("reports");
+    std::fs::create_dir(&reports).unwrap();
+    std::fs::write(reports.join("r.html"), "old").unwrap();
+    // A folder without write permission can't move to another parent (its `..` changes).
+    std::fs::set_permissions(&reports, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let (code, _, err) = run(
+        d.path(),
+        &hub,
+        &["hub", "pull", "--force", "--version", "1"],
+    )
+    .await;
+    std::fs::set_permissions(&reports, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("left as it was"), "{err}");
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("porter.toml")).unwrap(),
+        "old"
+    );
+    assert_eq!(
+        std::fs::read_to_string(reports.join("r.html")).unwrap(),
+        "old"
+    );
+    assert!(!d.path().join(".porter-hub-pull.bak").exists());
+    assert!(!d.path().join(".porter-hub-pull.tmp").exists());
+    assert!(!d.path().join(".porter-hub.json").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn crashed_pull_leftovers() {
+    let (hub, s3) = (MockServer::start().await, MockServer::start().await);
+    let snap = tar_zst(&[("porter.toml", b"new")]);
+    serve_version(&hub, &s3, 1, &snap, &[]).await;
+    let d = tempfile::tempdir().unwrap();
+    // A .bak (crash mid-swap): refuse, with recovery steps, for pull and push.
+    std::fs::create_dir_all(d.path().join(".porter-hub-pull.bak")).unwrap();
+    for args in [
+        &["hub", "pull", "--force", "--version", "1"][..],
+        &["hub", "push"],
+    ] {
+        std::fs::write(d.path().join("porter.toml"), "x").unwrap();
+        let (code, _, err) = run(d.path(), &hub, args).await;
+        assert_eq!(code, 1, "{err}");
+        assert!(
+            err.contains("interrupted") && err.contains("move every entry"),
+            "{err}"
+        );
+    }
+    // Only a .tmp (crash before the swap): cleaned up, and the pull goes ahead.
+    std::fs::remove_dir(d.path().join(".porter-hub-pull.bak")).unwrap();
+    std::fs::create_dir_all(d.path().join(".porter-hub-pull.tmp/new")).unwrap();
+    let (code, _, err) = run(
+        d.path(),
+        &hub,
+        &["hub", "pull", "--force", "--version", "1"],
+    )
+    .await;
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("porter.toml")).unwrap(),
+        "new"
+    );
+    assert!(!d.path().join(".porter-hub-pull.tmp").exists());
+}
+
+async fn mount_push(hub: &MockServer, s3: &MockServer, commit: ResponseTemplate) {
+    Mock::given(method("POST"))
+        .and(path(api("versions/init")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "upload_id": "11111111-1111-1111-1111-111111111111", "missing": ["zz", "../x"],
+            "snapshot_put_url": format!("{}/snap", s3.uri()),
+        })))
+        .mount(hub)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(api("versions/commit")))
+        .respond_with(commit)
+        .mount(hub)
+        .await;
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(s3)
+        .await;
+}
+
+fn bodies(reqs: &[Request], p: &str) -> Vec<Value> {
+    reqs.iter()
+        .filter(|r| r.url.path() == api(p))
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn push_force_reinits_on_the_latest() {
+    let (hub, s3) = (MockServer::start().await, MockServer::start().await);
+    // init: 409 once, then the normal mock. Bogus `missing` hashes are ignored.
+    Mock::given(method("POST"))
+        .and(path(api("versions/init")))
+        .respond_with(
+            ResponseTemplate::new(409).set_body_json(json!({"error": "stale", "latest": 5})),
+        )
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&hub)
+        .await;
+    mount_push(
+        &hub,
+        &s3,
+        ResponseTemplate::new(201).set_body_json(json!({"number": 6})),
+    )
+    .await;
+    let d = tempfile::tempdir().unwrap();
+    project(d.path(), &[]);
+    let (code, _, err) = run(d.path(), &hub, &["hub", "push", "--force"]).await;
+    assert_eq!(code, 0, "{err}");
+    let reqs = hub.received_requests().await.unwrap();
+    let inits = bodies(&reqs, "versions/init");
+    assert_eq!(inits.len(), 2);
+    assert_eq!(inits[1]["base_version"], 5);
+    assert_eq!(bodies(&reqs, "versions/commit")[0]["base_version"], 5);
+    assert!(!reqs.iter().any(|r| r.url.path().contains("media-urls")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn push_409_on_commit_reinits_with_force_and_refuses_without() {
+    let (hub, s3) = (MockServer::start().await, MockServer::start().await);
+    Mock::given(method("POST"))
+        .and(path(api("versions/commit")))
+        .respond_with(
+            ResponseTemplate::new(409).set_body_json(json!({"error": "stale", "latest": 9})),
+        )
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&hub)
+        .await;
+    mount_push(
+        &hub,
+        &s3,
+        ResponseTemplate::new(201).set_body_json(json!({"number": 10})),
+    )
+    .await;
+    let d = tempfile::tempdir().unwrap();
+    project(d.path(), &[]);
+    let (code, _, err) = run(d.path(), &hub, &["hub", "push", "--force"]).await;
+    assert_eq!(code, 0, "{err}");
+    let reqs = hub.received_requests().await.unwrap();
+    assert_eq!(bodies(&reqs, "versions/init")[1]["base_version"], 9);
+
+    let hub2 = MockServer::start().await;
+    mount_push(
+        &hub2,
+        &s3,
+        ResponseTemplate::new(409).set_body_json(json!({"error": "stale", "latest": 9})),
+    )
+    .await;
+    let d = tempfile::tempdir().unwrap();
+    project(d.path(), &[]);
+    let (code, _, err) = run(d.path(), &hub2, &["hub", "push"]).await;
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("hub has version 9; pull first or --force"),
+        "{err}"
+    );
+    let (code, _, err) = run(d.path(), &hub2, &["hub", "push", "--force"]).await;
+    assert_eq!(code, 1);
+    assert!(err.contains("moved on again while pushing"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn storage_errors_never_show_the_presigned_url() {
+    let hub = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(api("versions/init")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "upload_id": "11111111-1111-1111-1111-111111111111", "missing": [],
+            "snapshot_put_url": "http://127.0.0.1:1/snap?X-Amz-Signature=SIGSECRET",
+        })))
+        .mount(&hub)
+        .await;
+    let d = tempfile::tempdir().unwrap();
+    project(d.path(), &[]);
+    let (code, _, err) = run(d.path(), &hub, &["-vvv", "hub", "push"]).await;
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("upload failed"), "{err}");
+    assert!(!err.contains("SIGSECRET"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn uploads_get_verifies_and_never_overwrites() {
+    let (hub, s3) = (MockServer::start().await, MockServer::start().await);
+    let body = b"-- dump".to_vec();
+    for (id, digest) in [("u1", sha(&body)), ("u2", sha(b"other"))] {
+        Mock::given(method("GET"))
+            .and(path(api(&format!("uploads/{id}/download"))))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "url": format!("{}/dl/{id}", s3.uri()), "filename": "../my dump.sql",
+                "size": body.len(), "sha256": digest, "expires_in": 900,
+            })))
+            .mount(&hub)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/dl/{id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+            .mount(&s3)
+            .await;
+    }
+    let d = tempfile::tempdir().unwrap();
+    let (code, _, err) = run(d.path(), &hub, &["hub", "uploads", "get", "u1"]).await;
+    assert_eq!(code, 0, "{err}");
+    let saved = d.path().join("uploads/_my dump.sql");
+    assert_eq!(std::fs::read(&saved).unwrap(), body);
+    let (code, _, err) = run(d.path(), &hub, &["hub", "uploads", "get", "u1"]).await;
+    assert_eq!(code, 1);
+    assert!(err.contains("already exists"), "{err}");
+    assert_eq!(std::fs::read(&saved).unwrap(), body);
+    let out = d.path().join("other.sql");
+    let (code, _, err) = run(
+        d.path(),
+        &hub,
+        &[
+            "hub",
+            "uploads",
+            "get",
+            "u2",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    )
+    .await;
+    assert_eq!(code, 1);
+    assert!(err.contains("wrong sha256"), "{err}");
+    assert!(!out.exists());
+    let stray: Vec<_> = std::fs::read_dir(d.path())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with(".porter-dl"))
+        .collect();
+    assert!(stray.is_empty());
+    no_auth(&s3.received_requests().await.unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_project_only_counts_for_its_own_hub() {
+    let (a, b) = (MockServer::start().await, MockServer::start().await);
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join(".porter-hub.json"),
+        json!({"hub": a.uri(), "project": SLUG, "version": 1,
+               "project_db_sha256": null, "porter_toml_sha256": null})
+        .to_string(),
+    )
+    .unwrap();
+    let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_porter"));
+    c.arg("--project")
+        .arg(d.path())
+        .args(["hub", "uploads", "--url", &b.uri()])
+        .env("PORTER_HUB_TOKEN", TOKEN)
+        .env("PORTER_HUB_URL", b.uri());
+    let out = tokio::task::spawn_blocking(move || c.output().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no hub project"));
+    assert!(b.received_requests().await.unwrap().is_empty());
 }
 
 /// Against a real hub: `PORTER_HUB_TEST_URL`, `PORTER_HUB_TOKEN`, `PORTER_HUB_TEST_SLUG`.

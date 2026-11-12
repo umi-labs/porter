@@ -5390,6 +5390,7 @@ dependencies = [
  "porter-tui",
  "predicates",
  "reqwest 0.12.28",
+ "rusqlite",
  "self-replace",
  "self_update",
  "serde",

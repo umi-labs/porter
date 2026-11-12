@@ -1,19 +1,21 @@
 use super::{
-    Ctx, Hub, SyncState, download, is_hash, local_changes, media_path, progress, storage_client,
+    Ctx, DB_FILE, Hub, PULL_BAK, PULL_TMP, SyncState, check_leftovers, copy_db, db_in_use,
+    download, is_hash, local_changes, media_path, progress, sha256_file, storage_client,
 };
 use crate::output::print_json;
 use anyhow::{Context, Result, bail};
 use futures::StreamExt;
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
-use std::collections::HashMap;
-use std::path::{Component, Path};
+use std::collections::{BTreeSet, HashMap};
+use std::path::{Component, Path, PathBuf};
 
 /// Caps: the compressed snapshot, its unpacked size, and one media object.
 const MAX_SNAPSHOT: u64 = 20 << 30;
 const MAX_UNPACKED: u64 = 50 << 30;
 const MAX_MEDIA: u64 = 5 << 30;
 const PARALLEL: usize = 8;
+const MAX_ENTRIES: u64 = 1_000_000;
 
 pub enum Pulled {
     Done,
@@ -23,6 +25,11 @@ pub enum Pulled {
 
 pub async fn pull(ctx: &Ctx, hub: &Hub, version: Option<u64>, force: bool) -> Result<Pulled> {
     let dir = &ctx.dir;
+    check_leftovers(dir)?;
+    // Even with --force: replacing a db another process has open loses its writes.
+    if let Some(why) = db_in_use(dir)? {
+        bail!("{why}");
+    }
     if !force && let Some(why) = local_changes(dir, SyncState::read(dir, hub).as_ref())? {
         return Ok(Pulled::Refused(why));
     }
@@ -61,11 +68,9 @@ pub async fn pull(ctx: &Ctx, hub: &Hub, version: Option<u64>, force: bool) -> Re
         .context("the hub sent no snapshot URL")?;
 
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let work = tempfile::Builder::new()
-        .prefix(".porter-hub-pull-")
-        .tempdir_in(dir)
-        .context("creating a temp dir in the project")?;
-    let archive = work.path().join("snapshot.tar.zst");
+    let work = Staging(dir.join(PULL_TMP));
+    std::fs::create_dir(&work.0).with_context(|| format!("creating {}", work.0.display()))?;
+    let archive = work.0.join("snapshot.tar.zst");
     let s3 = storage_client()?;
     if !ctx.json {
         eprintln!("downloading v{n}");
@@ -74,9 +79,16 @@ pub async fn pull(ctx: &Ctx, hub: &Hub, version: Option<u64>, force: bool) -> Re
     if got != want {
         bail!("the snapshot for v{n} does not match its sha256 (got {got}, want {want})");
     }
-    let unpacked = work.path().join("new");
+    let unpacked = work.0.join("new");
     extract(&archive, &unpacked)?;
-    swap(dir, &unpacked, &work.path().join("old"))?;
+    // Last check right before the swap: an app may have opened the project meanwhile.
+    if let Some(why) = db_in_use(dir)? {
+        bail!("{why}");
+    }
+    swap(dir, &unpacked)?;
+    // Recorded now, so a failed media download below doesn't leave a stale sync file.
+    let db = copy_db(dir, &work.0.join(DB_FILE))?;
+    SyncState::write(dir, hub, n, db, sha256_file(&dir.join("porter.toml"))?)?;
 
     let hashes: Vec<String> = v
         .get("media_hashes")
@@ -127,7 +139,6 @@ pub async fn pull(ctx: &Ctx, hub: &Hub, version: Option<u64>, force: bool) -> Re
             progress(ctx.json, "media", done, total);
         }
     }
-    SyncState::write(dir, hub, n)?;
     if ctx.json {
         print_json(&json!({"v": 1, "event": "hub-pulled", "version": n, "media_downloaded": done}));
     } else {
@@ -154,27 +165,48 @@ async fn fetch_media(s3: &reqwest::Client, url: &str, dir: &Path, hash: &str) ->
     Ok(())
 }
 
+/// Removes the pull staging dir however the pull ends (a crash leaves it for
+/// `check_leftovers`, which deletes it).
+struct Staging(PathBuf);
+
+impl Drop for Staging {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Unpacks regular files and folders only, with relative, `..`-free paths, never a
-/// top-level `media/` or dot-entry, and at most `MAX_UNPACKED` bytes.
+/// top-level `media/`, `uploads/` or dot-entry, no two top-level names that differ only by
+/// case, at most `MAX_ENTRIES` entries and `MAX_UNPACKED` bytes.
 pub fn extract(archive: &Path, into: &Path) -> Result<()> {
     let f = std::fs::File::open(archive)?;
     let mut ar = tar::Archive::new(zstd::Decoder::new(f)?);
     std::fs::create_dir_all(into)?;
-    let mut total = 0u64;
+    let (mut total, mut count) = (0u64, 0u64);
+    let mut top: HashMap<String, String> = HashMap::new();
     for entry in ar.entries().context("reading the snapshot")? {
         let mut e = entry.context("reading the snapshot")?;
+        count += 1;
+        if count > MAX_ENTRIES {
+            bail!("snapshot has more than {MAX_ENTRIES} entries");
+        }
         let path = e.path()?.into_owned();
         let shown = path.display().to_string();
-        let mut comps = path.components().peekable();
-        let Some(Component::Normal(first)) = comps.peek().copied() else {
-            bail!("unsafe path in snapshot: {shown}");
-        };
-        let first = first.to_string_lossy();
-        if first.starts_with('.') || first == "media" {
-            bail!("unexpected entry in snapshot: {shown}");
-        }
         if !path.components().all(|c| matches!(c, Component::Normal(_))) {
             bail!("unsafe path in snapshot: {shown}");
+        }
+        let Some(Component::Normal(first)) = path.components().next() else {
+            bail!("unsafe path in snapshot: {shown}");
+        };
+        let first = first.to_string_lossy().into_owned();
+        let lower = first.to_ascii_lowercase();
+        if first.starts_with('.') || lower == "media" || lower == "uploads" {
+            bail!("unexpected entry in snapshot: {shown}");
+        }
+        if let Some(prev) = top.insert(lower, first.clone())
+            && prev != first
+        {
+            bail!("snapshot has entries that differ only by case: {prev} and {first}");
         }
         let dest = into.join(&path);
         match e.header().entry_type() {
@@ -202,26 +234,69 @@ pub fn extract(archive: &Path, into: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Moves each unpacked top-level entry into `dir`, the old one aside into `old`. Local
-/// entries the snapshot lacks are kept, except SQLite sidecars of a replaced project.db.
-fn swap(dir: &Path, new: &Path, old: &Path) -> Result<()> {
-    std::fs::create_dir_all(old)?;
-    let mut names: Vec<_> = std::fs::read_dir(new)?
+/// Moves the unpacked top-level entries into `dir`. Each replaced entry goes to
+/// `PULL_BAK` first, so a crash leaves every original there (see `check_leftovers`). On an
+/// error the completed moves are undone in reverse; `PULL_BAK` is deleted only once the
+/// project is whole again (new or old). Local entries the snapshot lacks are kept, except
+/// SQLite sidecars of a replaced project.db.
+fn swap(dir: &Path, new: &Path) -> Result<()> {
+    let bak = dir.join(PULL_BAK);
+    std::fs::create_dir(&bak).with_context(|| format!("creating {}", bak.display()))?;
+    let mut names: BTreeSet<_> = std::fs::read_dir(new)?
         .flatten()
-        .map(|e| e.file_name())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
-    if names.iter().any(|n| n == "project.db") {
-        names.extend(["project.db-wal", "project.db-shm", "project.db-journal"].map(Into::into));
+    if names.iter().any(|n| n.eq_ignore_ascii_case(DB_FILE)) {
+        names.extend(["project.db-wal", "project.db-shm", "project.db-journal"].map(String::from));
     }
-    for name in names {
-        let (src, dst) = (new.join(&name), dir.join(&name));
-        if std::fs::symlink_metadata(&dst).is_ok() {
-            std::fs::rename(&dst, old.join(&name))
+    // (name, an original was moved to bak, the new one was moved in)
+    let mut done: Vec<(String, bool, bool)> = Vec::new();
+    let step = |name: &str, done: &mut Vec<(String, bool, bool)>| -> Result<()> {
+        let (src, dst) = (new.join(name), dir.join(name));
+        let had = std::fs::symlink_metadata(&dst).is_ok();
+        if had {
+            std::fs::rename(&dst, bak.join(name))
                 .with_context(|| format!("moving {} aside", dst.display()))?;
         }
+        done.push((name.to_string(), had, false));
         if src.exists() {
             std::fs::rename(&src, &dst).with_context(|| format!("writing {}", dst.display()))?;
+            if let Some(last) = done.last_mut() {
+                last.2 = true;
+            }
+        }
+        Ok(())
+    };
+    let mut failed = None;
+    for name in &names {
+        if let Err(e) = step(name, &mut done) {
+            failed = Some(e);
+            break;
         }
     }
-    Ok(())
+    let Some(err) = failed else {
+        std::fs::remove_dir_all(&bak).with_context(|| format!("removing {}", bak.display()))?;
+        return Ok(());
+    };
+    let rollback = || -> std::io::Result<()> {
+        for (name, had, moved_in) in done.iter().rev() {
+            if *moved_in {
+                std::fs::rename(dir.join(name), new.join(name))?;
+            }
+            if *had {
+                std::fs::rename(bak.join(name), dir.join(name))?;
+            }
+        }
+        Ok(())
+    };
+    match rollback() {
+        Ok(()) => {
+            let _ = std::fs::remove_dir_all(&bak);
+            Err(err.context("pull failed; the project was left as it was"))
+        }
+        Err(re) => Err(err.context(format!(
+            "pull failed and undoing it failed too ({re}); the original entries are in {}",
+            bak.display()
+        ))),
+    }
 }

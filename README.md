@@ -336,6 +336,8 @@ Example:
 
 Other commands print one event each: `init` (`dir`, `name`), `status` (`stages`, `open_issues`, `last_runs`), `issue` (`issue`, one per line from `porter issues`), `issue-resolved` (`id`, `resolution`), `clean` (`dir`), `export` (`path`), `report` (`paths`: the files written), `mapping-seeded` (no fields; emitted after analyse when `[mapping]` was seeded in `porter.toml`), `upgrade-check` (`current`, `latest`, `update_available`, `install`) and `upgrade` (`from`, `to`, `upgraded`: whether the binary was replaced).
 
+`porter hub …` commands print `hub-*` events, each with `"v": 1`: `hub-device-code` (`user_code`, `verification_uri`, `verification_uri_complete`, `expires_in`), `hub-login`, `hub-logout`, `hub-whoami` (`user`), `hub-link`, `hub-progress` (`phase`, `done`, `total`), `hub-pushed` (`version`, `media_uploaded`), `hub-pulled` (`version`, `media_downloaded`), `hub-run-queued` and `hub-run-finished` (`run`: the hub's run object), `hub-uploads` (`uploads`) and `hub-upload-saved` (`id`, `path`, `sha256`). `porter hub run --json` passes the remote run's events through (the hub's own `hub-note`, `hub-stderr`, `hub-result` and `hub-malformed` events get `"v": 1` added), so it reads like a local run.
+
 Porter never prompts unless stdin is a terminal and you passed `--interactive`; missing configuration is an error that names exactly what is missing.
 
 ### Exit codes
@@ -359,6 +361,8 @@ Credentials come from the environment (or a keyring entry named in config), neve
 | `PORTER_WP_API_KEY` | `wp-rest`, apikey | Key sent in a header |
 | `PORTER_WP_API_KEY_HEADER` | `wp-rest`, apikey | Header name for the key (default `X-API-Key`) |
 | `PORTER_PAYLOAD_API_KEY` | Payload destination | Conventional name for the Payload API key; `destination.api_key_env` names whichever variable you actually use |
+| `PORTER_HUB_TOKEN` | `porter hub` | A hub session token (instead of `porter hub login`'s keyring entry); used only when `PORTER_HUB_URL` names the same origin as the target hub |
+| `PORTER_HUB_URL` | `porter hub` | The hub origin `PORTER_HUB_TOKEN` belongs to |
 
 `-v`, `-vv`, `-vvv` raise log detail on stderr (info, debug, trace).
 

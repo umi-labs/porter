@@ -1,5 +1,5 @@
 use super::pull::{Pulled, pull};
-use super::{Ctx, Hub, hub_error};
+use super::{Ctx, Hub, clean, hub_error};
 use crate::output::{print_json, render};
 use anyhow::{Result, anyhow, bail};
 use porter_engine::events::Event;
@@ -83,7 +83,16 @@ pub async fn run(
         }
     }
     if let Some(n) = end.get("result_version").and_then(Value::as_u64) {
-        match pull(ctx, hub, Some(n), false).await {
+        // Ctrl-C still works here (our SIGINT handler replaced the default). The pull's
+        // swap has no await inside, so it can't be cut off halfway.
+        let pulled = tokio::select! {
+            r = pull(ctx, hub, Some(n), false) => r,
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("interrupted; the result v{n} was not pulled: run `porter hub pull --version {n}`");
+                return Ok(3);
+            }
+        };
+        match pulled {
             Ok(Pulled::Done) => {}
             Ok(Pulled::Refused(why)) => eprintln!(
                 "not pulling the result v{n}: {why}. Pull it with `porter hub pull --version {n}` (add --force to overwrite local changes)"
@@ -154,6 +163,10 @@ async fn stream(ctx: &Ctx, hub: &Hub, id: &str) -> Result<Option<Value>> {
                     }
                 }
             }
+            // A proxy's 5xx or 429 during a hub deploy counts as a drop.
+            Ok(resp)
+                if resp.status().is_server_error()
+                    || resp.status() == StatusCode::TOO_MANY_REQUESTS => {}
             Ok(resp) => {
                 let st = resp.status();
                 let v: Value = resp.json().await.unwrap_or(Value::Null);
@@ -186,17 +199,16 @@ async fn cancel(hub: &Hub, id: &str) {
 /// hub events as short notes.
 fn show(json: bool, data: &str) {
     if json {
-        let mut out = std::io::stdout().lock();
-        let _ = writeln!(out, "{data}");
+        print_json(&as_event(data));
         return;
     }
     if let Some(e) = Event::from_json(data) {
-        eprintln!("{}", render(&e));
+        eprintln!("{}", clean(&render(&e)));
         return;
     }
-    let v: Value = serde_json::from_str(data).unwrap_or(Value::Null);
-    let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default();
-    match s("event") {
+    let v = as_event(data);
+    let s = |k: &str| clean(v.get(k).and_then(Value::as_str).unwrap_or_default());
+    match s("event").as_str() {
         "hub-note" => eprintln!("hub: {}", s("message")),
         "hub-stderr" => eprintln!("porter stderr:\n{}", s("text")),
         "hub-malformed" => eprintln!("hub: malformed line: {}", s("line")),
@@ -204,7 +216,24 @@ fn show(json: bool, data: &str) {
             "hub: result saved as v{}",
             v.get("version").and_then(Value::as_u64).unwrap_or(0)
         ),
-        _ => eprintln!("{data}"),
+        _ => eprintln!("{}", clean(&v.to_string())),
+    }
+}
+
+/// One stream message as a v1 event: a JSON object gets `"v": 1` if it lacks it
+/// (the hub's own events); anything else becomes `hub-malformed`.
+fn as_event(data: &str) -> Value {
+    match serde_json::from_str::<Value>(data) {
+        Ok(Value::Object(m)) if m.get("event").is_some_and(Value::is_string) => {
+            if m.contains_key("v") {
+                return Value::Object(m);
+            }
+            let mut out = serde_json::Map::new();
+            out.insert("v".into(), json!(1));
+            out.extend(m);
+            Value::Object(out)
+        }
+        _ => json!({"v": 1, "event": "hub-malformed", "line": data}),
     }
 }
 

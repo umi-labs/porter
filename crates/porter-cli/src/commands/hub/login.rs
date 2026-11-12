@@ -1,4 +1,4 @@
-use super::{Ctx, Hub, KEYRING_SERVICE, TOKEN_ENV, URL_ENV, hub_error};
+use super::{Ctx, Hub, KEYRING_SERVICE, TOKEN_ENV, URL_ENV, clean, hub_error};
 use crate::output::print_json;
 use anyhow::{Result, anyhow, bail};
 use reqwest::{Method, StatusCode};
@@ -100,13 +100,28 @@ fn device_error(st: StatusCode, v: &Value) -> String {
         .or_else(|| v.get("message"))
         .and_then(Value::as_str);
     match (v.get("error").and_then(Value::as_str), d) {
-        (Some(e), Some(d)) => format!("hub returned {st}: {e}: {d}"),
+        (Some(e), Some(d)) => format!("hub returned {st}: {}: {}", clean(e), clean(d)),
         _ => hub_error(st, v),
     }
 }
 
-pub fn logout(ctx: &Ctx, origin: Url) -> Result<i32> {
+/// Ends the session on the hub (best effort), then deletes the keyring entry.
+pub async fn logout(ctx: &Ctx, origin: Url) -> Result<i32> {
     let account = origin.origin().ascii_serialization();
+    if let Ok(t) = keyring::Entry::new(KEYRING_SERVICE, &account).and_then(|e| e.get_password()) {
+        let revoked = match Hub::with_token(origin.clone(), String::new(), &t) {
+            Ok(hub) => hub
+                .call(Method::POST, &["api", "auth", "sign-out"], Some(&json!({})))
+                .await
+                .is_ok_and(|(st, _)| st.is_success()),
+            Err(_) => false,
+        };
+        if !revoked {
+            eprintln!(
+                "warning: the hub did not confirm the sign-out; the token is removed locally only"
+            );
+        }
+    }
     let removed =
         match keyring::Entry::new(KEYRING_SERVICE, &account).and_then(|e| e.delete_credential()) {
             Ok(()) => true,

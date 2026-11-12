@@ -115,15 +115,27 @@ pub async fn dispatch(ctx: Ctx, args: HubArgs) -> Result<i32> {
     let HubArgs { url, slug, cmd } = args;
     let conf = HubConf::read(&ctx.dir);
     let origin = || -> Result<Url> {
-        let u = url.clone().or_else(|| conf.url.clone()).ok_or_else(|| {
-            anyhow!("no hub URL: pass --url or run `porter hub link <slug> --url <hub>`")
-        })?;
+        let u = url
+            .clone()
+            .or_else(|| conf.url.clone())
+            .or_else(|| conf.sync.as_ref().map(|s| s.0.clone()))
+            .ok_or_else(|| {
+                anyhow!("no hub URL: pass --url or run `porter hub link <slug> --url <hub>`")
+            })?;
         origin(&u)
     };
     let slug = || -> Result<String> {
+        // The last sync's project only counts for the hub it was synced with.
+        let o = origin().ok().map(|o| o.origin().ascii_serialization());
         let s = slug
             .clone()
             .or_else(|| conf.project.clone())
+            .or_else(|| {
+                conf.sync
+                    .as_ref()
+                    .filter(|s| Some(&s.0) == o.as_ref())
+                    .map(|s| s.1.clone())
+            })
             .ok_or_else(|| {
                 anyhow!("no hub project: pass --slug or run `porter hub link <slug>`")
             })?;
@@ -132,14 +144,23 @@ pub async fn dispatch(ctx: Ctx, args: HubArgs) -> Result<i32> {
     };
     match cmd {
         HubCmd::Login => login::login(&ctx, origin()?).await,
-        HubCmd::Logout => login::logout(&ctx, origin()?),
+        HubCmd::Logout => login::logout(&ctx, origin()?).await,
         HubCmd::Whoami => login::whoami(&ctx, &Hub::new(origin()?, String::new())?).await,
         HubCmd::Link { project_slug } => link::run(&ctx, &project_slug, url.or(conf.url)),
         HubCmd::Push { message, force } => {
             push::run(&ctx, &Hub::new(origin()?, slug()?)?, message, force).await
         }
         HubCmd::Pull { version, force } => {
-            match pull::pull(&ctx, &Hub::new(origin()?, slug()?)?, version, force).await? {
+            let hub = Hub::new(origin()?, slug()?)?;
+            // Ctrl-C exits 3. The swap has no await inside, so it is never cut off halfway.
+            let pulled = tokio::select! {
+                r = pull::pull(&ctx, &hub, version, force) => r?,
+                _ = tokio::signal::ctrl_c() => {
+                    eprintln!("interrupted; run `porter hub pull` again to finish");
+                    return Ok(3);
+                }
+            };
+            match pulled {
                 pull::Pulled::Done => Ok(0),
                 pull::Pulled::Refused(why) => bail!("{why}"),
             }
@@ -165,12 +186,13 @@ pub async fn dispatch(ctx: Ctx, args: HubArgs) -> Result<i32> {
     }
 }
 
-/// `[hub]` from porter.toml, read loosely so a config error elsewhere doesn't block sync;
-/// else the last sync (a pulled porter.toml may not carry `[hub]`).
+/// `[hub]` from porter.toml, read loosely so a config error elsewhere doesn't block sync,
+/// and the last sync's (hub, project) as a fallback (a pulled porter.toml may lack `[hub]`).
 #[derive(Default)]
 struct HubConf {
     url: Option<String>,
     project: Option<String>,
+    sync: Option<(String, String)>,
 }
 
 impl HubConf {
@@ -182,8 +204,9 @@ impl HubConf {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok());
         HubConf {
-            url: get("url").or_else(|| sync.as_ref().map(|s| s.hub.clone())),
-            project: get("project").or_else(|| sync.map(|s| s.project)),
+            url: get("url"),
+            project: get("project"),
+            sync: sync.map(|s| (s.hub, s.project)),
         }
     }
 }
@@ -260,6 +283,10 @@ impl Hub {
     /// Reads the token now, so a command fails fast when signed out.
     pub fn new(origin: Url, slug: String) -> Result<Hub> {
         let t = token(&origin)?;
+        Hub::with_token(origin, slug, &t)
+    }
+
+    pub fn with_token(origin: Url, slug: String, t: &str) -> Result<Hub> {
         let mut auth = HeaderValue::from_str(&format!("Bearer {t}"))
             .map_err(|_| anyhow!("the hub token has characters that can't go in a header"))?;
         auth.set_sensitive(true);
@@ -363,7 +390,7 @@ pub fn hub_error(st: StatusCode, v: &Value) -> String {
         _ => "",
     };
     match v.get("error").and_then(Value::as_str) {
-        Some(e) => format!("hub returned {st}: {e}{hint}"),
+        Some(e) => format!("hub returned {st}: {}{hint}", clean(e)),
         None => format!("hub returned {st}{hint}"),
     }
 }
@@ -409,51 +436,157 @@ impl SyncState {
         (s.hub == hub.origin_str() && s.project == hub.slug).then_some(s)
     }
 
-    pub fn write(dir: &Path, hub: &Hub, version: u64) -> Result<()> {
+    /// `db` is `db_hash` of the synced database; `toml` the sha256 of the synced porter.toml.
+    pub fn write(
+        dir: &Path,
+        hub: &Hub,
+        version: u64,
+        db: Option<String>,
+        toml: Option<String>,
+    ) -> Result<()> {
         let s = SyncState {
             hub: hub.origin_str(),
             project: hub.slug.clone(),
             version,
-            project_db_sha256: sha256_file(&dir.join("project.db"))?,
-            porter_toml_sha256: sha256_file(&dir.join("porter.toml"))?,
+            project_db_sha256: db,
+            porter_toml_sha256: toml,
         };
         let text = serde_json::to_string_pretty(&s)? + "\n";
         porter_engine::mapping::edit::write_atomic(&dir.join(SYNC_FILE), &text)
     }
 }
 
+pub const DB_FILE: &str = "project.db";
+/// Staging for a pull (safe to delete while `PULL_BAK` is absent).
+pub const PULL_TMP: &str = ".porter-hub-pull.tmp";
+/// The entries a pull replaced, kept until the swap is complete.
+pub const PULL_BAK: &str = ".porter-hub-pull.bak";
+
+/// A consistent copy of project.db at `out` (`VACUUM INTO` reads one transaction, so
+/// commits still in the WAL are included and a concurrent writer can't tear it), and its
+/// `db_hash`. `None` when there is no project.db.
+pub fn copy_db(dir: &Path, out: &Path) -> Result<Option<String>> {
+    let src = dir.join(DB_FILE);
+    if !src.exists() {
+        return Ok(None);
+    }
+    let conn =
+        rusqlite::Connection::open(&src).with_context(|| format!("opening {}", src.display()))?;
+    conn.busy_timeout(Duration::from_secs(10))?;
+    let target = out
+        .to_str()
+        .ok_or_else(|| anyhow!("temp path {} is not UTF-8", out.display()))?;
+    conn.execute("VACUUM INTO ?1", [target])
+        .with_context(|| format!("copying {}", src.display()))?;
+    drop(conn);
+    db_hash(out).map(Some)
+}
+
+/// sha256 of a database file with the header fields that change without any change to the
+/// data zeroed: write/read versions (WAL flag), change counter, schema cookie,
+/// version-valid-for and the SQLite version. Same data, same hash, after any reopen.
+pub fn db_hash(path: &Path) -> Result<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut head = [0u8; 100];
+    f.read_exact(&mut head)
+        .with_context(|| format!("{} is not a SQLite database", path.display()))?;
+    for r in [18..20, 24..28, 40..44, 92..100] {
+        head[r].fill(0);
+    }
+    let mut h = Sha256::new();
+    h.update(head);
+    std::io::copy(&mut f, &mut h)?;
+    Ok(hex(&h.finalize()))
+}
+
+/// Why project.db can't be replaced now: another process (a porter run, the TUI or the
+/// desktop app) has it open. The WAL is checkpointed into the db first; when our
+/// connection closes SQLite deletes the WAL, unless another connection still holds it.
+pub fn db_in_use(dir: &Path) -> Result<Option<String>> {
+    let src = dir.join(DB_FILE);
+    if !src.exists() {
+        return Ok(None);
+    }
+    let busy: i64 = {
+        let conn = rusqlite::Connection::open(&src)
+            .with_context(|| format!("opening {}", src.display()))?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))
+            .unwrap_or(1)
+    };
+    let wal = dir.join("project.db-wal").exists();
+    Ok((busy != 0 || wal).then(|| {
+        "project.db is open in another porter process (a run, the TUI or the desktop app); close it and try again".to_string()
+    }))
+}
+
+/// A crashed pull leaves `PULL_BAK` (refuse, with recovery steps) or only `PULL_TMP`
+/// (staging, removed).
+pub fn check_leftovers(dir: &Path) -> Result<()> {
+    let bak = dir.join(PULL_BAK);
+    if bak.exists() {
+        bail!(
+            "an earlier pull was interrupted while swapping files in; the entries it replaced are in {bak}.\n\
+             To undo it: move every entry in {bak} back into {dir} (replacing what is there), then delete {bak} and {tmp}.\n\
+             To keep the pulled files instead: delete {bak} and {tmp}, then run `porter hub pull --force` to finish.",
+            bak = bak.display(),
+            dir = dir.display(),
+            tmp = dir.join(PULL_TMP).display(),
+        );
+    }
+    let tmp = dir.join(PULL_TMP);
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).with_context(|| format!("removing {}", tmp.display()))?;
+    }
+    Ok(())
+}
+
 /// Why pulling over the project would lose local work, if it would.
 pub fn local_changes(dir: &Path, sync: Option<&SyncState>) -> Result<Option<String>> {
-    match sync {
-        Some(s) => {
-            for (file, want) in [
-                ("project.db", &s.project_db_sha256),
-                ("porter.toml", &s.porter_toml_sha256),
-            ] {
-                if &sha256_file(&dir.join(file))? != want {
-                    return Ok(Some(format!(
-                        "{file} changed since the last sync (v{}); push it first or use --force to overwrite",
-                        s.version
-                    )));
-                }
-            }
-            Ok(None)
-        }
-        None => {
-            let non_empty = match std::fs::read_dir(dir) {
-                Ok(rd) => rd
-                    .flatten()
-                    .any(|e| !e.file_name().to_string_lossy().starts_with('.')),
-                Err(_) => false,
-            };
-            Ok(non_empty.then(|| {
-                format!(
-                    "{} has files but no {SYNC_FILE} for this hub project; use --force to overwrite",
-                    dir.display()
-                )
-            }))
+    let Some(s) = sync else {
+        let non_empty = match std::fs::read_dir(dir) {
+            Ok(rd) => rd
+                .flatten()
+                .any(|e| !e.file_name().to_string_lossy().starts_with('.')),
+            Err(_) => false,
+        };
+        return Ok(non_empty.then(|| {
+            format!(
+                "{} has files but no {SYNC_FILE} for this hub project; use --force to overwrite",
+                dir.display()
+            )
+        }));
+    };
+    let scratch = tempfile::tempdir().context("creating a temp dir")?;
+    let db = copy_db(dir, &scratch.path().join(DB_FILE))?;
+    let toml = sha256_file(&dir.join("porter.toml"))?;
+    for (file, got, want) in [
+        (DB_FILE, db, &s.project_db_sha256),
+        ("porter.toml", toml, &s.porter_toml_sha256),
+    ] {
+        if &got != want {
+            return Ok(Some(format!(
+                "{file} changed since the last sync (v{}); push it first or use --force to overwrite",
+                s.version
+            )));
         }
     }
+    Ok(None)
+}
+
+/// Replaces control characters (other than newline and tab) in server text shown on a
+/// terminal, so it can't carry escape sequences.
+pub fn clean(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_control() && c != '\n' && c != '\t' {
+                '?'
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 pub fn hex(bytes: &[u8]) -> String {

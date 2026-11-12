@@ -1,11 +1,13 @@
 use super::{
-    Ctx, Hub, SyncState, is_hash, media_path, progress, sha256_file, storage_client, upload,
+    Ctx, DB_FILE, Hub, SyncState, check_leftovers, copy_db, hex, is_hash, media_path, progress,
+    sha256_file, storage_client, upload,
 };
 use crate::output::print_json;
 use anyhow::{Context, Result, bail};
 use futures::StreamExt;
 use reqwest::{Method, StatusCode};
 use serde_json::{Map, Value, json};
+use sha2::Digest;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -17,14 +19,21 @@ pub async fn run(ctx: &Ctx, hub: &Hub, message: Option<String>, force: bool) -> 
     if !dir.join("porter.toml").exists() {
         bail!("no porter.toml in {}", dir.display());
     }
+    check_leftovers(dir)?;
     let summary = summary(dir);
-    let snap = snapshot(dir)?;
+    let Snapshot {
+        file: snap,
+        db_hash,
+        toml_hash,
+    } = snapshot(dir)?;
     let snap_hash = sha256_file(snap.path())?.unwrap_or_default();
     let media = media_hashes(dir)?;
+    let ours: std::collections::HashSet<&str> = media.iter().map(String::as_str).collect();
     let s3 = storage_client()?;
     let mut base = SyncState::read(dir, hub).map(|s| s.version);
     for attempt in 0..2 {
         let retry = force && attempt == 0;
+        let forced = force && attempt == 1;
         let (st, v) = hub
             .project(
                 Method::POST,
@@ -33,7 +42,7 @@ pub async fn run(ctx: &Ctx, hub: &Hub, message: Option<String>, force: bool) -> 
             )
             .await?;
         if st == StatusCode::CONFLICT {
-            base = stale(&v, retry)?;
+            base = stale(&v, retry, forced)?;
             continue;
         }
         if st != StatusCode::OK {
@@ -51,7 +60,10 @@ pub async fn run(ctx: &Ctx, hub: &Hub, message: Option<String>, force: bool) -> 
             .and_then(Value::as_array)
             .map(|a| {
                 a.iter()
-                    .filter_map(|h| h.as_str().map(str::to_string))
+                    .filter_map(Value::as_str)
+                    // Only hashes we offered: never a path built from a value we didn't send.
+                    .filter(|h| is_hash(h) && ours.contains(h))
+                    .map(str::to_string)
                     .collect()
             })
             .unwrap_or_default();
@@ -112,7 +124,7 @@ pub async fn run(ctx: &Ctx, hub: &Hub, message: Option<String>, force: bool) -> 
             )
             .await?;
         if st == StatusCode::CONFLICT {
-            base = stale(&v, retry)?;
+            base = stale(&v, retry, forced)?;
             continue;
         }
         if st != StatusCode::CREATED {
@@ -122,7 +134,7 @@ pub async fn run(ctx: &Ctx, hub: &Hub, message: Option<String>, force: bool) -> 
             .get("number")
             .and_then(Value::as_u64)
             .context("the hub's commit response has no version number")?;
-        SyncState::write(dir, hub, number)?;
+        SyncState::write(dir, hub, number, db_hash.clone(), toml_hash.clone())?;
         if ctx.json {
             print_json(&json!({
                 "v": 1, "event": "hub-pushed", "version": number, "media_uploaded": total,
@@ -136,10 +148,16 @@ pub async fn run(ctx: &Ctx, hub: &Hub, message: Option<String>, force: bool) -> 
 }
 
 /// A 409: with `--force` (first try) retry on top of the hub's latest, else refuse.
-fn stale(v: &Value, retry: bool) -> Result<Option<u64>> {
+fn stale(v: &Value, retry: bool, forced: bool) -> Result<Option<u64>> {
     let latest = v.get("latest").and_then(Value::as_u64);
     if retry {
         return Ok(latest);
+    }
+    if forced {
+        bail!(
+            "the hub moved on again while pushing (it now has version {}); retry",
+            latest.unwrap_or(0)
+        );
     }
     match latest {
         Some(n) => bail!("hub has version {n}; pull first or --force"),
@@ -149,7 +167,7 @@ fn stale(v: &Value, retry: bool) -> Result<Option<u64>> {
 
 /// The same shape as `porter --json status` (what the hub's worker stores).
 fn summary(dir: &Path) -> Value {
-    if !dir.join("project.db").exists() {
+    if !dir.join(DB_FILE).exists() {
         return json!({});
     }
     match super::super::open(dir).and_then(|p| p.store().overview()) {
@@ -160,42 +178,95 @@ fn summary(dir: &Path) -> Value {
     }
 }
 
-/// Every top-level entry except `media/`, `.porter-hub.json` and dot-entries, as tar.zst.
-fn snapshot(dir: &Path) -> Result<tempfile::NamedTempFile> {
-    let tmp = tempfile::NamedTempFile::new().context("creating a temp file")?;
-    let enc = zstd::Encoder::new(tmp.reopen()?, 3)?;
-    let mut tar = tar::Builder::new(enc);
-    tar.follow_symlinks(false);
+struct Snapshot {
+    file: tempfile::NamedTempFile,
+    /// `db_hash` and sha256 of exactly what was packed, for the sync file.
+    db_hash: Option<String>,
+    toml_hash: Option<String>,
+}
+
+/// Top-level entries the snapshot leaves out: dot-entries (`.porter-hub.json`, pull
+/// staging), `media/` (uploaded by hash), `uploads/` (client dumps) and SQLite sidecars
+/// (the db is packed as a consistent copy instead).
+pub fn excluded(name: &str) -> bool {
+    let l = name.to_ascii_lowercase();
+    name.starts_with('.')
+        || l == "media"
+        || l == "uploads"
+        || l.ends_with("-wal")
+        || l.ends_with("-shm")
+        || l.ends_with("-journal")
+}
+
+/// tar.zst of the project: project.db as a `VACUUM INTO` copy, porter.toml as the bytes
+/// hashed, everything else walked; a symlink or special file at any depth is refused.
+fn snapshot(dir: &Path) -> Result<Snapshot> {
+    let file = tempfile::NamedTempFile::new().context("creating a temp file")?;
+    let scratch = tempfile::tempdir().context("creating a temp dir")?;
+    let mut tar = tar::Builder::new(zstd::Encoder::new(file.reopen()?, 3)?);
+    tar.mode(tar::HeaderMode::Deterministic);
     let mut names: Vec<_> = std::fs::read_dir(dir)
         .with_context(|| format!("reading {}", dir.display()))?
         .flatten()
-        .map(|e| e.file_name())
-        .filter(|n| {
-            let n = n.to_string_lossy();
-            !n.starts_with('.') && n != "media"
-        })
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| !excluded(n))
         .collect();
     names.sort();
+    let (mut db_hash, mut toml_hash) = (None, None);
     for name in names {
         let path = dir.join(&name);
-        let meta = std::fs::symlink_metadata(&path)?;
-        if meta.is_dir() {
-            tar.append_dir_all(&name, &path)
-        } else if meta.is_file() {
-            tar.append_path_with_name(&path, &name)
+        if name == DB_FILE {
+            let copy = scratch.path().join(DB_FILE);
+            db_hash = copy_db(dir, &copy)?;
+            tar.append_path_with_name(&copy, DB_FILE)
+                .context("packing project.db")?;
+        } else if name == "porter.toml" {
+            let bytes = std::fs::read(&path).context("reading porter.toml")?;
+            toml_hash = Some(hex(&sha2::Sha256::digest(&bytes)));
+            let mut h = tar::Header::new_gnu();
+            h.set_size(bytes.len() as u64);
+            h.set_mode(0o644);
+            h.set_entry_type(tar::EntryType::Regular);
+            tar.append_data(&mut h, "porter.toml", &bytes[..])
+                .context("packing porter.toml")?;
         } else {
-            eprintln!(
-                "warning: skipping {} (not a file or folder)",
-                path.display()
-            );
-            continue;
+            add(&mut tar, &path, Path::new(&name))?;
         }
-        .with_context(|| format!("packing {}", path.display()))?;
     }
     tar.into_inner()?.finish()?.sync_all()?;
-    Ok(tmp)
+    Ok(Snapshot {
+        file,
+        db_hash,
+        toml_hash,
+    })
 }
 
+/// Appends a regular file or a folder (recursively, sorted); refuses anything else.
+fn add<W: std::io::Write>(tar: &mut tar::Builder<W>, path: &Path, name: &Path) -> Result<()> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.is_file() {
+        return tar
+            .append_path_with_name(path, name)
+            .with_context(|| format!("packing {}", path.display()));
+    }
+    if !meta.is_dir() {
+        bail!(
+            "{} is a symlink or special file; porter hub only pushes files and folders (move it out of the project)",
+            path.display()
+        );
+    }
+    tar.append_dir(name, path)
+        .with_context(|| format!("packing {}", path.display()))?;
+    let mut kids: Vec<_> = std::fs::read_dir(path)?
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    kids.sort();
+    for k in kids {
+        add(tar, &path.join(&k), &name.join(&k))?;
+    }
+    Ok(())
+}
 /// Hashes of `media/<h0h1>/<h2h3>/<sha256>` files.
 fn media_hashes(dir: &Path) -> Result<Vec<String>> {
     let mut out = Vec::new();
