@@ -343,7 +343,13 @@ versioning or replication. With versioning on, retention's deletes only add dele
 expiration rule (e.g. 30 days), or deleted projects' data stays in the bucket.
 
 A database restored without the matching objects shows versions whose snapshots fail to load. Objects without
-database rows are harmless but take space. Restore both from about the same time.
+database rows are harmless but take space, with one exception: retention empties the storage of a project this
+database has retired, which it knows from that project's `retention.delete` row in `audit_log`. Keep those audit
+rows. Objects of projects the database has never heard of are left alone. Restore both from about the same time.
+
+**Stop the worker before restoring, or before pointing it at an empty or different database** (`docker compose -p
+<app> stop worker`), and start it only once the restore is complete. Retention runs when the worker starts; against
+the wrong database it can delete projects whose rows say they're archived and past retention.
 
 ## 10. Volumes
 

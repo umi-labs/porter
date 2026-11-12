@@ -273,7 +273,8 @@ export async function abortUpload(db: Db, actor: Actor, slug: string, id: string
 
 /** Client dumps carry personal data: downloading needs `push` (owner, developer), not `pull` (viewers). */
 export async function downloadUpload(db: Db, actor: Actor, slug: string, id: string) {
-  const { p, u } = await load(db, actor, slug, id, "push");
+  // Reading only: allowed on an archived project until retention deletes it.
+  const { p, u } = await load(db, actor, slug, id, "push", { archivedOk: true });
   if (u.state !== "ready") throw new HttpError(409, `Upload is ${u.state}, not ready`);
   const url = await store.presignGet(u.objectKey, store.URL_TTL_SECONDS, contentDisposition(u.filename));
   await audit(db, actor, p.id, "upload.download", u.id);

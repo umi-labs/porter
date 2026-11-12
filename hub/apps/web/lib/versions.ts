@@ -101,14 +101,15 @@ export async function getVersion(db: Db, actor: Actor, slug: string, n: string) 
   };
 }
 
-export async function initVersion(db: Db, actor: Actor, slug: string, input: unknown) {
-  const { project: p } = await access(db, actor, slug, "push");
-  const { base_version, snapshot_sha256, media_hashes } = parse(schemas.init, input);
-  // A run's result lands as latest+1 built from its own base: a push now would be buried under it on the next pull.
+/** A run's result lands as latest+1 built from its own base: a push now would be buried under it on the next pull. */
+async function refuseWhileRunning(
+  db: Db | Parameters<Parameters<Db["transaction"]>[0]>[0],
+  projectId: string,
+) {
   const [busy] = await db
     .select({ id: run.id })
     .from(run)
-    .where(and(eq(run.projectId, p.id), inArray(run.state, ["queued", "running"])));
+    .where(and(eq(run.projectId, projectId), inArray(run.state, ["queued", "running"])));
   if (busy)
     throw new HttpError(
       409,
@@ -117,6 +118,12 @@ export async function initVersion(db: Db, actor: Actor, slug: string, input: unk
         run_id: busy.id,
       },
     );
+}
+
+export async function initVersion(db: Db, actor: Actor, slug: string, input: unknown) {
+  const { project: p } = await access(db, actor, slug, "push");
+  const { base_version, snapshot_sha256, media_hashes } = parse(schemas.init, input);
+  await refuseWhileRunning(db, p.id);
   const latest = await latestOf(db, p.id);
   // Fail early so the client doesn't upload gigabytes for a push that will be refused.
   if (latest !== base_version) throw new HttpError(409, "Base version is not the latest", { latest });
@@ -230,6 +237,8 @@ export async function commitVersion(db: Db, actor: Actor, slug: string, input: u
     return await db.transaction(async (tx) => {
       // Serialise pushes to one project so the latest check and the insert can't interleave.
       await tx.select({ id: project.id }).from(project).where(eq(project.id, p.id)).for("update");
+      // Checked again here: a run may have been queued while this push uploaded.
+      await refuseWhileRunning(tx, p.id);
       // Claim the init inside the transaction: if retention (or a concurrent commit) took it meanwhile, stop here.
       const [spent] = await tx
         .delete(versionUpload)

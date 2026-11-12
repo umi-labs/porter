@@ -98,9 +98,10 @@ export async function retireProject(
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /**
- * Empties `projects/<id>/` for every id with no project row: storage a retirement couldn't finish, or a push PUT
- * that landed after it. Project ids are never reused, so an id missing from the table is gone for good. The bucket
- * must be this hub's alone (DEPLOY.md): another hub's projects look orphaned from here.
+ * Empties `projects/<id>/` for ids this database retired (a `retention.delete` audit row) whose project row is gone:
+ * storage a retirement couldn't finish, or a push PUT that landed after it. An id with no row and no such audit row
+ * is left alone: an empty, wrong or older database must never turn into deleting the bucket. The bucket must still
+ * be this hub's alone (DEPLOY.md).
  */
 export async function sweepOrphanPrefixes(
   db: Db,
@@ -112,9 +113,17 @@ export async function sweepOrphanPrefixes(
   const live = new Set(
     (await db.select({ id: project.id }).from(project).where(inArray(project.id, ids))).map((r) => r.id),
   );
+  const retired = new Set(
+    (
+      await db
+        .select({ id: auditLog.targetId })
+        .from(auditLog)
+        .where(and(eq(auditLog.action, "retention.delete"), inArray(auditLog.targetId, ids)))
+    ).map((r) => r.id),
+  );
   let n = 0;
   for (const id of ids) {
-    if (live.has(id)) continue;
+    if (live.has(id) || !retired.has(id)) continue;
     try {
       n += await emptyPrefix(keys.projectPrefix(id));
     } catch (e) {

@@ -540,6 +540,9 @@ async function commitResult(
   await hooks.flush(); // everything buffered goes in before the commit transaction
   try {
     await db.transaction(async (tx) => {
+      // The worker's 10 s statement_timeout would fail this commit while retention's init sweep holds the project
+      // lock; waiting a while is cheaper than losing the run's result.
+      await tx.execute(sql`set local statement_timeout = '2min'`);
       await hooks.holdLease(tx); // still running, still ours: else nothing is committed
       await tx.select({ id: project.id }).from(project).where(eq(project.id, r.projectId)).for("update");
       const [l] = await tx

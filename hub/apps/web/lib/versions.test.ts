@@ -242,6 +242,24 @@ describe("push and pull", () => {
     }
   });
 
+  test("commit is refused if a run was queued after init; the init survives for a retry", async () => {
+    const latest = (await conn.db.select().from(projectVersion).where(eq(projectVersion.projectId, pid)))
+      .length;
+    const x = await push("dev", latest, []);
+    const [r] = await conn.db
+      .insert(run)
+      .values({ projectId: pid, stages: ["analyse"] })
+      .returning();
+    try {
+      const res = await commit("dev", x.init.upload_id, latest);
+      expect(res.status).toBe(409);
+      expect(await json(res)).toMatchObject({ run_id: r.id });
+    } finally {
+      await conn.db.delete(run).where(eq(run.id, r.id));
+    }
+    expect((await commit("dev", x.init.upload_id, latest)).status).toBe(201);
+  });
+
   test("concurrent commits from the same base: exactly one wins", async () => {
     const latest = (await conn.db.select().from(projectVersion).where(eq(projectVersion.projectId, pid)))
       .length;

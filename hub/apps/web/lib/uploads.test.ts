@@ -551,6 +551,15 @@ describe("visibility and download", () => {
     expect(await actions(clientUp)).toContain("upload.download");
   });
 
+  test("an archived project's uploads can still be downloaded", async () => {
+    await conn.db.update(project).set({ archivedAt: new Date() }).where(eq(project.id, pid));
+    try {
+      expect((await api.downloadUpload(req("owner"), idp(clientUp))).status).toBe(200);
+    } finally {
+      await conn.db.update(project).set({ archivedAt: null }).where(eq(project.id, pid));
+    }
+  });
+
   test("download needs a ready upload", async () => {
     const c = await json(await create("client", { filename: "a.sql", size: 1, purpose: "dump" }));
     expect((await api.downloadUpload(req("owner"), idp(c.id))).status).toBe(409);

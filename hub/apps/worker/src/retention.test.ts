@@ -193,6 +193,20 @@ describe("retention", () => {
     expect((await listSizes(keys.projectPrefix(live.p.id))).size).toBe(3);
   });
 
+  test("a prefix with no project row and no retention audit row is never swept (empty or older database)", async () => {
+    const { p } = await seed(null);
+    await conn.db.delete(versionMedia).where(eq(versionMedia.projectId, p.id));
+    await conn.db.delete(project).where(eq(project.id, p.id)); // gone, but not retired by this database
+    expect(await sweepOrphanPrefixes(conn.db, ours)).toBe(0);
+    expect((await listSizes(keys.projectPrefix(p.id))).size).toBe(3);
+    // Once this database has retired it (the audit row), the prefix goes.
+    await conn.db
+      .insert(auditLog)
+      .values({ action: "retention.delete", targetType: "project", targetId: p.id });
+    expect(await sweepOrphanPrefixes(conn.db, ours)).toBe(3);
+    expect((await listSizes(keys.projectPrefix(p.id))).size).toBe(0);
+  });
+
   test("the row delete failing leaves storage untouched: the project stays whole for the next pass", async () => {
     const { p } = await seed(100, 90);
     await conn.db.execute(
