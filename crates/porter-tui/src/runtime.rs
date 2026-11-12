@@ -253,6 +253,15 @@ fn exec(cmd: Cmd, app: &App, tx: &mpsc::UnboundedSender<Msg>, run: &mut RunSlot)
                 let _ = tx.send(Msg::Data(DataMsg::Preview(c)));
             });
         }
+        Cmd::RecheckApply => {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let c = tokio::task::spawn_blocking(move || actions::preview_info(&session))
+                    .await
+                    .unwrap_or(None);
+                let _ = tx.send(Msg::Data(DataMsg::ApplyRechecked(c)));
+            });
+        }
         Cmd::OpenReport(name) => {
             let tx = tx.clone();
             tokio::spawn(async move {

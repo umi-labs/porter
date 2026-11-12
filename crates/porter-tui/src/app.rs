@@ -626,6 +626,19 @@ fn on_data(app: &mut App, d: DataMsg) -> Vec<Cmd> {
                 .unwrap_or_default();
             app.modal = Some(Modal::ConfirmApply(ApplyModal { url, preview }));
         }
+        DataMsg::ApplyRechecked(info) => {
+            // Only while the prompt is still open; a fresh read of "no dry run" refuses too.
+            if matches!(app.modal, Some(Modal::ConfirmApply(_))) {
+                return match info {
+                    Some(p) => apply_decide(app, Some(p)),
+                    None => {
+                        app.modal = None;
+                        app.push_log("apply refused: no dry run yet — press l first".into());
+                        vec![]
+                    }
+                };
+            }
+        }
         DataMsg::Config(msgs) => {
             for m in &msgs {
                 app.push_log(format!("porter.toml: {m}"));
@@ -828,13 +841,25 @@ fn resolve_confirm(app: &mut App) -> Vec<Cmd> {
     vec![Cmd::Resolve(id, r)]
 }
 
-/// `y` in the apply prompt: runs the real load, but only when a dry run showed what it
-/// would write.
+/// `y` in the apply prompt: the verdict is re-read now (the dry run may have gone stale
+/// while the prompt was open); `DataMsg::ApplyRechecked` then decides.
 fn apply_confirmed(app: &mut App) -> Vec<Cmd> {
+    let Some(Modal::ConfirmApply(m)) = &app.modal else {
+        return vec![];
+    };
+    if m.preview.as_ref().is_none_or(|p| p.stale.is_some()) {
+        return apply_decide(app, None);
+    }
+    vec![Cmd::RecheckApply]
+}
+
+/// Runs the real load only when a dry run showed what it would write and is still fresh.
+fn apply_decide(app: &mut App, fresh: Option<PreviewInfo>) -> Vec<Cmd> {
     let Some(Modal::ConfirmApply(m)) = app.modal.take() else {
         return vec![];
     };
-    match &m.preview {
+    let current = fresh.or(m.preview);
+    match &current {
         None => {
             app.push_log("apply refused: no dry run yet — press l first".into());
             return vec![];
@@ -1256,7 +1281,15 @@ mod tests {
         let (mut app, _d) = live_app();
         press(&mut app, KeyCode::Char('L'));
         update(&mut app, Msg::Data(DataMsg::Preview(Some(fresh()))));
-        assert_eq!(press(&mut app, KeyCode::Char('y')), [apply_cmd()]);
+        assert_eq!(press(&mut app, KeyCode::Char('y')), [Cmd::RecheckApply]);
+        assert!(
+            app.running.is_none(),
+            "nothing writes until the recheck lands"
+        );
+        assert_eq!(
+            update(&mut app, Msg::Data(DataMsg::ApplyRechecked(Some(fresh())))),
+            [apply_cmd()]
+        );
         assert!(app.modal.is_none() && app.running.is_some());
     }
 
@@ -1297,6 +1330,41 @@ mod tests {
             "{:?}",
             app.log.back().map(|l| &l.0)
         );
+    }
+
+    #[test]
+    fn staleness_is_rechecked_on_y() {
+        let (mut app, _d) = live_app();
+        press(&mut app, KeyCode::Char('L'));
+        update(&mut app, Msg::Data(DataMsg::Preview(Some(fresh()))));
+        assert_eq!(press(&mut app, KeyCode::Char('y')), [Cmd::RecheckApply]);
+        // Went stale while the prompt was open: refused, nothing runs.
+        let mut p = fresh();
+        p.stale = Some("normalise ran after it".into());
+        assert!(update(&mut app, Msg::Data(DataMsg::ApplyRechecked(Some(p)))).is_empty());
+        assert!(app.running.is_none() && app.modal.is_none());
+        assert!(app.log.back().is_some_and(|l| l.0.contains("stale")));
+        // A late answer with no prompt open does nothing.
+        assert!(update(&mut app, Msg::Data(DataMsg::ApplyRechecked(Some(fresh())))).is_empty());
+        assert!(app.running.is_none());
+    }
+
+    #[test]
+    fn normalise_run_after_dry_run_makes_preview_stale() {
+        let (app, d) = live_app();
+        let s = app.session.clone().unwrap();
+        let dir = d.path().join("raw/load-preview");
+        std::fs::create_dir_all(dir.join("posts")).unwrap();
+        std::fs::write(dir.join("posts/a.json"), "{}").unwrap();
+        std::fs::write(dir.join(".done"), "").unwrap();
+        // porter.toml predates the dry run, so only a later normalise can make it stale.
+        let p = s.load_preview_counts().unwrap();
+        assert_eq!(s.preview_stale(&p), None);
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let store = s.project().store();
+        let run = store.begin_run(Stage::Normalise).unwrap();
+        store.end_run(run, &Default::default()).unwrap();
+        assert_eq!(s.preview_stale(&p), Some("normalise ran after it"));
     }
 
     #[test]

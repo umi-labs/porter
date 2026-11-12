@@ -53,6 +53,8 @@ pub enum DataMsg {
     Resolved(Result<(Uuid, Resolution), String>),
     /// Items per collection in the last dry-run preview; None when there was none.
     Preview(Option<PreviewInfo>),
+    /// The dry run's staleness re-read when `y` was pressed in the apply prompt.
+    ApplyRechecked(Option<PreviewInfo>),
     /// What reloading porter.toml after an edit found ("config OK" when nothing).
     Config(Vec<String>),
     /// A report was written and opened (its path), or why not, verbatim.
@@ -88,6 +90,8 @@ pub enum Cmd {
     Resolve(Uuid, Resolution),
     /// Read the dry-run preview counts the apply confirmation shows.
     PreviewCounts,
+    /// Re-read the dry run's staleness (the apply prompt's `y`).
+    RecheckApply,
     OpenEditor,
     OpenReport(String),
     Copy(String),

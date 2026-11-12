@@ -263,24 +263,30 @@ impl Session {
     }
 
     /// Why a preview can no longer be trusted: the data was re-normalised, or porter.toml
-    /// was edited, after it was made.
+    /// was edited, after it was made. Fails closed: anything that cannot be checked
+    /// (file times, run history, timestamps) counts as stale.
     pub fn preview_stale(&self, p: &Preview) -> Option<&'static str> {
-        let edited = std::fs::metadata(self.project.dir().join("porter.toml"))
-            .and_then(|m| m.modified())
-            .is_ok_and(|m| m > p.at);
-        if edited {
-            return Some("porter.toml was edited after it");
+        match std::fs::metadata(self.project.dir().join("porter.toml")).and_then(|m| m.modified()) {
+            Ok(m) if m > p.at => return Some("porter.toml was edited after it"),
+            Ok(_) => {}
+            Err(_) => return Some("porter.toml could not be checked"),
         }
-        let renormalised = self
-            .project
-            .store()
-            .runs(Stage::Normalise)
-            .ok()?
-            .iter()
-            .filter_map(|r| r.ended_at.as_deref())
-            .filter_map(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-            .any(|t| std::time::SystemTime::from(t) > p.at);
-        renormalised.then_some("normalise ran after it")
+        let Ok(runs) = self.project.store().runs(Stage::Normalise) else {
+            return Some("the run history could not be read");
+        };
+        for r in &runs {
+            let Some(t) = r.ended_at.as_deref() else {
+                continue;
+            };
+            match chrono::DateTime::parse_from_rfc3339(t) {
+                Ok(t) if std::time::SystemTime::from(t) > p.at => {
+                    return Some("normalise ran after it");
+                }
+                Ok(_) => {}
+                Err(_) => return Some("the run history has an unreadable timestamp"),
+            }
+        }
+        None
     }
 
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Event> {
@@ -788,6 +794,24 @@ mod tests {
         let out = h.wait().await;
         assert_eq!(out.code, 1);
         assert!(out.messages[0].contains("boom"), "{:?}", out.messages);
+    }
+
+    #[test]
+    fn preview_stale_fails_closed_on_store_error() {
+        let d = tempfile::tempdir().unwrap();
+        crate::project::Project::init(d.path(), "demo", "wordpress").unwrap();
+        let s = Session::open(d.path()).unwrap();
+        let dir = d.path().join("raw/load-preview");
+        std::fs::create_dir_all(dir.join("posts")).unwrap();
+        std::fs::write(dir.join("posts/a.json"), "{}").unwrap();
+        std::fs::write(dir.join(crate::destinations::payload::PREVIEW_DONE), "").unwrap();
+        let p = s.load_preview_counts().unwrap();
+        assert_eq!(s.preview_stale(&p), None);
+        s.project.store().close().unwrap();
+        assert!(
+            s.preview_stale(&p).is_some(),
+            "unreadable history reads as stale"
+        );
     }
 
     #[test]
