@@ -143,6 +143,14 @@ async function started(id: string) {
   }
   throw new Error("porter never started");
 }
+const alive = (p: number) => {
+  try {
+    process.kill(p, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 const versionCount = async () =>
   (await conn.db.select().from(projectVersion).where(eq(projectVersion.projectId, pid))).length;
 const STARTED = `echo '{"v":1,"event":"stage-started","stage":"analyse","run":"x"}'`;
@@ -344,7 +352,9 @@ describe("worker", () => {
   });
 
   test("cancel: porter ignoring SIGINT is SIGKILLed (whole group) after killAfterMs", async () => {
-    const bin = fakePorter(`trap '' INT\n${STARTED}\nsleep 20 >/dev/null 2>&1 &\nwait $!`);
+    // The grandchild keeps porter's stdout open and records its pid: only a kill of the whole group ends it.
+    const gc = join(tmp, `gc-${randomUUID()}.pid`);
+    const bin = fakePorter(`trap '' INT\n${STARTED}\nsleep 20 &\necho $! > "${gc}"\nwait $!`);
     const t0 = Date.now();
     const { run: r } = await runOn(v1, ["analyse"], {
       bin,
@@ -357,6 +367,23 @@ describe("worker", () => {
     expect(Date.now() - t0).toBeLessThan(10_000);
     expect(r.state).toBe("cancelled");
     expect(r.exitCode).toBeNull();
+    const gcPid = Number(readFileSync(gc, "utf8"));
+    expect(alive(gcPid)).toBe(false);
+  });
+
+  test("a heartbeat that never returns: lease age alone marks the run lost, porter killed, nothing committed", async () => {
+    const before = await versionCount();
+    const bin = fakePorter(`${STARTED}\nsleep 20 >/dev/null 2>&1 &\nwait $!`);
+    const t0 = Date.now();
+    const { run: r } = await runOn(v1, ["analyse"], {
+      bin,
+      settings: { heartbeatMs: 50, leaseMs: 500, heartbeat: () => new Promise<boolean>(() => {}) },
+    });
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(r.state).toBe("running"); // left for reclaimLost elsewhere; this worker keeps nothing
+    expect(r.resultVersionId).toBeNull();
+    expect(await versionCount()).toBe(before);
+    await conn.db.update(run).set({ state: "failed" }).where(eq(run.id, r.id));
   });
 
   test("cancel between stages: the rest never runs and the run is cancelled, not finished", async () => {
@@ -423,13 +450,19 @@ describe("worker", () => {
 
   test("secret values porter echoes are redacted from events, stderr and errors", async () => {
     const value = `tok_${randomBytes(8).toString("hex")}`;
+    const pem = `-----BEGIN KEY-----\nline1${randomBytes(6).toString("hex")}\nline2${randomBytes(6).toString("hex")}\n-----END KEY-----`;
+    const enc = (name: string, v: string) => ({ projectId: pid, name, ...encryptSecret(pid, name, v) });
+    // FTP_PROXY: saved before it became reserved (inserted directly); it must not reach porter.
     await conn.db
       .insert(runSecret)
-      .values({ projectId: pid, name: "MY_TOKEN", ...encryptSecret(pid, "MY_TOKEN", value) });
+      .values([enc("MY_TOKEN", value), enc("MY_PEM", pem), enc("FTP_PROXY", "http://proxy.example:3128")]);
+    const pad = "x".repeat(4096 - "not json ".length - 4); // the token straddles the 4 KB malformed-line cut
     const bin = fakePorter(
       [
-        `echo "{\\"v\\":1,\\"event\\":\\"test-echo\\",\\"t\\":\\"Bearer $MY_TOKEN\\"}"`,
+        `echo "{\\"v\\":1,\\"event\\":\\"test-echo\\",\\"t\\":\\"Bearer $MY_TOKEN\\",\\"proxy\\":\\"$FTP_PROXY\\"}"`,
         `echo "not json $MY_TOKEN"`,
+        `echo "not json ${pad}$MY_TOKEN"`,
+        `printf '%s\\n' "$MY_PEM"`,
         `echo "error: auth failed with $MY_TOKEN" >&2`,
         "exit 1",
       ].join("\n"),
@@ -437,8 +470,15 @@ describe("worker", () => {
     const { run: r, events, list } = await runOn(v1, ["analyse"], { bin });
     await conn.db.delete(runSecret).where(eq(runSecret.projectId, pid));
     expect(r.state).toBe("failed");
-    expect(JSON.stringify(events)).not.toContain(value);
+    const stored = JSON.stringify(events);
+    expect(stored).not.toContain(value);
+    expect(stored).not.toContain(value.slice(0, 8)); // no fragment left by the 4 KB cut
+    for (const l of pem.split("\n").slice(1, 3)) expect(stored).not.toContain(l);
     expect(String(r.error)).not.toContain(value);
+    expect(list.find((e) => e.event === "test-echo")?.proxy).toBe("");
+    const skipped = list.find((e) => e.event === "hub-note" && e.kind === "secret-skipped");
+    expect(skipped?.message).toContain("FTP_PROXY");
+    expect(String(skipped?.message)).not.toContain("proxy.example");
     expect(list.find((e) => e.event === "test-echo")?.t).toBe("Bearer [secret:MY_TOKEN]");
     expect(list.find((e) => e.event === "hub-malformed")?.line).toBe("not json [secret:MY_TOKEN]");
     expect(list.find((e) => e.event === "hub-stderr")?.text).toContain("auth failed with [secret:MY_TOKEN]");
@@ -458,7 +498,23 @@ describe("worker", () => {
     for (const id of [done.id, live.id]) mkdirSync(join(s.scratchDir, id, "project"), { recursive: true });
     writeFileSync(join(s.scratchDir, done.id, "porter.pid"), String(stale.pid));
     mkdirSync(join(s.scratchDir, "not-a-run"), { recursive: true });
-    expect(await cleanScratch(conn.db, s.scratchDir, [])).toEqual([done.id]);
+    // A run id this database has never seen: maybe another hub's worker sharing the dir. Left alone.
+    const unknown = randomUUID();
+    mkdirSync(join(s.scratchDir, unknown, "project"), { recursive: true });
+    // A stale pid that isn't porter any more (recycled): not signalled.
+    const [other] = await conn.db
+      .insert(run)
+      .values({ projectId: pid, baseVersionId: v1.id, stages: ["analyse"], state: "finished" })
+      .returning();
+    const bystander = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    mkdirSync(join(s.scratchDir, other.id), { recursive: true });
+    writeFileSync(join(s.scratchDir, other.id, "porter.pid"), String(bystander.pid));
+    // bin "sleep" stands in for porter for `done`; `other` is checked against "porter" below.
+    expect(await cleanScratch(conn.db, s.scratchDir, [other.id], "sleep")).toEqual([done.id]);
+    expect(await cleanScratch(conn.db, s.scratchDir, [], "porter")).toEqual([other.id]);
+    expect(alive(bystander.pid as number)).toBe(true);
+    bystander.kill("SIGKILL");
+    expect(existsSync(join(s.scratchDir, unknown))).toBe(true);
     await exited; // SIGKILLed
     expect(existsSync(join(s.scratchDir, done.id))).toBe(false);
     expect(existsSync(join(s.scratchDir, live.id))).toBe(true);

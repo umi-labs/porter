@@ -26,7 +26,7 @@ export async function loop(db: Db, s: ReturnType<typeof settings>, signal: Abort
       if (Date.now() >= nextSweep) {
         nextSweep = Date.now() + SWEEP_MS;
         await reclaimLost(db);
-        await cleanScratch(db, s.scratchDir, runs.keys());
+        await cleanScratch(db, s.scratchDir, runs.keys(), s.bin);
         await sweepUploads(db);
       }
       while (runs.size < s.concurrency) {
@@ -47,7 +47,9 @@ export async function loop(db: Db, s: ReturnType<typeof settings>, signal: Abort
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const s = settings();
-  const { db, client } = connect();
+  // A query that hangs server-side (locks, a stalled pooler) errors after 10 s instead of stalling the loop.
+  // A network partition doesn't reach the server at all; the heartbeat's lease-age check covers that.
+  const { db, client } = connect(undefined, { connection: { statement_timeout: 10_000 } });
   const ctl = new AbortController();
   // SIGTERM/SIGINT: stop claiming and SIGINT every porter process group (they run detached, so a terminal
   // Ctrl-C doesn't reach them on its own). Their runs end "interrupted" with the result kept. A second signal

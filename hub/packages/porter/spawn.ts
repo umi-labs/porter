@@ -8,21 +8,31 @@ export const KILL_AFTER_MS = 30_000;
 
 export type Exit = { code: number | null; signal: NodeJS.Signals | null; error?: string };
 
-/** Keeps the last `max` bytes written to it. */
+/**
+ * Keeps the last `max` bytes written to it, plus a `margin` so redaction runs before the cut: a secret that
+ * straddles the 64 KB boundary is still whole when `toString(redact)` replaces it.
+ */
 export class Tail {
   private buf = Buffer.alloc(0);
-  constructor(private max = STDERR_TAIL_BYTES) {}
+  constructor(
+    private max = STDERR_TAIL_BYTES,
+    private margin = STDERR_TAIL_BYTES,
+  ) {}
   push(chunk: Buffer) {
     this.buf = Buffer.concat([this.buf, chunk]);
-    if (this.buf.length > this.max) {
-      let start = this.buf.length - this.max;
-      // Don't start mid-character: skip UTF-8 continuation bytes (10xxxxxx).
-      while (start < this.buf.length && (this.buf[start] & 0xc0) === 0x80) start++;
-      this.buf = this.buf.subarray(start);
-    }
+    const keep = this.max + this.margin;
+    if (this.buf.length > keep) this.buf = this.buf.subarray(this.buf.length - keep);
   }
-  toString() {
-    return this.buf.toString("utf8");
+  /** The last `max` bytes after `redact`, never starting mid-character. */
+  toString(redact: (s: string) => string = (x) => x) {
+    let b = Buffer.from(redact(this.buf.toString("utf8")), "utf8");
+    if (b.length > this.max) {
+      let start = b.length - this.max;
+      // Don't start mid-character: skip UTF-8 continuation bytes (10xxxxxx).
+      while (start < b.length && (b[start] & 0xc0) === 0x80) start++;
+      b = b.subarray(start);
+    }
+    return b.toString("utf8");
   }
 }
 
@@ -57,6 +67,8 @@ export function spawnPorter(opts: {
   env: Record<string, string>;
   onEvent: (e: StoredEvent) => void;
   tail: Tail;
+  /** Applied to each whole stdout line before it is parsed (and truncated, if malformed). */
+  redact?: (s: string) => string;
 }): Spawned {
   const child = spawn(opts.bin, ["--json", "--project", opts.dir, ...opts.args], {
     env: opts.env,
@@ -67,7 +79,7 @@ export function spawnPorter(opts: {
   child.stderr.on("data", (c: Buffer) => opts.tail.push(c));
   const lines = createInterface({ input: child.stdout, crlfDelay: Number.POSITIVE_INFINITY });
   lines.on("line", (l) => {
-    if (l.trim()) opts.onEvent(parseLine(l));
+    if (l.trim()) opts.onEvent(parseLine(opts.redact ? opts.redact(l) : l));
   });
   const stdoutClosed = new Promise<void>((r) => lines.once("close", () => r()));
   let killer: NodeJS.Timeout | undefined;

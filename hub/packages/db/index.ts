@@ -5,9 +5,9 @@ import * as schema from "./schema";
 export * from "./schema";
 export { schema };
 
-export function connect(url = process.env.DATABASE_URL) {
+export function connect(url = process.env.DATABASE_URL, options: postgres.Options<Record<string, never>> = {}) {
   if (!url) throw new Error("DATABASE_URL is not set");
-  const client = postgres(url);
+  const client = postgres(url, options);
   return { db: drizzle(client, { schema }), client };
 }
 

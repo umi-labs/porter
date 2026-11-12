@@ -1,8 +1,8 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import {
@@ -24,6 +24,7 @@ import {
   type Spawned,
   type StageName,
   type StoredEvent,
+  secretNameProblem,
   signalGroup,
   spawnPorter,
   stripWpDb,
@@ -31,7 +32,7 @@ import {
 } from "@porter-hub/porter";
 import { deleteObject, getStream, keys, putFile } from "@porter-hub/storage/s3";
 import { extractTarZst, packTarZst } from "@porter-hub/storage/tar";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { type Db, HEARTBEAT_MS, heartbeat, LEASE_MS, notify, type Run } from "./claim";
 
 export type Settings = {
@@ -41,6 +42,8 @@ export type Settings = {
   heartbeatMs?: number;
   cancelPollMs?: number;
   leaseMs?: number;
+  /** Injected in tests (e.g. a heartbeat that never returns). */
+  heartbeat?: typeof heartbeat;
 };
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 type Final = { state: "finished" | "failed" | "cancelled"; exitCode: number | null; error: string | null };
@@ -136,28 +139,64 @@ export function interruptAll(killAfterMs = KILL_AFTER_MS) {
   for (const p of active.values()) p.interrupt(killAfterMs);
 }
 
+let ownPgid: number | null | undefined;
+/** This process's group id (never signalled by the stale-pid sweep). */
+const myPgid = () => {
+  if (ownPgid === undefined) {
+    try {
+      ownPgid = Number(
+        execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim(),
+      );
+    } catch {
+      ownPgid = null;
+    }
+  }
+  return ownPgid;
+};
+/** The command name of `pid` (`ps -o comm=`, macOS and Linux), or null if there's no such process. */
+const commOf = (pid: number) => {
+  try {
+    return execFileSync("ps", ["-o", "comm=", "-p", String(pid)], { encoding: "utf8" }).trim() || null;
+  } catch {
+    return null;
+  }
+};
+
 /**
- * Deletes scratch dirs (`<scratchDir>/<runId>`) whose run isn't running, SIGKILLing any porter process group
- * still recorded in their porter.pid (left over from a crashed worker). `keep`: runs this process is executing.
+ * Deletes scratch dirs (`<scratchDir>/<runId>`) whose run exists in this database and isn't running,
+ * SIGKILLing the porter process group still recorded in their porter.pid (left over from a crashed worker).
+ * Ids this database doesn't know are left alone: they may belong to a worker on another database sharing the
+ * dir. A stale pid is only signalled if it isn't us or our group and the process is still `bin`
+ * (a recycled pid belongs to something else). `keep`: runs this process is executing.
  */
-export async function cleanScratch(db: Db, scratchDir: string, keep: Iterable<string> = active.keys()) {
+export async function cleanScratch(
+  db: Db,
+  scratchDir: string,
+  keep: Iterable<string> = active.keys(),
+  bin = "porter",
+) {
   const mine = new Set(keep);
   const ids = (await readdir(scratchDir).catch(() => [] as string[])).filter(
     (n) => UUID.test(n) && !mine.has(n),
   );
   if (!ids.length) return [];
-  const running = new Set(
-    (
-      await db
-        .select({ id: run.id })
-        .from(run)
-        .where(and(inArray(run.id, ids), eq(run.state, "running")))
-    ).map((r) => r.id),
-  );
+  const stale = (
+    await db
+      .select({ id: run.id })
+      .from(run)
+      .where(and(inArray(run.id, ids), ne(run.state, "running")))
+  ).map((r) => r.id);
   const removed: string[] = [];
-  for (const id of ids.filter((i) => !running.has(i))) {
+  for (const id of stale) {
     const pid = Number(await readFile(join(scratchDir, id, "porter.pid"), "utf8").catch(() => ""));
-    if (Number.isInteger(pid) && pid > 1) signalGroup(pid, "SIGKILL");
+    if (
+      Number.isInteger(pid) &&
+      pid > 1 &&
+      pid !== process.pid &&
+      pid !== myPgid() &&
+      commOf(pid) === basename(bin)
+    )
+      signalGroup(pid, "SIGKILL");
     await rm(join(scratchDir, id), { recursive: true, force: true });
     removed.push(id);
   }
@@ -221,6 +260,7 @@ export async function execute(db: Db, r: Run, s: Settings) {
   const leaseMs = s.leaseMs ?? LEASE_MS;
   let lost = false;
   let lastBeat = Date.now();
+  let beating = false;
   let cancelRequested = false;
   let current: Spawned | undefined;
   const timers: NodeJS.Timeout[] = [];
@@ -277,12 +317,18 @@ export async function execute(db: Db, r: Run, s: Settings) {
 
     timers.push(
       setInterval(async () => {
+        // Measured from the last successful heartbeat on every tick: a heartbeat that hangs (a partition)
+        // neither resolves nor rejects, and by now someone may have reclaimed the run.
+        if (Date.now() - lastBeat > leaseMs) return markLost();
+        if (beating) return; // one in flight at a time
+        beating = true;
         try {
-          if (await heartbeat(db, r.id, r.workerId)) lastBeat = Date.now();
+          if (await (s.heartbeat ?? heartbeat)(db, r.id, r.workerId)) lastBeat = Date.now();
           else markLost(); // reclaimed, or claimed by someone else
         } catch {
-          // Can't reach the database: once that outlasts the lease, someone may have reclaimed the run.
-          if (Date.now() - lastBeat > leaseMs) markLost();
+          // A failed heartbeat: the age check above decides.
+        } finally {
+          beating = false;
         }
       }, s.heartbeatMs ?? HEARTBEAT_MS),
       setInterval(async () => {
@@ -325,7 +371,18 @@ export async function execute(db: Db, r: Run, s: Settings) {
 
     const secrets = await db.select().from(runSecret).where(eq(runSecret.projectId, r.projectId));
     const values: Record<string, string> = {};
-    for (const x of secrets) values[x.name] = decryptSecret(r.projectId, x.name, x);
+    for (const x of secrets) {
+      // Re-checked here: a row saved before a name became reserved must not reach porter.
+      if (secretNameProblem(x.name)) {
+        events.push({
+          event: "hub-note",
+          kind: "secret-skipped",
+          message: `run secret ${x.name} has a reserved name and was not passed to porter; rename it`,
+        });
+        continue;
+      }
+      values[x.name] = decryptSecret(r.projectId, x.name, x);
+    }
     redact = redactor(values);
     const runEnv: Record<string, string> = { ...env, ...values };
 
@@ -342,7 +399,7 @@ export async function execute(db: Db, r: Run, s: Settings) {
         stoppedForCancel = true;
         break;
       }
-      current = spawnPorter({ bin: s.bin, dir, args, env: runEnv, onEvent: events.push, tail });
+      current = spawnPorter({ bin: s.bin, dir, args, env: runEnv, onEvent: events.push, tail, redact });
       active.set(r.id, current);
       await writeFile(join(scratch, "porter.pid"), String(current.pid ?? "")).catch(() => {});
       last = await current.done;
@@ -359,7 +416,7 @@ export async function execute(db: Db, r: Run, s: Settings) {
       ? { state: "cancelled", exitCode: null, error: null }
       : outcome(last, cancelRequested, sawIssues);
     if (o.state === "failed" && tail.toString())
-      events.push({ event: "hub-stderr", text: redact(tail.toString()) });
+      events.push({ event: "hub-stderr", text: tail.toString(redact) });
     if (last.error) return await finish(o.state, o.exitCode, o.error); // could not even start
 
     // ---- result: pack, upload, then commit the version and the final state in one transaction ----
@@ -372,7 +429,7 @@ export async function execute(db: Db, r: Run, s: Settings) {
       flush: events.flush,
     });
   } catch (e) {
-    console.error(`run ${r.id}:`, e);
+    console.error(`run ${r.id}:`, redact(String((e as Error)?.stack ?? e)));
     if (!lost) await finish("failed", null, `hub error: ${(e as Error).message}`).catch(() => {});
   } finally {
     for (const t of timers) clearInterval(t);

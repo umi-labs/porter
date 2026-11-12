@@ -107,16 +107,13 @@ export const REDACT_MIN = 6;
 export function redactor(secrets: Record<string, string>) {
   const pairs = Object.entries(secrets)
     .filter(([, v]) => v.length >= REDACT_MIN)
-    .sort((a, b) => b[1].length - a[1].length)
     .flatMap(([name, v]) => {
-      const escaped = JSON.stringify(v).slice(1, -1);
-      return escaped === v
-        ? [[v, name]]
-        : [
-            [v, name],
-            [escaped, name],
-          ];
-    });
+      // Each line of a multi-line value too (a PEM key printed raw spans several stdout lines).
+      const lines = v.includes("\n") ? v.split(/\r?\n/).filter((l) => l.length >= REDACT_MIN) : [];
+      return [v, JSON.stringify(v).slice(1, -1), ...lines].map((x) => [x, name] as const);
+    })
+    .filter(([x], i, all) => all.findIndex(([y]) => y === x) === i)
+    .sort((a, b) => b[0].length - a[0].length);
   return (text: string) => {
     let out = text;
     for (const [v, name] of pairs) out = out.split(v).join(`[secret:${name}]`);
