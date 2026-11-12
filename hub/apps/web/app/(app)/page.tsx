@@ -1,21 +1,24 @@
 import { getDb } from "@porter-hub/db";
 import Link from "next/link";
 import { Frame, PageTitle } from "../../components/ui/frame";
-import { listProjects } from "../../lib/projects";
+import { isStaff, listProjects } from "../../lib/projects";
 import { requireUser } from "../../lib/session";
 import { Empty } from "../../lib/view-parts";
+import { NewProjectForm } from "./new-project-form";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const user = await requireUser();
-  const projects = await listProjects(getDb(), user);
+  const [projects, staff] = await Promise.all([listProjects(getDb(), user), isStaff(getDb(), user)]);
   return (
     <Frame who={user.name || user.email} narrow>
       <PageTitle title="Projects" />
       {projects.length === 0 ? (
         <Empty title="No projects yet">
-          Projects appear here when someone pushes one from porter, or when you’re invited to one.
+          {staff
+            ? "Create one below, then link a porter project to it with porter hub link <slug>."
+            : "Projects appear here when you’re invited to one."}
         </Empty>
       ) : (
         <ul className="m-0 flex list-none flex-col overflow-hidden rounded-lg border border-border bg-bg p-0">
@@ -43,6 +46,7 @@ export default async function Home() {
           ))}
         </ul>
       )}
+      {staff && <NewProjectForm />}
     </Frame>
   );
 }

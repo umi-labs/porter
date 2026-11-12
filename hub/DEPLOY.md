@@ -113,12 +113,14 @@ certificates; the DNS A/AAAA records must point at the server first.
 Nothing publishes host ports; Traefik reaches the containers over Dokploy's network. Don't add a domain for `db`.
 The MinIO console (port 9001) isn't exposed; use `mc` from inside the container if you need it.
 
-Uploads can be large (client database dumps, up to 20 GiB by default). They go browser → storage in 64 MiB parts,
+Uploads can be large (client database dumps, up to 20 GiB by default). They go browser → storage in 16 MiB parts,
 not through the hub, so no proxy body-size settings are needed for the hub's domain.
 
 ## 5. Storage
 
 The hub stores everything under `projects/<project-id>/` in one bucket: snapshots, media and client uploads.
+**The bucket must be this hub's alone.** Retention empties any `projects/<id>/` prefix whose project isn't in this
+hub's database, so a second hub (or a staging copy) sharing the bucket would lose its data.
 
 Browsers PUT upload parts straight to storage, from the hub's origin. Storage therefore needs:
 
@@ -252,7 +254,24 @@ docker compose -p <app> exec db psql -U porter -d porter \
   -c "update \"user\" set email_verified = true where email = 'you@example.com'"
 ```
 
+**The first project.** Signed in as staff, the home page has a **New project** form (name, and an optional slug
+made from the name). You become its owner and land on its settings. Or from a porter project directory:
+`porter hub link <slug> --url https://hub.example.com --create --name "Acme"`, which creates it and writes `[hub]`
+into porter.toml. Then `porter hub push`.
+
 Staff can then invite clients per project (Settings → Members). Clients sign in with a magic link.
+
+**Roles** (per project):
+
+| Role        | View | Raw data, issues, runs | Push, pull, run | Pull only | Upload | Download uploads | Share | Members | Secrets |
+| ----------- | ---- | ---------------------- | --------------- | --------- | ------ | ---------------- | ----- | ------- | ------- |
+| `owner`     | yes  | yes                    | yes             |           | yes    | yes              | yes   | yes     | yes     |
+| `developer` | yes  | yes                    | yes             |           | yes    | yes              | yes   |         | yes     |
+| `viewer`    | yes  | yes                    |                 | yes       |        |                  |       |         |         |
+| `client`    | yes  |                        |                 |           | yes    |                  |       |         |         |
+
+Downloading client uploads needs push (owner, developer): dumps carry personal data, so viewers can't fetch them.
+Clients see only their own uploads.
 
 ## 7. Google OAuth (staff sign-in)
 
@@ -339,6 +358,10 @@ database rows are harmless but take space. Restore both from about the same time
 from it. Each worker needs its **own** `scratch`. Never point workers on different databases at the same
 scratch dir: at startup each worker clears scratch dirs of runs that aren't running in _its_ database.
 
+**Scaling:** raise `WORKER_CONCURRENCY` on the one worker rather than adding compose replicas. Replicas would share
+the `scratch` volume, and a worker cleaning up after a lost run could then signal another container's process by
+pid. A second worker needs its own scratch volume (mounted at the same path).
+
 ## 11. Upgrading and rollback
 
 **Upgrade:** merge to the deployed branch and press **Deploy** (or turn on auto-deploy). Dokploy rebuilds both
@@ -382,12 +405,26 @@ cleanup setting for this.
   takes a session advisory lock while it migrates, which a transaction pooler can't hold. So web's `DATABASE_URL`
   must be a direct or session-pooled connection.
 - **The MinIO digest** can disappear from Chainguard ([§5](#5-storage)). R2/S3 avoids that.
+- **Share tokens are in the link's path** (`/s/<token>`), so they appear in Traefik/Dokploy request logs (the
+  "Requests" view). The database only stores their hash. Treat those logs as sensitive, or turn off access logging
+  for `/s/`.
 - **Report share links** serve the stored HTML reports as they are. Those can include issue text, which can include
   error bodies returned by the destination. Don't share report links for projects whose destination errors may
   carry sensitive data.
 - **Retention:** archived projects are deleted for good `retention_days` (default 90) after archiving, by the
   worker's daily job: storage, database rows and cached snapshots. Each deletion is written to `audit_log`
   (`action = 'retention.delete'`, project id in `target_id`). An archived project takes no new pushes, runs or
-  uploads (409); it can still be viewed and pulled until it's deleted. There's no archive button yet. To archive or
+  uploads (409); it can still be viewed and pulled until it's deleted, and a running run or an open upload on it can
+  still be cancelled or aborted. There's no archive button yet. To archive or
   unarchive, use SQL: `update project set archived_at = now() where slug = '…'` (or `= null`). To keep a project
-  longer, raise its `retention_days`.
+  longer, raise its `retention_days`. Retention deletes the rows first and storage after: if storage fails, the
+  files are swept on a later pass (any prefix whose project no longer exists is emptied), and a failed row delete
+  leaves the project and its files whole for the next pass.
+- **Pushing while a run is going is refused** (409, naming the run): the run's result lands as the next version,
+  built from its own base, and would bury the push on the next pull. Wait for the run (or cancel it), pull, then
+  push.
+- **A remote apply needs a dry run on record.** The hub refuses `load --apply` unless the version's project has a
+  finished dry-run load ("Run a dry-run load first"); porter then checks that dry run still matches.
+- **WXR files from client uploads.** `porter hub uploads get` saves into `<project>/uploads/`, which push leaves
+  out. For a remote run, move the file into the project (outside `uploads/`) and point `[source] path` at it before
+  pushing.

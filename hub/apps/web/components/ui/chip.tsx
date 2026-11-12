@@ -103,7 +103,7 @@ export function Stale({
   children,
 }: {
   reason: string | null;
-  /** Client copy: the dim stays, the reason is just "Being redone". */
+  /** Client copy: the dim stays, the reason is just "Needs re-running". */
   plain?: boolean;
   children: ReactNode;
 }) {
@@ -113,7 +113,7 @@ export function Stale({
       <div className="flex min-w-0 flex-col gap-1.5 opacity-[.62]">{children}</div>
       <span className="text-small text-muted">
         <span aria-hidden="true">↻ </span>
-        {plain ? "Being redone" : `Stale: ${reason}`}
+        {plain ? "Needs re-running" : `Stale: ${reason}`}
       </span>
     </div>
   );

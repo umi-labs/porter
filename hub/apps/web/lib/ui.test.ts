@@ -71,7 +71,7 @@ describe("stage states from a snapshot's runs table", () => {
     const verify = stageViews([row("1", "verify"), row("2", "load", { dryRun: true })]).find(
       (x) => x.stage === "verify",
     );
-    expect(verify?.stale).toBeNull();
+    expect(verify?.stale).not.toMatch(/re-ran/);
   });
   test("a run with no settings fingerprint is stale, as in porter; an upstream re-run is named first", () => {
     const v = stageViews([
@@ -86,6 +86,13 @@ describe("stage states from a snapshot's runs table", () => {
     const n = stageViews([row("1", "normalise", { configFp: null }), row("2", "analyse")]);
     expect(n.find((x) => x.stage === "normalise")?.stale).toBe("analyse re-ran since");
   });
+  test("a recorded fingerprint can't be re-checked on the hub, so it reads stale too, never fresh", () => {
+    const v = stageViews([row("1", "analyse"), row("2", "load")]);
+    expect(v.find((x) => x.stage === "load")).toMatchObject({
+      state: "clean",
+      stale: "settings not checked on the hub; push with a current porter",
+    });
+  });
   test("porter's stored views win; a version without them falls back", () => {
     const views = Object.fromEntries(
       ["analyse", "extract", "normalise", "schema", "load", "verify"].map((st) => [
@@ -99,7 +106,10 @@ describe("stage states from a snapshot's runs table", () => {
     expect(v).toMatchObject({ state: "dry-run", stale: "mapping changed since", run: rows[0] });
     expect(storedViews({}, rows)).toBeNull();
     expect(storedViews(null, rows)).toBeNull();
-    expect(storedViews({ stage_views: { ...views, load: { state: "bogus" } } }, rows)).toBeNull();
+    // A newer porter's state keeps the other views; that stage alone reads unknown.
+    const newer = storedViews({ stage_views: { ...views, load: { state: "bogus" } } }, rows);
+    expect(newer?.find((x) => x.stage === "load")).toMatchObject({ state: null, unknown: "bogus" });
+    expect(newer?.find((x) => x.stage === "analyse")).toMatchObject({ state: "not-run" });
   });
 });
 
@@ -174,7 +184,7 @@ describe("overview", () => {
     expect(render("staff")).toContain("Stale: ran before settings were recorded");
     const client = render("client");
     expect(client).toContain("opacity-[.62]");
-    expect(client).toContain("Being redone");
+    expect(client).toContain("Needs re-running");
     expect(client).not.toContain("settings");
   });
 });
@@ -237,11 +247,19 @@ describe("status banner", () => {
   });
   test("a clean apply is written; verify after it with warnings still counts as verified", () => {
     expect(snapOf([["1", "load", sum(), 0]])("staff")).toContain("Loaded, not yet verified.");
-    const r = snapOf([
+    const runs: [string, string, string, 0][] = [
       ["1", "load", sum(), 0],
       ["2", "verify", sum({ warnings: 1 }), 0],
-    ]);
-    expect(r("staff")).toContain("Loaded and verified, with warnings.");
+    ];
+    // The hub's own fallback can't re-check settings, so verify reads stale there; porter's stored views can say fresh.
+    expect(snapOf(runs)("staff")).toContain("Verify is stale: settings not checked on the hub");
+    const stage_views = Object.fromEntries(
+      ["analyse", "extract", "normalise", "schema", "load", "verify"].map((st) => [
+        st,
+        { state: { load: "clean", verify: "warnings" }[st] ?? "not-run", stale: null },
+      ]),
+    );
+    expect(snapOf(runs, { stage_views })("staff")).toContain("Loaded and verified, with warnings.");
   });
   test("a failed dry run's counts are what it would write, not done", () => {
     const r = snapOf([["1", "load", sum({ errors: 1 }), 1]]);
@@ -258,7 +276,7 @@ describe("status banner", () => {
     views.load = { state: "clean", stale: "mapping changed since" };
     const r = snapOf([["1", "load", sum(), 0]], { stage_views: views });
     expect(r("staff")).toContain("Stale: mapping changed since");
-    expect(r("client")).toContain("Being redone");
+    expect(r("client")).toContain("Needs re-running");
     expect(r("client")).not.toContain("mapping");
   });
 });

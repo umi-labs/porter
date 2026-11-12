@@ -23,7 +23,7 @@ export default async function Uploads({ params }: { params: Promise<{ slug: stri
       <Uploader
         slug={slug}
         canUpload={roleCan(role, "upload")}
-        canDownload={roleCan(role, "pull")}
+        canDownload={roleCan(role, "push")}
         maxBytes={maxBytes()}
       />
     </ProjectFrame>

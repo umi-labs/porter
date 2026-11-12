@@ -4,8 +4,9 @@ import { STATES, type State } from "../components/ui/chip";
 // from the engine's `stage_view`), so the hub shows what the desktop and TUI show: `storedViews`. Older versions
 // fall back to `stageViews`, a port for what the snapshot's runs table can show: "running" never (a snapshot is a
 // still), "failed" (exit 1) never (the engine leaves no row for a stage that could not run), stale from upstream
-// re-runs, and stale for a run with no recorded settings fingerprint. A recorded fingerprint isn't re-checked
-// here (that needs porter's hashing), so such a run only goes stale from upstream.
+// re-runs, and stale for every other run too: with no recorded settings fingerprint it "ran before settings were
+// recorded"; with one, the hub can't re-check it (that needs porter's hashing), and the engine's rule is that what
+// can't be checked counts as stale.
 
 export const PIPELINE = ["analyse", "extract", "normalise", "schema", "load", "verify"] as const;
 export type Summary = {
@@ -31,8 +32,13 @@ export type RunRow = {
 };
 export type StageView = {
   stage: (typeof PIPELINE)[number];
-  /** null: can't be derived (a load that finished without errors, in a snapshot that doesn't record dry runs). */
+  /**
+   * null: can't be derived (a load that finished without errors, in a snapshot that doesn't record dry runs), or
+   * porter stored a state this hub doesn't know (`unknown` holds it).
+   */
   state: State | null;
+  /** A stored state from a newer porter that this hub doesn't know. */
+  unknown?: string;
   stale: string | null;
   run: RunRow | null;
 };
@@ -67,14 +73,18 @@ export function stageViews(last: RunRow[]): StageView[] {
       }
     }
     // Same as the engine: a run from before porter recorded settings can't be shown to still hold.
-    if (!stale && !run.configFp) stale = "ran before settings were recorded";
+    if (!stale)
+      stale = run.configFp
+        ? "settings not checked on the hub; push with a current porter"
+        : "ran before settings were recorded";
     return { stage, state: runState(run), stale, run };
   });
 }
 
 /**
  * porter's own views stored with the version (`summary.stage_views`), each with its run row for the counts.
- * null when the version doesn't carry them (pushed by an older porter): use `stageViews`.
+ * null when the version doesn't carry them (pushed by an older porter): use `stageViews`. A state this hub doesn't
+ * know (a newer porter's) keeps the rest: that stage reads "unknown (newer porter)".
  */
 export function storedViews(summary: unknown, last: RunRow[]): StageView[] | null {
   const sv = (summary as { stage_views?: unknown } | null)?.stage_views;
@@ -82,11 +92,12 @@ export function storedViews(summary: unknown, last: RunRow[]): StageView[] | nul
   const out: StageView[] = [];
   for (const stage of PIPELINE) {
     const v = (sv as Record<string, { state?: unknown; stale?: unknown } | undefined>)[stage];
-    if (!v || !STATES.includes(v.state as State)) return null;
+    const known = !!v && STATES.includes(v.state as State);
     out.push({
       stage,
-      state: v.state as State,
-      stale: typeof v.stale === "string" ? v.stale : null,
+      state: known ? (v.state as State) : null,
+      ...(known ? {} : { unknown: typeof v?.state === "string" ? v.state : "missing" }),
+      stale: typeof v?.stale === "string" ? v.stale : null,
       run: last.find((r) => r.stage === stage) ?? null,
     });
   }

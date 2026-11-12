@@ -130,6 +130,8 @@ function stageText(v: StageView, plain: boolean): { label?: string; sub: string 
   const done = fmtNum((s?.done ?? 0) + (s?.partial ?? 0));
   switch (v.state) {
     case null:
+      if (v.unknown)
+        return { sub: plain ? "Status not available here yet" : `unknown (newer porter): ${v.unknown}` };
       return { sub: "Finished. This version doesn’t record whether it was a dry run." };
     case "not-run":
       return { label: plain ? "Not started" : undefined, sub: plain ? "Not started yet" : "Never run" };
@@ -287,7 +289,10 @@ export function Overview({
           Pushed {fmtDateTime(snap.version.createdAt)}
           {!plain && snap.version.porterVersion ? ` from porter ${snap.version.porterVersion}` : ""}
         </span>
-        {!plain && snap.version.message && <span className="text-muted">“{snap.version.message}”</span>}
+        {/* Push messages are internal notes: staff only, never on a share link. */}
+        {audience === "staff" && snap.version.message && (
+          <span className="text-muted">“{snap.version.message}”</span>
+        )}
         <span className="flex-1" />
         <span className="text-small text-muted">
           This page shows v{n} as pushed. It doesn’t update until someone pushes again.
