@@ -71,6 +71,14 @@ pub(super) async fn run(
     config_dir: Option<std::path::PathBuf>,
     apply: bool,
 ) -> Result<()> {
+    let preview_dir = ctx.project.raw_dir("load-preview");
+    if !apply {
+        // The previews are exactly this dry run's: nothing left from an earlier one.
+        match std::fs::remove_dir_all(&preview_dir) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+            _ => {}
+        }
+    }
     let client = if apply {
         Some(Arc::new(client()?))
     } else {
@@ -129,8 +137,16 @@ pub(super) async fn run(
     }
     extras::settings(&mut l).await?;
     extras::authors(&l)?;
+    if !apply {
+        // Marks the previews complete and says when they were made.
+        std::fs::create_dir_all(&preview_dir)?;
+        std::fs::write(preview_dir.join(PREVIEW_DONE), "")?;
+    }
     Ok(())
 }
+
+/// Written when a dry run ran to the end; its mtime is the preview's age.
+pub const PREVIEW_DONE: &str = ".done";
 
 /// Items the source no longer has but an earlier load wrote: never deleted here (that is
 /// the editor's call), but each gets a warning saying where it still is, and a status.

@@ -3,6 +3,7 @@ pub mod blocks;
 pub mod client;
 pub mod lexical;
 mod load;
+pub use load::PREVIEW_DONE;
 mod refs;
 pub mod schema_check;
 pub mod schema_generate;

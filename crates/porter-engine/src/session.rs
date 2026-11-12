@@ -19,7 +19,15 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::destinations::payload::PREVIEW_DONE;
 pub use crate::store::IssueFilter as IssueQuery;
+
+/// A finished dry-run load.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Preview {
+    pub counts: BTreeMap<String, u64>,
+    pub at: std::time::SystemTime,
+}
 
 pub const STAGES: [Stage; 6] = [
     Stage::Analyse,
@@ -232,10 +240,15 @@ impl Session {
         }
     }
 
-    /// Items per collection in the last dry-run load preview; None if none was written.
-    pub fn load_preview_counts(&self) -> Option<BTreeMap<String, u64>> {
+    /// The last completed dry-run load: items per collection and when it finished. None if
+    /// no dry run has completed (a cancelled one leaves nothing to rely on).
+    pub fn load_preview_counts(&self) -> Option<Preview> {
         let dir = self.project.raw_dir("load-preview");
-        let mut out = BTreeMap::new();
+        let at = std::fs::metadata(dir.join(PREVIEW_DONE))
+            .ok()?
+            .modified()
+            .ok()?;
+        let mut counts = BTreeMap::new();
         for e in std::fs::read_dir(dir).ok()?.flatten() {
             let n = std::fs::read_dir(e.path()).map_or(0, |d| {
                 d.flatten()
@@ -243,10 +256,31 @@ impl Session {
                     .count() as u64
             });
             if n > 0 {
-                out.insert(e.file_name().to_string_lossy().into_owned(), n);
+                counts.insert(e.file_name().to_string_lossy().into_owned(), n);
             }
         }
-        (!out.is_empty()).then_some(out)
+        Some(Preview { counts, at })
+    }
+
+    /// Why a preview can no longer be trusted: the data was re-normalised, or porter.toml
+    /// was edited, after it was made.
+    pub fn preview_stale(&self, p: &Preview) -> Option<&'static str> {
+        let edited = std::fs::metadata(self.project.dir().join("porter.toml"))
+            .and_then(|m| m.modified())
+            .is_ok_and(|m| m > p.at);
+        if edited {
+            return Some("porter.toml was edited after it");
+        }
+        let renormalised = self
+            .project
+            .store()
+            .runs(Stage::Normalise)
+            .ok()?
+            .iter()
+            .filter_map(|r| r.ended_at.as_deref())
+            .filter_map(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .any(|t| std::time::SystemTime::from(t) > p.at);
+        renormalised.then_some("normalise ran after it")
     }
 
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Event> {
@@ -779,7 +813,13 @@ mod tests {
         std::fs::create_dir_all(p.join("media")).unwrap();
         std::fs::write(p.join("posts/a.json"), "{}").unwrap();
         std::fs::write(p.join("posts/b.json"), "{}").unwrap();
-        let c = s.load_preview_counts().unwrap();
+        assert_eq!(
+            s.load_preview_counts(),
+            None,
+            "no marker: not a finished dry run"
+        );
+        std::fs::write(p.join(crate::destinations::payload::PREVIEW_DONE), "").unwrap();
+        let c = s.load_preview_counts().unwrap().counts;
         assert_eq!(c.get("posts"), Some(&2));
         assert!(!c.contains_key("media"));
     }

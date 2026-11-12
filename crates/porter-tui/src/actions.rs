@@ -1,10 +1,12 @@
 //! Side effects behind the `l`/`L`/`o`/`e`/`y` keys. The pure `update` only asks for them
 //! (see `Cmd`); the runtime runs these.
+use crate::msg::PreviewInfo;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use porter_engine::report;
 use porter_engine::session::Session;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::SystemTime;
 
 /// OSC 52: ask the terminal to put `text` on the system clipboard.
 pub fn osc52(text: &str) -> String {
@@ -46,6 +48,28 @@ pub fn reload_after_edit(session: &Session, edited: Result<(), String>) -> Vec<S
         msgs.push("config OK".into());
     }
     msgs
+}
+
+/// The last dry run with its staleness verdict, for the apply prompt.
+pub fn preview_info(s: &Session) -> Option<PreviewInfo> {
+    let p = s.load_preview_counts()?;
+    let stale = s.preview_stale(&p).map(String::from);
+    Some(PreviewInfo {
+        counts: p.counts,
+        at: p.at,
+        stale,
+    })
+}
+
+/// "just now", "5 min ago", "2 h ago", "3 d ago".
+pub fn age(at: SystemTime, now: SystemTime) -> String {
+    let s = now.duration_since(at).map_or(0, |d| d.as_secs());
+    match s {
+        0..60 => "just now".into(),
+        60..3600 => format!("{} min ago", s / 60),
+        3600..86400 => format!("{} h ago", s / 3600),
+        _ => format!("{} d ago", s / 86400),
+    }
 }
 
 /// The report file to open: `<name>.html` if it was written, else analysis, else any.

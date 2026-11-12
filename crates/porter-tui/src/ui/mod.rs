@@ -785,10 +785,14 @@ mod tests {
         let m = |counts| {
             Some(Modal::ConfirmApply(ApplyModal {
                 url: "https://cms.example.com".into(),
-                counts,
+                preview: counts,
             }))
         };
-        app.modal = m(Some([("posts".to_string(), 12u64)].into()));
+        app.modal = m(Some(crate::msg::PreviewInfo {
+            counts: [("posts".to_string(), 12u64)].into(),
+            at: std::time::SystemTime::now(),
+            stale: None,
+        }));
         let out = render(&app, 80, 24);
         for s in [
             "live CMS",

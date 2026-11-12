@@ -1,6 +1,6 @@
 use crate::keymap::{self, Action};
 use crate::lists::{Filter, ISSUES_PAGE, IssueList, IssuesState, ItemsState, Window, kind_name};
-use crate::msg::{Cmd, DataMsg, Msg, RefreshScope};
+use crate::msg::{Cmd, DataMsg, Msg, PreviewInfo, RefreshScope};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use porter_engine::events::{Event, Summary};
 use porter_engine::session::{
@@ -8,7 +8,7 @@ use porter_engine::session::{
 };
 use porter_engine::stage::SchemaMode;
 use porter_model::{Issue, ItemStatus, Resolution, Severity, Stage};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -110,8 +110,8 @@ pub struct ResolveModal {
 #[derive(Debug, PartialEq)]
 pub struct ApplyModal {
     pub url: String,
-    /// Items per collection from the last dry run; None when there was none.
-    pub counts: Option<BTreeMap<String, u64>>,
+    /// The last dry run; None when there was none.
+    pub preview: Option<PreviewInfo>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -618,13 +618,13 @@ fn on_data(app: &mut App, d: DataMsg) -> Vec<Cmd> {
             }
             return app.refresh_cmds();
         }
-        DataMsg::Preview(counts) => {
+        DataMsg::Preview(preview) => {
             let url = app
                 .session
                 .as_ref()
                 .map(|s| s.config().destination.url.clone())
                 .unwrap_or_default();
-            app.modal = Some(Modal::ConfirmApply(ApplyModal { url, counts }));
+            app.modal = Some(Modal::ConfirmApply(ApplyModal { url, preview }));
         }
         DataMsg::Config(msgs) => {
             for m in &msgs {
@@ -834,9 +834,16 @@ fn apply_confirmed(app: &mut App) -> Vec<Cmd> {
     let Some(Modal::ConfirmApply(m)) = app.modal.take() else {
         return vec![];
     };
-    if m.counts.is_none() {
-        app.push_log("apply refused: no dry run yet — press l first".into());
-        return vec![];
+    match &m.preview {
+        None => {
+            app.push_log("apply refused: no dry run yet — press l first".into());
+            return vec![];
+        }
+        Some(p) if p.stale.is_some() => {
+            app.push_log("apply refused: dry run is stale — press l to refresh".into());
+            return vec![];
+        }
+        Some(_) => {}
     }
     app.start(RunPlan::Stage(
         Stage::Load,
@@ -1209,6 +1216,14 @@ mod tests {
         [("posts".to_string(), 12u64), ("media".to_string(), 3)].into()
     }
 
+    fn fresh() -> PreviewInfo {
+        PreviewInfo {
+            counts: counts(),
+            at: std::time::SystemTime::now(),
+            stale: None,
+        }
+    }
+
     #[test]
     fn l_is_a_dry_run() {
         let (mut app, _d) = live_app();
@@ -1230,17 +1245,17 @@ mod tests {
             let (mut app, _d) = live_app();
             assert_eq!(press(&mut app, KeyCode::Char('L')), [Cmd::PreviewCounts]);
             assert!(app.modal.is_none(), "nothing writes before the counts land");
-            update(&mut app, Msg::Data(DataMsg::Preview(Some(counts()))));
+            update(&mut app, Msg::Data(DataMsg::Preview(Some(fresh()))));
             let Some(Modal::ConfirmApply(m)) = &app.modal else {
                 panic!("{:?}", app.modal)
             };
-            assert_eq!(m.counts, Some(counts()));
+            assert_eq!(m.preview.as_ref().map(|p| &p.counts), Some(&counts()));
             assert!(press(&mut app, other).is_empty(), "{other:?}");
             assert!(app.modal.is_none() && app.running.is_none(), "{other:?}");
         }
         let (mut app, _d) = live_app();
         press(&mut app, KeyCode::Char('L'));
-        update(&mut app, Msg::Data(DataMsg::Preview(Some(counts()))));
+        update(&mut app, Msg::Data(DataMsg::Preview(Some(fresh()))));
         assert_eq!(press(&mut app, KeyCode::Char('y')), [apply_cmd()]);
         assert!(app.modal.is_none() && app.running.is_some());
     }
@@ -1250,7 +1265,7 @@ mod tests {
         let (mut app, _d) = live_app();
         press(&mut app, KeyCode::Char('L'));
         update(&mut app, Msg::Data(DataMsg::Preview(None)));
-        assert!(matches!(&app.modal, Some(Modal::ConfirmApply(m)) if m.counts.is_none()));
+        assert!(matches!(&app.modal, Some(Modal::ConfirmApply(m)) if m.preview.is_none()));
         assert!(press(&mut app, KeyCode::Char('y')).is_empty());
         assert!(app.running.is_none() && app.modal.is_none());
         assert!(
@@ -1259,6 +1274,49 @@ mod tests {
                 .is_some_and(|l| l.0.contains("press l first")),
             "refusal is logged"
         );
+    }
+
+    fn stale_apply(why: &str) -> (App, tempfile::TempDir) {
+        let (mut app, d) = live_app();
+        press(&mut app, KeyCode::Char('L'));
+        let mut p = fresh();
+        p.stale = Some(why.into());
+        update(&mut app, Msg::Data(DataMsg::Preview(Some(p))));
+        (app, d)
+    }
+
+    #[test]
+    fn stale_preview_refuses_apply() {
+        let (mut app, _d) = stale_apply("normalise ran after it");
+        assert!(press(&mut app, KeyCode::Char('y')).is_empty());
+        assert!(app.running.is_none() && app.modal.is_none());
+        assert!(
+            app.log
+                .back()
+                .is_some_and(|l| l.0.contains("stale — press l")),
+            "{:?}",
+            app.log.back().map(|l| &l.0)
+        );
+    }
+
+    #[test]
+    fn config_edit_makes_preview_stale() {
+        // The staleness rule itself lives in the session; the runtime feeds it to the prompt.
+        let (app, d) = live_app();
+        let s = app.session.clone().unwrap();
+        let dir = d.path().join("raw/load-preview");
+        std::fs::create_dir_all(dir.join("posts")).unwrap();
+        std::fs::write(dir.join("posts/a.json"), "{}").unwrap();
+        std::fs::write(dir.join(".done"), "").unwrap();
+        let p = s.load_preview_counts().unwrap();
+        assert_eq!(s.preview_stale(&p), None);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let toml = d.path().join("porter.toml");
+        let t = std::fs::read_to_string(&toml).unwrap();
+        std::fs::write(&toml, t + "\n# edited\n").unwrap();
+        assert!(s.preview_stale(&p).is_some());
+        let info = crate::actions::preview_info(&s).unwrap();
+        assert!(info.stale.is_some());
     }
 
     #[test]

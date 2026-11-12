@@ -427,6 +427,29 @@ async fn dry_run_sends_nothing() {
 }
 
 #[tokio::test]
+async fn dry_run_clears_old_previews() {
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let f = fx(&s.uri());
+    f.put(&doc("page", "post:1", "a", None));
+    let stale = f.p.raw_dir("load-preview").join("pages").join("gone.json");
+    std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    std::fs::write(&stale, "{}").unwrap();
+    f.load(false, CancellationToken::new()).await;
+    assert!(
+        !stale.exists(),
+        "an earlier dry run's preview must not survive"
+    );
+    let dir = f.p.raw_dir("load-preview");
+    assert!(dir.join(".done").exists(), "finished dry run is marked");
+    assert!(
+        dir.join("pages")
+            .join(format!("{}.json", did("post:1")))
+            .exists()
+    );
+}
+
+#[tokio::test]
 async fn dropped_type_skipped_with_reason() {
     let fake = Fake::default();
     let s = server(&fake).await;

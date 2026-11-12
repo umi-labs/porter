@@ -20,6 +20,15 @@ pub enum Msg {
     RunDone(RunOutcome),
 }
 
+/// The last dry run as the apply prompt needs it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreviewInfo {
+    pub counts: BTreeMap<String, u64>,
+    pub at: std::time::SystemTime,
+    /// Why it can no longer be trusted, if so.
+    pub stale: Option<String>,
+}
+
 /// Results of store queries the runtime ran off the render loop. `seq` ties a page
 /// back to the query that asked for it, so answers to a replaced query are dropped.
 pub enum DataMsg {
@@ -43,7 +52,7 @@ pub enum DataMsg {
     Item(Box<ItemDetail>),
     Resolved(Result<(Uuid, Resolution), String>),
     /// Items per collection in the last dry-run preview; None when there was none.
-    Preview(Option<BTreeMap<String, u64>>),
+    Preview(Option<PreviewInfo>),
     /// What reloading porter.toml after an edit found ("config OK" when nothing).
     Config(Vec<String>),
     /// A report was written and opened (its path), or why not, verbatim.
