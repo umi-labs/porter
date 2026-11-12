@@ -183,6 +183,8 @@ pub struct RouteRow {
     pub new_url: Option<String>,
     /// The redirect it follows went through more than one hop.
     pub chain: bool,
+    /// Leads nowhere on the new site: the one definition, see `Store::route_page`.
+    pub unresolved: bool,
 }
 
 /// A page of routes: `matching` is what the filter keeps, `total` all of them.
@@ -562,7 +564,7 @@ impl Session {
                 store.route_page(&connector, filter, page.offset, page.limit)?;
             let rows = found
                 .into_iter()
-                .map(|(id, r, chain)| {
+                .map(|(id, r, chain, unresolved)| {
                     let (t, key) = match &r.target {
                         RouteTarget::Document(t) => (Some(*t), "path"),
                         RouteTarget::Redirect(t) => (Some(*t), "to"),
@@ -582,6 +584,7 @@ impl Session {
                         target: r.target,
                         new_url,
                         chain,
+                        unresolved,
                     })
                 })
                 .collect::<Result<_>>()?;

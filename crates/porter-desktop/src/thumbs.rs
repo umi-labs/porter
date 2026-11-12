@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufReader, ErrorKind};
+use std::io::{BufReader, ErrorKind, Read};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -19,8 +19,10 @@ pub const MAX_EDGE: u32 = 256;
 pub const CAP: usize = 512;
 /// Images whose header claims more pixels than this are not decoded.
 const MAX_PIXELS: u64 = 64_000_000;
-/// Decoder allocation ceiling: a 64 MP RGBA frame plus slack.
-const MAX_ALLOC: u64 = 512 * 1024 * 1024;
+/// Decoder allocation ceiling.
+const MAX_ALLOC: u64 = 256 * 1024 * 1024;
+/// Files longer than this are not read (the media download cap).
+const MAX_FILE: u64 = 200 * 1024 * 1024;
 
 #[derive(Clone)]
 pub enum Thumb {
@@ -58,6 +60,19 @@ fn type_label(mime: &str, filename: &str) -> Thumb {
 }
 
 fn decode_inner(path: &Path, mime: &str, filename: &str) -> Thumb {
+    // Only a regular file, by what the path itself is (a symlink, FIFO or device is
+    // refused unopened: opening a FIFO would block this thread for good).
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_file() && m.len() > MAX_FILE => {
+            return Thumb::Placeholder("too large to preview".into());
+        }
+        Ok(m) if m.is_file() => {}
+        Ok(_) => return cant("not a regular file"),
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            return Thumb::Placeholder("missing file".into());
+        }
+        Err(e) => return cant(e),
+    }
     let file = match File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == ErrorKind::NotFound => {
@@ -71,7 +86,7 @@ fn decode_inner(path: &Path, mime: &str, filename: &str) -> Thumb {
     if !image_mime && !unknown {
         return type_label(mime, filename);
     }
-    let reader = match ImageReader::new(BufReader::new(file)).with_guessed_format() {
+    let reader = match ImageReader::new(BufReader::new(file.take(MAX_FILE))).with_guessed_format() {
         Ok(r) => r,
         Err(e) => return cant(e),
     };
@@ -282,6 +297,55 @@ mod tests {
         std::fs::write(&p, bytes).unwrap();
         assert_eq!(
             placeholder(decode(&p, "image/png", "huge.png")),
+            "too large to preview"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn thumb_fifo_does_not_block() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("pipe");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&p)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(decode(&p, "image/png", "pipe.png"));
+        });
+        let t = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("decode blocked on a FIFO");
+        assert_eq!(placeholder(t), "can't preview (not a regular file)");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn thumb_symlink_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("real.png");
+        std::fs::write(&real, png(8, 8)).unwrap();
+        let link = d.path().join("link.png");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert_eq!(
+            placeholder(decode(&link, "image/png", "link.png")),
+            "can't preview (not a regular file)"
+        );
+    }
+
+    #[test]
+    fn thumb_oversized_file_not_read() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("big.png");
+        // Sparse: no real disk use.
+        let f = File::create(&p).unwrap();
+        f.set_len(MAX_FILE + 1).unwrap();
+        assert_eq!(
+            placeholder(decode(&p, "image/png", "big.png")),
             "too large to preview"
         );
     }

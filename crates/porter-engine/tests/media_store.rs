@@ -104,3 +104,41 @@ fn variant_lookup_normalises() {
     );
     assert_eq!(s.media_by_url("https://x.com/none.jpg").unwrap(), None);
 }
+
+/// A stored hash that is short, or not hex, is an error: never a slice panic or a path
+/// that leaves the media directory.
+#[test]
+fn media_path_rejects_bad_hashes() {
+    use porter_model::{ItemKind, Media, SourceRef};
+    let (_d, p) = project();
+    let s = p.store();
+    for (n, hash) in ["abc", "", "../../../../etc/passwd", &"G".repeat(64)]
+        .into_iter()
+        .enumerate()
+    {
+        let src = SourceRef {
+            connector: "media".into(),
+            source_id: n.to_string(),
+            url: None,
+        };
+        let id = porter_model::ItemId::new(ItemKind::Media, &src);
+        let m = Media {
+            id,
+            hash: hash.into(),
+            variants: vec![],
+            filename: "x".into(),
+            mime: "image/png".into(),
+            width: None,
+            height: None,
+            alt: None,
+            caption: None,
+            title: None,
+            credit: None,
+            folder: None,
+            usages: vec![],
+        };
+        s.put_item(ItemKind::Media, id, &src, &m).unwrap();
+        let e = s.media_path(id).unwrap_err().to_string();
+        assert!(e.contains("invalid media hash"), "{hash:?}: {e}");
+    }
+}

@@ -315,10 +315,10 @@ impl Bridge {
         if !cache.begin(&row.hash) {
             return;
         }
-        // At most a few decodes at once, so a fast scroll queues instead of starting
+        // At most two decodes at once, so a fast scroll queues instead of starting
         // hundreds of threads and holding hundreds of decoded frames.
         // ponytail: scrolled-off requests still decode; a cancel flag per request if it shows.
-        static DECODING: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+        static DECODING: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
         let (session, tx, cache, row) = (
             self.session.clone(),
             self.tx.clone(),

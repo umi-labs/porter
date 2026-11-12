@@ -1,8 +1,10 @@
 use super::{NOW, RunId, Store, wire};
+use crate::url::normalise_url;
 use anyhow::Result;
-use porter_model::{ItemId, ItemKind, ItemStatus, Route, SourceRef, Stage};
+use porter_model::{ItemId, ItemKind, ItemStatus, Route, RouteTarget, SourceRef, Stage};
 use rusqlite::{OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
+use std::collections::HashSet;
 
 impl Store {
     /// Upserts by `id`; a soft-deleted row comes back to life.
@@ -450,8 +452,69 @@ impl Store {
         Ok((out, u64::try_from(total).unwrap_or(0)))
     }
 
-    /// One page of `connector`'s live routes by URL that match `filter`: the stored route
-    /// and whether its redirect is a chain; then how many match, and how many there are.
+    /// The path part of a URL key for `url` (absolute, or a path on this site).
+    fn path_key(url: &str) -> Option<String> {
+        let abs = if url.starts_with('/') {
+            format!("http://h{url}")
+        } else {
+            url.to_string()
+        };
+        let k = normalise_url(&abs, None)?.0;
+        Some(k[k.find('/').unwrap_or(k.len())..].to_string())
+    }
+
+    /// Path keys of `connector`'s live documents and of its live routes that have a
+    /// target: where a redirect can land.
+    fn landing_paths(&self, connector: &str) -> Result<HashSet<String>> {
+        let conn = self.conn();
+        let mut out = HashSet::new();
+        let mut stmt = conn.prepare(
+            "SELECT CASE WHEN kind = 'document' THEN json_extract(data, '$.path') ELSE url END
+             FROM items WHERE connector = ?1 AND deleted_at IS NULL
+               AND (kind = 'document' AND json_type(data, '$.path') = 'text'
+                 OR kind = 'route' AND json_type(data, '$.target') = 'object')",
+        )?;
+        for u in stmt.query_map([connector], |r| r.get::<_, Option<String>>(0))? {
+            out.extend(u?.and_then(|u| Self::path_key(&u)));
+        }
+        Ok(out)
+    }
+
+    /// THE definition of "unresolved: leads nowhere on the new site". True when the old
+    /// route has no target (and answered 2xx, or was never fetched); or its target is not
+    /// a live item of the expected kind; or a document target has no string `path`; or a
+    /// redirect target's `to` lands on no document path or route.
+    fn route_unresolved(&self, r: &Route, landing: &HashSet<String>) -> Result<bool> {
+        let (t, kind) = match &r.target {
+            RouteTarget::None => {
+                return Ok(r.http_status.is_none_or(|s| (200..300).contains(&s)));
+            }
+            RouteTarget::Document(t) => (*t, ItemKind::Document),
+            RouteTarget::Media(t) => (*t, ItemKind::Media),
+            RouteTarget::Redirect(t) => (*t, ItemKind::Redirect),
+        };
+        let Some((k, _, data)) = self.item_source(t)? else {
+            return Ok(true);
+        };
+        if k != kind {
+            return Ok(true);
+        }
+        let text = |key: &str| data.get(key).and_then(|v| v.as_str());
+        Ok(match kind {
+            ItemKind::Document => text("path").is_none(),
+            ItemKind::Redirect => match text("to").and_then(Self::path_key) {
+                Some(p) => !landing.contains(&p),
+                None => true,
+            },
+            _ => false,
+        })
+    }
+
+    /// One page of `connector`'s live routes by URL that match `filter`: the stored route,
+    /// whether its redirect is a chain, and whether it is unresolved; then how many match,
+    /// and how many there are.
+    // ponytail: Unresolved scans every route (it follows redirects into the document paths);
+    // an indexed column written by normalise if projects reach hundreds of thousands.
     #[allow(clippy::type_complexity)]
     pub fn route_page(
         &self,
@@ -459,58 +522,77 @@ impl Store {
         filter: RouteFilter,
         offset: u64,
         limit: u64,
-    ) -> Result<(Vec<(ItemId, Route, bool)>, u64, u64)> {
-        // The target's id, whichever kind it is ("none" is a bare string, so NULL).
-        const TID: &str = "coalesce(json_extract(r.data, '$.target.document'),
-            json_extract(r.data, '$.target.media'), json_extract(r.data, '$.target.redirect'))";
+    ) -> Result<(Vec<(ItemId, Route, bool, bool)>, u64, u64)> {
         const STATUS: &str = "json_extract(r.data, '$.http_status')";
         let chain = "EXISTS (SELECT 1 FROM issues i WHERE i.kind = 'redirect-chain'
             AND i.deleted_at IS NULL AND i.item_id = json_extract(r.data, '$.target.redirect'))";
         let cond = match filter {
-            RouteFilter::All => "1".to_string(),
-            RouteFilter::Unresolved => format!(
-                "(({TID} IS NULL AND ({STATUS} IS NULL OR {STATUS} BETWEEN 200 AND 299))
-                  OR ({TID} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM items t
-                      WHERE t.id = {TID} AND t.deleted_at IS NULL)))"
-            ),
+            RouteFilter::All | RouteFilter::Unresolved => "1".to_string(),
             RouteFilter::Chains => chain.to_string(),
             RouteFilter::NotFound => format!("{STATUS} = 404"),
         };
         let base =
             "FROM items r WHERE r.kind = 'route' AND r.connector = ?1 AND r.deleted_at IS NULL";
-        let conn = self.conn();
+        let order = "ORDER BY lower(coalesce(json_extract(r.data, '$.url'), r.url, '')), r.id";
         let count = |extra: &str| -> Result<u64> {
-            let n: i64 = conn.query_row(
+            let n: i64 = self.conn().query_row(
                 &format!("SELECT COUNT(*) {base} AND {extra}"),
                 [connector],
                 |r| r.get(0),
             )?;
             Ok(u64::try_from(n).unwrap_or(0))
         };
-        let (matching, total) = (count(&cond)?, count("1")?);
-        let mut stmt = conn.prepare(&format!(
-            "SELECT r.id, r.data, {chain} {base} AND {cond}
-             ORDER BY lower(coalesce(json_extract(r.data, '$.url'), r.url, '')), r.id LIMIT ?2 OFFSET ?3"
-        ))?;
-        let rows = stmt.query_map(
-            params![
-                connector,
-                i64::try_from(limit).unwrap_or(i64::MAX),
-                i64::try_from(offset).unwrap_or(i64::MAX)
-            ],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, bool>(2)?,
-                ))
-            },
-        )?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (id, data, chain) = row?;
-            out.push((id.parse()?, serde_json::from_str(&data)?, chain));
-        }
+        let total = count("1")?;
+        let landing = self.landing_paths(connector)?;
+        let read =
+            |sql: String, args: &[&dyn rusqlite::ToSql]| -> Result<Vec<(ItemId, Route, bool)>> {
+                let conn = self.conn();
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt.query_map(args, |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, bool>(2)?,
+                    ))
+                })?;
+                let mut out = Vec::new();
+                for row in rows {
+                    let (id, data, chain) = row?;
+                    out.push((id.parse()?, serde_json::from_str(&data)?, chain));
+                }
+                Ok(out)
+            };
+        let select = format!("SELECT r.id, r.data, {chain} {base}");
+        let (found, matching): (Vec<_>, u64) = if filter == RouteFilter::Unresolved {
+            let mut hits = Vec::new();
+            for (id, r, c) in read(format!("{select} {order}"), &[&connector])? {
+                if self.route_unresolved(&r, &landing)? {
+                    hits.push((id, r, c));
+                }
+            }
+            let n = hits.len() as u64;
+            let page = hits
+                .into_iter()
+                .skip(usize::try_from(offset).unwrap_or(usize::MAX))
+                .take(usize::try_from(limit).unwrap_or(usize::MAX))
+                .collect();
+            (page, n)
+        } else {
+            let lim = i64::try_from(limit).unwrap_or(i64::MAX);
+            let off = i64::try_from(offset).unwrap_or(i64::MAX);
+            let rows = read(
+                format!("{select} AND {cond} {order} LIMIT ?2 OFFSET ?3"),
+                &[&connector, &lim, &off],
+            )?;
+            (rows, count(&cond)?)
+        };
+        let out = found
+            .into_iter()
+            .map(|(id, r, c)| {
+                let u = self.route_unresolved(&r, &landing)?;
+                Ok((id, r, c, u))
+            })
+            .collect::<Result<_>>()?;
         Ok((out, matching, total))
     }
 }

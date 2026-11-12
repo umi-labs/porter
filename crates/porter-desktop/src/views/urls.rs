@@ -12,7 +12,10 @@ use crate::vm::urls::Flag;
 
 const FILTERS: [(RouteFilter, &str); 4] = [
     (RouteFilter::All, "All"),
-    (RouteFilter::Unresolved, "Unresolved"),
+    (
+        RouteFilter::Unresolved,
+        "Unresolved (leads nowhere on the new site)",
+    ),
     (RouteFilter::Chains, "Chains"),
     (RouteFilter::NotFound, "404"),
 ];

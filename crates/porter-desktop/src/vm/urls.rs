@@ -63,10 +63,8 @@ pub struct UrlRow {
 }
 
 pub fn flag(r: &RouteRow) -> Option<Flag> {
-    let two_xx = r.status.is_none_or(|s| (200..300).contains(&s));
-    if r.target == RouteTarget::None && two_xx
-        || r.target != RouteTarget::None && r.new_url.is_none()
-    {
+    // `unresolved` is the engine's one definition; the filter counts the same rows.
+    if r.unresolved {
         Some(Flag::Unresolved)
     } else if r.chain {
         Some(Flag::Chain)
@@ -239,9 +237,15 @@ mod tests {
             id: id(n),
             url: format!("https://old.test/{n}"),
             status,
-            target,
+            target: target.clone(),
             new_url: new_url.map(Into::into),
             chain: false,
+            // As the engine decides it, for these simple fixtures.
+            unresolved: if target == RouteTarget::None {
+                status.is_none_or(|s| (200..300).contains(&s))
+            } else {
+                new_url.is_none()
+            },
         }
     }
 
@@ -342,6 +346,7 @@ mod tests {
         assert_eq!(flag(&ok), None);
         // A target that is not there is unresolved even though the route has one.
         ok.new_url = None;
+        ok.unresolved = true;
         assert_eq!(flag(&ok), Some(Flag::Unresolved));
         // A 404 with no target is the site's own dead link, not an unresolved route.
         assert_eq!(

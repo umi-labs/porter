@@ -436,6 +436,27 @@ async fn routes_filter_and_page() {
     route("red-ok", Some(301), RouteTarget::Redirect(r_ok));
     route("red-chain", Some(301), RouteTarget::Redirect(r_chain));
     route("red-gone", Some(301), RouteTarget::Redirect(r_gone));
+    // Unresolved by the one definition: a redirect to nowhere, a document with no path, a
+    // media target that is really a document.
+    let r_nowhere = redirect("d", "/nowhere");
+    route("red-nowhere", Some(301), RouteTarget::Redirect(r_nowhere));
+    let pathless = {
+        let sr = src("post", "2", None);
+        let id = ItemId::new(ItemKind::Document, &sr);
+        store
+            .put_item(
+                ItemKind::Document,
+                id,
+                &sr,
+                &serde_json::json!({"title": "x"}),
+            )
+            .unwrap();
+        id
+    };
+    route("doc-nopath", Some(200), RouteTarget::Document(pathless));
+    route("wrong-kind", Some(200), RouteTarget::Media(doc));
+    // Dead links the old site already had are 404s, not unresolved.
+    route("nf-target", Some(410), RouteTarget::None);
     // Another connector's raw route never shows.
     let raw = SourceRef {
         connector: "wp-rest".into(),
@@ -476,7 +497,10 @@ async fn routes_filter_and_page() {
         async move { s.routes(f, all).await.unwrap() }
     };
     let every = got(RouteFilter::All).await;
-    assert_eq!((every.matching, every.total, every.rows.len()), (7, 7, 7));
+    assert_eq!(
+        (every.matching, every.total, every.rows.len()),
+        (11, 11, 11)
+    );
     let doc_row = every.rows.iter().find(|r| r.url.ends_with("/doc")).unwrap();
     assert_eq!(doc_row.status, Some(200));
     assert_eq!(doc_row.target, RouteTarget::Document(doc));
@@ -496,8 +520,36 @@ async fn routes_filter_and_page() {
         .map(|r| r.url.rsplit('/').next().unwrap())
         .collect();
     urls.sort();
-    assert_eq!(urls, ["none200", "nonenull", "red-gone"]);
-    assert_eq!((un.matching, un.total), (3, 7));
+    assert_eq!(
+        urls,
+        [
+            "doc-nopath",
+            "none200",
+            "nonenull",
+            "red-gone",
+            "red-nowhere",
+            "wrong-kind"
+        ]
+    );
+    assert_eq!((un.matching, un.total), (6, 11));
+    // The filter and the row flag are one definition: the count is what All flags.
+    assert_eq!(
+        every.rows.iter().filter(|r| r.unresolved).count() as u64,
+        un.matching
+    );
+    assert!(un.rows.iter().all(|r| r.unresolved));
+    // The Unresolved filter pages too.
+    let tail = s
+        .routes(
+            RouteFilter::Unresolved,
+            Page {
+                offset: 4,
+                limit: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!((tail.rows.len(), tail.matching), (2, 6));
 
     let ch = got(RouteFilter::Chains).await;
     assert_eq!(ch.rows.len(), 1);
@@ -518,5 +570,5 @@ async fn routes_filter_and_page() {
         )
         .await
         .unwrap();
-    assert_eq!((p.rows.len(), p.matching, p.total), (2, 7, 7));
+    assert_eq!((p.rows.len(), p.matching, p.total), (5, 11, 11));
 }

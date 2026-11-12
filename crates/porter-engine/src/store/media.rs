@@ -22,11 +22,17 @@ pub struct MediaHandle {
 
 impl Store {
     /// `media/<h0h1>/<h2h3>/<sha256>`; paths are hashes so case-insensitive filesystems are safe.
-    fn hash_path(&self, hash: &str) -> PathBuf {
-        self.media_dir
+    /// Errors on anything but 64 lowercase hex digits: a hash read back from the store is
+    /// never trusted to be sliceable or free of path separators.
+    fn hash_path(&self, hash: &str) -> Result<PathBuf> {
+        if hash.len() != 64 || !hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+            return Err(anyhow!("invalid media hash {hash:?}"));
+        }
+        Ok(self
+            .media_dir
             .join(&hash[0..2])
             .join(&hash[2..4])
-            .join(hash)
+            .join(hash))
     }
 
     pub fn put_media_bytes(
@@ -39,7 +45,7 @@ impl Store {
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
-        let path = self.hash_path(&hash);
+        let path = self.hash_path(&hash)?;
         let is_new = !path.exists();
         if is_new {
             let dir = path.parent().ok_or_else(|| anyhow!("no parent dir"))?;
@@ -173,6 +179,6 @@ impl Store {
         let media: Media = self
             .get_item(id)?
             .ok_or_else(|| anyhow!("no media item {id}"))?;
-        Ok(self.hash_path(&media.hash))
+        self.hash_path(&media.hash)
     }
 }
