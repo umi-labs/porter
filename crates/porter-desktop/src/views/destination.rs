@@ -84,6 +84,7 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
                                             .on_click(
                                                 cx.listener(move |this, _, window, cx| {
                                                     let link = Link {
+                                                        stage: None,
                                                         kind: Some(IssueKind::SchemaMismatch),
                                                         severity: Some(sev),
                                                     };

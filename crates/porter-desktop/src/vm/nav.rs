@@ -3,12 +3,13 @@
 //! (The URL chips filter the URL table in place, and the sidebar badges open their
 //! section.) This is the plain data of those links; the window follows them.
 
-use porter_model::{IssueKind, Severity};
+use porter_model::{IssueKind, Severity, Stage};
 use serde_json::Value;
 
 /// A count's link: the open issues of this kind and severity (None: any).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Link {
+    pub stage: Option<Stage>,
     pub kind: Option<IssueKind>,
     pub severity: Option<Severity>,
 }
@@ -16,6 +17,7 @@ pub struct Link {
 impl Link {
     pub fn kind(k: IssueKind) -> Link {
         Link {
+            stage: None,
             kind: Some(k),
             severity: None,
         }
@@ -23,8 +25,17 @@ impl Link {
 
     pub fn severity(s: Severity) -> Link {
         Link {
+            stage: None,
             kind: None,
             severity: Some(s),
+        }
+    }
+
+    /// A stage card's count: that stage's open issues of this severity.
+    pub fn stage_severity(stage: Stage, s: Severity) -> Link {
+        Link {
+            stage: Some(stage),
+            ..Link::severity(s)
         }
     }
 }

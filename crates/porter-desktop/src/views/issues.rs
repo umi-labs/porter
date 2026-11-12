@@ -84,6 +84,23 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
             }))
         }),
     );
+    let stages = h_flex().gap(space::S2).flex_wrap().children(
+        porter_engine::session::STAGES.into_iter().map(|st| {
+            let n = s.stage_count(st);
+            let on = s.stage == Some(st);
+            toggle(
+                ("stage", st as usize),
+                crate::vm::pipeline::name(st),
+                Some(n.to_string()),
+                on,
+                None,
+                cx,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.issues_filters(|i| i.stage = if on { None } else { Some(st) }, cx)
+            }))
+        }),
+    );
     let kinds = h_flex()
         .gap(space::S2)
         .flex_wrap()
@@ -226,6 +243,7 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
                 .child(severity)
                 .child(div().w_64().child(Input::new(&w.issues_filter))),
         )
+        .child(stages)
         .child(kinds)
         .child(resolve)
         .children(

@@ -90,20 +90,22 @@ fn stage_card(w: &ProjectWindow, r: StageRow, cx: &mut Context<ProjectWindow>) -
     // Not `chip.stale()`: the block around it does the dimming, once.
     let chip = Chip::new(ChipState::from(&r.state)).label(r.label.clone());
     // Stale is a modifier: the old chip and counts stay, dimmed, and the reason says why.
-    let mut result =
-        v_flex()
-            .gap_1()
-            .min_w_0()
-            .child(chip)
-            .children(counts.map(|c| small(c, t.text)))
-            .children((!r.status.is_empty()).then(|| small(r.status.clone(), t.muted)))
-            // The error and warning counts open Issues on that severity.
-            .child(
-                h_flex().gap_1().flex_wrap().children(
-                    r.severity_links()
-                        .into_iter()
-                        .enumerate()
-                        .map(|(k, (sev, n, word))| {
+    let mut result = v_flex()
+        .gap_1()
+        .min_w_0()
+        .child(chip)
+        .children(counts.map(|c| small(c, t.text)))
+        .children((!r.status.is_empty()).then(|| small(r.status.clone(), t.muted)))
+        // The open error and warning counts of this stage, from the issues themselves, so
+        // each opens exactly as many rows as it shows.
+        .child(
+            h_flex().gap_1().flex_wrap().children(
+                [(Severity::Error, "errors"), (Severity::Warning, "warnings")]
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(k, (sev, word))| {
+                        let n = w.issues.open_count(stage, sev).filter(|n| *n > 0)?;
+                        Some(
                             toggle(
                                 ("card-sev", i * 2 + k),
                                 word,
@@ -114,12 +116,13 @@ fn stage_card(w: &ProjectWindow, r: StageRow, cx: &mut Context<ProjectWindow>) -
                             )
                             .on_click(cx.listener(
                                 move |this, _, window, cx| {
-                                    this.follow(Link::severity(sev), window, cx)
+                                    this.follow(Link::stage_severity(stage, sev), window, cx)
                                 },
-                            ))
-                        }),
-                ),
-            );
+                            )),
+                        )
+                    }),
+            ),
+        );
     if r.stale.is_some() {
         result = result.opacity(STALE_OPACITY);
     }

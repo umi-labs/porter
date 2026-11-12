@@ -16,6 +16,16 @@ pub enum Status {
     All,
 }
 
+impl Status {
+    fn keeps(self, r: &Resolution) -> bool {
+        match self {
+            Status::Open => *r == Resolution::Open,
+            Status::Closed => *r != Resolution::Open,
+            Status::All => true,
+        }
+    }
+}
+
 /// What the resolve form can do to the selected issues.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Choice {
@@ -50,6 +60,7 @@ pub struct Issues {
     loading: bool,
     all: Vec<Issue>,
     error: Option<String>,
+    pub stage: Option<Stage>,
     pub kind: Option<IssueKind>,
     pub severity: Option<Severity>,
     pub status: Status,
@@ -130,13 +141,10 @@ impl Issues {
         self.all
             .iter()
             .filter(|i| {
-                self.kind.is_none_or(|k| k == i.kind)
+                self.stage.is_none_or(|s| s == i.stage)
+                    && self.kind.is_none_or(|k| k == i.kind)
                     && self.severity.is_none_or(|s| s == i.severity)
-                    && match self.status {
-                        Status::Open => i.resolution == Resolution::Open,
-                        Status::Closed => i.resolution != Resolution::Open,
-                        Status::All => true,
-                    }
+                    && self.status.keeps(&i.resolution)
                     && (text.is_empty()
                         || i.message.to_lowercase().contains(&text)
                         || kind_name(i.kind).contains(&text))
@@ -144,31 +152,60 @@ impl Issues {
             .collect()
     }
 
-    /// Lands on the rows a count counted: open issues of `kind` and `severity`, nothing
-    /// else filtering them out. The selection is kept.
-    pub fn focus(&mut self, kind: Option<IssueKind>, severity: Option<Severity>) {
+    /// Lands on the rows a count counted: open issues of `stage`, `kind` and `severity`
+    /// (None: any), nothing else filtering them out. The selection is kept.
+    pub fn focus(
+        &mut self,
+        stage: Option<Stage>,
+        kind: Option<IssueKind>,
+        severity: Option<Severity>,
+    ) {
+        self.stage = stage;
         self.kind = kind;
         self.severity = severity;
         self.status = Status::Open;
         self.text.clear();
     }
 
-    /// How many issues of the shown status are of `kind`: the number on its filter chip.
+    /// Issues of `status` that the other three filters keep: what a chip's number means.
+    fn count(
+        &self,
+        status: Status,
+        stage: Option<Stage>,
+        kind: Option<IssueKind>,
+        severity: Option<Severity>,
+    ) -> usize {
+        self.all
+            .iter()
+            .filter(|i| {
+                stage.is_none_or(|s| s == i.stage)
+                    && kind.is_none_or(|k| k == i.kind)
+                    && severity.is_none_or(|s| s == i.severity)
+                    && status.keeps(&i.resolution)
+            })
+            .count()
+    }
+
+    /// The number on a kind chip: the rows the table shows once it is clicked.
     pub fn kind_count(&self, kind: IssueKind) -> usize {
-        self.in_status().filter(|i| i.kind == kind).count()
+        self.count(self.status, self.stage, Some(kind), self.severity)
     }
 
-    /// How many issues of the shown status have this severity.
+    /// The number on a severity chip.
     pub fn severity_count(&self, severity: Severity) -> usize {
-        self.in_status().filter(|i| i.severity == severity).count()
+        self.count(self.status, self.stage, self.kind, Some(severity))
     }
 
-    fn in_status(&self) -> impl Iterator<Item = &Issue> {
-        self.all.iter().filter(|i| match self.status {
-            Status::Open => i.resolution == Resolution::Open,
-            Status::Closed => i.resolution != Resolution::Open,
-            Status::All => true,
-        })
+    /// The number on a stage chip.
+    pub fn stage_count(&self, stage: Stage) -> usize {
+        self.count(self.status, Some(stage), self.kind, self.severity)
+    }
+
+    /// Open issues of a stage and severity, once read: the number on a stage card.
+    /// Following it (`focus`) shows exactly this many rows.
+    pub fn open_count(&self, stage: Stage, severity: Severity) -> Option<usize> {
+        self.loaded()
+            .then(|| self.count(Status::Open, Some(stage), None, Some(severity)))
     }
 
     /// Why the table has no rows, when it has none: nothing at all, or the filters.
@@ -449,24 +486,73 @@ mod tests {
         s.status = Status::All;
         s.text = "x".into();
         s.severity = Some(Severity::Info);
-        s.focus(Some(IssueKind::MissingMedia), Some(Severity::Error));
+        s.focus(None, Some(IssueKind::MissingMedia), Some(Severity::Error));
         assert_eq!(s.status, Status::Open);
         assert!(s.text.is_empty());
         // The chip counts the rows the table then shows.
         assert_eq!(s.visible().len(), 1);
         // The closed missing-media issue is not counted on an open filter.
-        s.focus(Some(IssueKind::MissingMedia), None);
+        s.focus(None, Some(IssueKind::MissingMedia), None);
         assert_eq!(s.kind_count(IssueKind::MissingMedia), 1);
         assert_eq!(s.visible().len(), s.kind_count(IssueKind::MissingMedia));
-        s.focus(None, Some(Severity::Warning));
+        s.focus(None, None, Some(Severity::Warning));
         assert_eq!(s.visible().len(), s.severity_count(Severity::Warning));
+    }
+
+    #[test]
+    fn a_stage_card_count_opens_exactly_that_many_rows() {
+        let mut a = issue(
+            1,
+            IssueKind::MissingMedia,
+            Severity::Error,
+            Resolution::Open,
+        );
+        a.stage = Stage::Extract;
+        let mut b = issue(
+            2,
+            IssueKind::UnmappedField,
+            Severity::Error,
+            Resolution::Open,
+        );
+        b.stage = Stage::Extract;
+        let c = issue(
+            3,
+            IssueKind::MissingMedia,
+            Severity::Error,
+            Resolution::Open,
+        ); // normalise
+        let mut d = issue(
+            4,
+            IssueKind::MissingMedia,
+            Severity::Error,
+            Resolution::WontFix,
+        );
+        d.stage = Stage::Extract;
+        let mut s = loaded(vec![a, b, c, d]);
+        assert_eq!(
+            Issues::default().open_count(Stage::Extract, Severity::Error),
+            None
+        );
+        for (stage, want) in [(Stage::Extract, 2), (Stage::Normalise, 1), (Stage::Load, 0)] {
+            assert_eq!(s.open_count(stage, Severity::Error), Some(want));
+            s.status = Status::All; // whatever the table showed before
+            s.focus(Some(stage), None, Some(Severity::Error));
+            assert_eq!(s.visible().len(), want, "{stage:?}");
+        }
+        // The stage chip's number is the rows the table shows after it is clicked.
+        s.focus(None, Some(IssueKind::MissingMedia), None);
+        assert_eq!(s.stage_count(Stage::Extract), 1);
+        s.focus(Some(Stage::Extract), Some(IssueKind::MissingMedia), None);
+        assert_eq!(s.visible().len(), 1);
+        // Chips count within the other filters, so a kind chip matches its rows too.
+        assert_eq!(s.kind_count(IssueKind::MissingMedia), s.visible().len());
     }
 
     #[test]
     fn empty_says_whether_it_is_the_filters() {
         let mut s = three();
         assert_eq!(s.empty(), None);
-        s.focus(Some(IssueKind::WriteFailed), None);
+        s.focus(None, Some(IssueKind::WriteFailed), None);
         assert_eq!(s.empty().unwrap().0, "No issue matches these filters");
         assert_eq!(loaded(vec![]).empty().unwrap().0, "No issues");
         assert_eq!(Issues::default().empty(), None, "not loaded is not empty");

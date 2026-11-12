@@ -153,6 +153,8 @@ impl ProjectWindow {
         });
         this._subs.push(quit);
         this.refresh();
+        // Read once at open: the stage cards link their counts to these rows.
+        this.read_issues(true);
         this
     }
 
@@ -234,7 +236,7 @@ impl ProjectWindow {
 
     /// Follows a count to the rows it counts: the section opens with the filter set.
     pub(crate) fn follow(&mut self, link: Link, window: &mut Window, cx: &mut Context<Self>) {
-        self.issues.focus(link.kind, link.severity);
+        self.issues.focus(link.stage, link.kind, link.severity);
         self.issues_filter
             .update(cx, |s, cx| s.set_value("", window, cx));
         self.select(Section::Issues, cx);
