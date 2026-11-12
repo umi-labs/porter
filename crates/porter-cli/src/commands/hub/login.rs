@@ -49,7 +49,11 @@ pub async fn login(ctx: &Ctx, origin: Url) -> Result<i32> {
             "expires_in": n("expires_in", 1800),
         }));
     }
-    eprintln!("Open {verify} and enter the code {user_code} to sign in to {account}.");
+    eprintln!(
+        "Open {} and enter the code {} to sign in to {account}.",
+        clean(&verify),
+        clean(&user_code)
+    );
     let body = json!({ "grant_type": GRANT, "device_code": device_code, "client_id": CLIENT_ID });
     let token = loop {
         tokio::time::sleep(Duration::from_secs(interval)).await;

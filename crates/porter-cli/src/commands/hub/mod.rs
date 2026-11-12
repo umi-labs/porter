@@ -162,6 +162,10 @@ pub async fn dispatch(ctx: Ctx, args: HubArgs) -> Result<i32> {
             };
             match pulled {
                 pull::Pulled::Done => Ok(0),
+                pull::Pulled::Interrupted => {
+                    eprintln!("interrupted before anything changed; run `porter hub pull` again");
+                    Ok(3)
+                }
                 pull::Pulled::Refused(why) => bail!("{why}"),
             }
         }
@@ -500,6 +504,11 @@ pub fn db_hash(path: &Path) -> Result<String> {
     Ok(hex(&h.finalize()))
 }
 
+// ponytail: heuristic in-use check (WAL left behind after our close). Known gaps: the
+// window between pull's second check and the end of the swap, and openers that don't use
+// WAL (a `sqlite3` shell in rollback mode) aren't detected. Upgrade path: `Store::open`
+// holds a shared advisory lock on a project lock file (e.g. flock on `.porter.lock`), and
+// pull takes it exclusively, non-blocking, from the check through the swap.
 /// Why project.db can't be replaced now: another process (a porter run, the TUI or the
 /// desktop app) has it open. The WAL is checkpointed into the db first; when our
 /// connection closes SQLite deletes the WAL, unless another connection still holds it.

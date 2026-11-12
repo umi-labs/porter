@@ -9,6 +9,16 @@ use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 /// Caps: the compressed snapshot, its unpacked size, and one media object.
 const MAX_SNAPSHOT: u64 = 20 << 30;
@@ -19,6 +29,8 @@ const MAX_ENTRIES: u64 = 1_000_000;
 
 pub enum Pulled {
     Done,
+    /// Ctrl-C before the swap: nothing changed.
+    Interrupted,
     /// Local work would be lost; the reason says how to proceed.
     Refused(String),
 }
@@ -26,6 +38,17 @@ pub enum Pulled {
 pub async fn pull(ctx: &Ctx, hub: &Hub, version: Option<u64>, force: bool) -> Result<Pulled> {
     let dir = &ctx.dir;
     check_leftovers(dir)?;
+    // Extract and the db checks don't yield, so the caller's Ctrl-C `select!` can't see a
+    // signal until after the swap; this flag is checked right before it instead.
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let _listener = AbortOnDrop(tokio::spawn({
+        let flag = interrupted.clone();
+        async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                flag.store(true, Ordering::SeqCst);
+            }
+        }
+    }));
     // Even with --force: replacing a db another process has open loses its writes.
     if let Some(why) = db_in_use(dir)? {
         bail!("{why}");
@@ -81,6 +104,9 @@ pub async fn pull(ctx: &Ctx, hub: &Hub, version: Option<u64>, force: bool) -> Re
     }
     let unpacked = work.0.join("new");
     extract(&archive, &unpacked)?;
+    if interrupted.load(Ordering::SeqCst) {
+        return Ok(Pulled::Interrupted);
+    }
     // Last check right before the swap: an app may have opened the project meanwhile.
     if let Some(why) = db_in_use(dir)? {
         bail!("{why}");
@@ -163,6 +189,12 @@ async fn fetch_media(s3: &reqwest::Client, url: &str, dir: &Path, hash: &str) ->
     }
     std::fs::rename(&tmp, &dest).with_context(|| format!("writing {}", dest.display()))?;
     Ok(())
+}
+
+/// Moves `.bak` into the staging dir (next to `new`) in one rename.
+fn retire(bak: &Path, new: &Path) -> Result<()> {
+    let to = new.with_file_name("old");
+    std::fs::rename(bak, &to).with_context(|| format!("moving {} into staging", bak.display()))
 }
 
 /// Removes the pull staging dir however the pull ends (a crash leaves it for
@@ -275,7 +307,10 @@ fn swap(dir: &Path, new: &Path) -> Result<()> {
         }
     }
     let Some(err) = failed else {
-        std::fs::remove_dir_all(&bak).with_context(|| format!("removing {}", bak.display()))?;
+        // One atomic rename retires the originals into staging, which `Staging` deletes.
+        // A crash from here on leaves only `.tmp` (cleaned up next run), never a half-deleted
+        // `.bak` that recovery would restore over the complete new files.
+        retire(&bak, new)?;
         return Ok(());
     };
     let rollback = || -> std::io::Result<()> {
@@ -291,7 +326,7 @@ fn swap(dir: &Path, new: &Path) -> Result<()> {
     };
     match rollback() {
         Ok(()) => {
-            let _ = std::fs::remove_dir_all(&bak);
+            let _ = retire(&bak, new);
             Err(err.context("pull failed; the project was left as it was"))
         }
         Err(re) => Err(err.context(format!(

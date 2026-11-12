@@ -1,4 +1,4 @@
-use super::{Ctx, Hub, download, is_hash, storage_client};
+use super::{Ctx, Hub, clean, download, is_hash, storage_client};
 use crate::output::print_json;
 use anyhow::{Context, Result, bail};
 use reqwest::{Method, StatusCode};
@@ -27,7 +27,7 @@ pub async fn list(ctx: &Ctx, hub: &Hub) -> Result<i32> {
             s("state"),
             s("purpose"),
             r.get("size").and_then(Value::as_u64).unwrap_or(0),
-            s("filename")
+            clean(s("filename"))
         );
     }
     Ok(0)
@@ -68,7 +68,7 @@ pub async fn get(ctx: &Ctx, hub: &Hub, id: &str, out: Option<PathBuf>) -> Result
     if !ctx.json {
         eprintln!(
             "downloading {} ({} bytes)",
-            s("filename"),
+            clean(s("filename")),
             v.get("size").and_then(Value::as_u64).unwrap_or(0)
         );
     }

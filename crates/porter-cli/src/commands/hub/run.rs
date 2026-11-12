@@ -94,6 +94,12 @@ pub async fn run(
         };
         match pulled {
             Ok(Pulled::Done) => {}
+            Ok(Pulled::Interrupted) => {
+                eprintln!(
+                    "interrupted; the result v{n} was not pulled: run `porter hub pull --version {n}`"
+                );
+                return Ok(3);
+            }
             Ok(Pulled::Refused(why)) => eprintln!(
                 "not pulling the result v{n}: {why}. Pull it with `porter hub pull --version {n}` (add --force to overwrite local changes)"
             ),

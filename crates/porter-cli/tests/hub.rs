@@ -990,6 +990,52 @@ async fn sync_project_only_counts_for_its_own_hub() {
     assert!(b.received_requests().await.unwrap().is_empty());
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_snapshot_keeps_its_own_wal() {
+    // A db whose last commit is only in its WAL, packed as the db plus the WAL.
+    let src = tempfile::tempdir().unwrap();
+    let c = wal_db(src.path());
+    let (db, wal) = (
+        std::fs::read(src.path().join("project.db")).unwrap(),
+        std::fs::read(src.path().join("project.db-wal")).unwrap(),
+    );
+    drop(c);
+    let (hub, s3) = (MockServer::start().await, MockServer::start().await);
+    let snap = tar_zst(&[
+        ("porter.toml", b"x"),
+        ("project.db", &db),
+        ("project.db-wal", &wal),
+    ]);
+    serve_version(&hub, &s3, 1, &snap, &[]).await;
+    let d = tempfile::tempdir().unwrap();
+    let (code, _, err) = run(d.path(), &hub, &["hub", "pull", "--version", "1"]).await;
+    assert_eq!(code, 0, "{err}");
+    // Had the swap moved the new WAL aside as a "sidecar", the row would be gone.
+    let c = rusqlite::Connection::open(d.path().join("project.db")).unwrap();
+    let n: i64 = c
+        .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1);
+    assert!(!d.path().join(".porter-hub-pull.tmp").exists());
+    assert!(!d.path().join(".porter-hub-pull.bak").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pull_refuses_top_level_names_differing_only_by_case() {
+    let (hub, s3) = (MockServer::start().await, MockServer::start().await);
+    let snap = tar_zst(&[("raw/a", b"1"), ("Raw/b", b"2")]);
+    serve_version(&hub, &s3, 1, &snap, &[]).await;
+    let d = tempfile::tempdir().unwrap();
+    let (code, _, err) = run(d.path(), &hub, &["hub", "pull", "--version", "1"]).await;
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("differ only by case: raw and Raw"), "{err}");
+    assert_eq!(
+        std::fs::read_dir(d.path()).unwrap().count(),
+        0,
+        "nothing swapped in"
+    );
+}
+
 /// Against a real hub: `PORTER_HUB_TEST_URL`, `PORTER_HUB_TOKEN`, `PORTER_HUB_TEST_SLUG`.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
