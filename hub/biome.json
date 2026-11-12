@@ -1,0 +1,5 @@
+{
+  "formatter": { "indentStyle": "space", "lineWidth": 110 },
+  "files": { "includes": ["**", "!**/migrations", "!**/auth-schema.ts"] },
+  "linter": { "rules": { "recommended": true } }
+}

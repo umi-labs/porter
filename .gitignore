@@ -22,3 +22,9 @@
 
 # IDE
 /.idea/
+
+# hub
+/hub/node_modules
+/hub/**/node_modules
+/hub/.env
+/hub/**/.next
