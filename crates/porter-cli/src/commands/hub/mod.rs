@@ -165,7 +165,8 @@ pub async fn dispatch(ctx: Ctx, args: HubArgs) -> Result<i32> {
     }
 }
 
-/// `[hub]` from porter.toml, read loosely so a config error elsewhere doesn't block sync.
+/// `[hub]` from porter.toml, read loosely so a config error elsewhere doesn't block sync;
+/// else the last sync (a pulled porter.toml may not carry `[hub]`).
 #[derive(Default)]
 struct HubConf {
     url: Option<String>,
@@ -177,9 +178,12 @@ impl HubConf {
         let text = std::fs::read_to_string(dir.join("porter.toml")).unwrap_or_default();
         let t: toml::Table = toml::from_str(&text).unwrap_or_default();
         let get = |k: &str| t.get("hub")?.get(k)?.as_str().map(str::to_string);
+        let sync: Option<SyncState> = std::fs::read_to_string(dir.join(SYNC_FILE))
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok());
         HubConf {
-            url: get("url"),
-            project: get("project"),
+            url: get("url").or_else(|| sync.as_ref().map(|s| s.hub.clone())),
+            project: get("project").or_else(|| sync.map(|s| s.project)),
         }
     }
 }
