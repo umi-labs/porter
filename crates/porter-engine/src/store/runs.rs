@@ -206,7 +206,7 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{SCHEMA, SCHEMA_V2, SCHEMA_V3, Store};
+    use super::super::{SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, Store};
     use porter_model::Stage;
 
     #[test]
@@ -235,5 +235,37 @@ mod tests {
         let get = |id: super::RunId| rows.iter().find(|r| r.id == id.0.to_string()).unwrap();
         assert!(get(dry).dry_run);
         assert!(!get(real).dry_run);
+    }
+
+    #[test]
+    fn v4_databases_migrate_to_v5_with_the_content_indexes() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("project.db");
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(&format!(
+            "BEGIN; {SCHEMA} {SCHEMA_V2} {SCHEMA_V3} {SCHEMA_V4} COMMIT;"
+        ))
+        .unwrap();
+        let v: i64 = c
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 4);
+        drop(c);
+        drop(Store::open(&path, d.path().join("media")).unwrap());
+        let c = rusqlite::Connection::open(&path).unwrap();
+        let v: i64 = c
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 5);
+        for name in ["items_doc_parent", "items_doc_type"] {
+            let n: i64 = c
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                    [name],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "{name}");
+        }
     }
 }

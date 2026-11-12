@@ -321,9 +321,24 @@ impl Store {
         let under = match parent {
             Some(_) => "json_extract(d.data, '$.parent') = ?2",
             None => {
+                // A parent cycle (A -> B -> A) has no top, so its lowest id stands in as the
+                // root; the rest are reachable beneath it. `anc` walks up from `d`; UNION
+                // stops it on a cycle.
                 "(json_extract(d.data, '$.parent') IS NULL OR NOT EXISTS (
                     SELECT 1 FROM items p WHERE p.id = json_extract(d.data, '$.parent')
-                    AND p.kind = 'document' AND p.connector = ?1 AND p.deleted_at IS NULL))"
+                    AND p.kind = 'document' AND p.connector = ?1 AND p.deleted_at IS NULL)
+                 OR (EXISTS (WITH RECURSIVE anc(id) AS (
+                        SELECT json_extract(d.data, '$.parent')
+                        UNION SELECT json_extract(p.data, '$.parent') FROM items p
+                            JOIN anc ON p.id = anc.id
+                            WHERE p.kind = 'document' AND p.connector = ?1 AND p.deleted_at IS NULL)
+                      SELECT 1 FROM anc WHERE id = d.id)
+                     AND NOT EXISTS (WITH RECURSIVE anc(id) AS (
+                        SELECT json_extract(d.data, '$.parent')
+                        UNION SELECT json_extract(p.data, '$.parent') FROM items p
+                            JOIN anc ON p.id = anc.id
+                            WHERE p.kind = 'document' AND p.connector = ?1 AND p.deleted_at IS NULL)
+                      SELECT 1 FROM anc WHERE id < d.id)))"
             }
         };
         let typed = match doc_type {

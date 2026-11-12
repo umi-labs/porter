@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 const CONFIG_FILE: &str = "porter.toml";
 const DB_FILE: &str = "project.db";
 /// Everything `clean` may delete. Nothing else in the folder is touched.
+/// The `SourceRef` connector name on media rows (they are hash-keyed, not the source adapter's).
+pub const MEDIA_CONNECTOR: &str = "media";
+
 const OWNED_DIRS: [&str; 3] = ["raw", "media", "reports"];
 const OWNED_FILES: [&str; 3] = [DB_FILE, "project.db-wal", "project.db-shm"];
 

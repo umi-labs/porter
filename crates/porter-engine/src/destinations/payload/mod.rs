@@ -18,6 +18,11 @@ use async_trait::async_trait;
 use client::PayloadClient;
 use porter_model::ItemId;
 
+/// Where schema mode "generate" writes its Payload collection files, under the project dir.
+pub fn generated_dir(project: &std::path::Path) -> std::path::PathBuf {
+    project.join("generated").join("payload")
+}
+
 const DEFAULT_KEY_ENV: &str = "PORTER_PAYLOAD_API_KEY";
 
 pub struct PayloadDestination {
@@ -119,7 +124,7 @@ impl Destination for PayloadDestination {
                 }
             }
             SchemaMode::Generate => {
-                let out = project.join("generated").join("payload");
+                let out = generated_dir(project);
                 written = schema_generate::generate(&summary, mapping, &out)?;
             }
             SchemaMode::Prompt => {

@@ -248,6 +248,10 @@ impl MappingDoc {
     /// written and the messages say why: the file changed on disk since it was read, the
     /// edited text doesn't parse, or the edit makes the config invalid (problems the file
     /// already had elsewhere don't block mapping edits).
+    ///
+    /// The changed-on-disk check and the rename are not one atomic step: an editor that
+    /// writes between them is overwritten. The window is a few microseconds, and the
+    /// check still catches every earlier change.
     pub fn save(&mut self) -> Vec<String> {
         let disk = match std::fs::read_to_string(&self.path) {
             Ok(t) => t,
@@ -279,7 +283,7 @@ impl MappingDoc {
 
 /// Temp file in the same directory, then rename over: a reader sees the old file or the
 /// new one, never half. The file's permissions are kept.
-pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<()> {
+pub fn write_atomic(path: &Path, text: &str) -> Result<()> {
     let dir = match path.parent() {
         Some(d) if !d.as_os_str().is_empty() => d,
         _ => Path::new("."),

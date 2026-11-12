@@ -302,7 +302,7 @@ pub(crate) fn attachments(
         m.width = dim("width").or(m.width);
         m.height = dim("height").or(m.height);
         let src = SourceRef {
-            connector: "media".into(),
+            connector: crate::project::MEDIA_CONNECTOR.into(),
             source_id: m.hash.clone(),
             url: m.variants.first().cloned(),
         };

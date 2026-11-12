@@ -585,3 +585,46 @@ async fn routes_filter_and_page() {
         .unwrap();
     assert_eq!((p.rows.len(), p.matching, p.total), (5, 14, 14));
 }
+
+/// A parent cycle (A -> B -> A) has no top; both documents must still be reachable from the
+/// tree's roots.
+#[tokio::test]
+async fn children_reach_documents_in_a_parent_cycle() {
+    use porter_engine::session::Page;
+    let d = tempfile::tempdir().unwrap();
+    Project::init(d.path(), "t", "wordpress").unwrap();
+    let s = Session::open(d.path()).unwrap();
+    let store = s.project().store();
+    let id_of = |sid: &str| {
+        ItemId::new(
+            ItemKind::Document,
+            &SourceRef {
+                connector: "wordpress".into(),
+                source_id: sid.into(),
+                url: Some(format!("https://old.test/{sid}")),
+            },
+        )
+    };
+    let (a, b) = (id_of("a"), id_of("b"));
+    for (id, src, doc) in [
+        doc("wordpress", "a", "page", "A", Some(b)),
+        doc("wordpress", "b", "page", "B", Some(a)),
+        doc("wordpress", "c", "page", "C", Some(a)),
+    ] {
+        store.put_item(ItemKind::Document, id, &src, &doc).unwrap();
+    }
+    let page = || Page {
+        offset: 0,
+        limit: 50,
+    };
+    let roots = s.children(None, None, page()).await.unwrap();
+    let ids: Vec<ItemId> = roots.rows.iter().map(|r| r.id).collect();
+    assert_eq!(ids, vec![a.min(b)], "one root for the cycle");
+    let top = ids[0];
+    let kids = s.children(Some(top), None, page()).await.unwrap();
+    let other = if top == a { b } else { a };
+    assert!(
+        kids.rows.iter().any(|r| r.id == other),
+        "the rest of the cycle is beneath it"
+    );
+}
