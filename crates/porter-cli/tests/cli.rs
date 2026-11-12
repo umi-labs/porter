@@ -77,7 +77,7 @@ fn unregistered_adapter_exits_1_naming_it() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains(
-            "no source adapter named \"nope\" (available: wordpress)",
+            "no source adapter named \"nope\" (available: wordpress, umbraco)",
         ));
 }
 
@@ -260,4 +260,46 @@ fn normalise_wordpress_wxr_end_to_end() {
     let status: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     let n = &status["stages"]["normalise"];
     assert!(n["done"].as_u64().unwrap_or(0) >= 2, "{status}");
+}
+
+#[test]
+fn normalise_umbraco_json_end_to_end() {
+    let d = tempfile::tempdir().unwrap();
+    porter(d.path())
+        .args(["init", "demo", "--adapter", "umbraco"])
+        .write_stdin("")
+        .assert()
+        .success();
+    let sample = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-engine/tests/fixtures/umbraco/sample.json");
+    let toml = d.path().join("porter.toml");
+    let mut text = std::fs::read_to_string(&toml).unwrap();
+    text.push_str(&format!(
+        "\n[[connectors]]\nkind = \"umbraco-json\"\npaths = [{:?}]\n",
+        sample.display().to_string()
+    ));
+    std::fs::write(&toml, text).unwrap();
+    for stage in ["analyse", "extract"] {
+        let code = porter(d.path())
+            .arg(stage)
+            .assert()
+            .get_output()
+            .status
+            .code();
+        assert!(matches!(code, Some(0 | 2)), "{stage} exited {code:?}");
+    }
+    assert!(d.path().join("raw/umbraco/export-0.json").exists());
+    let code = porter(d.path())
+        .args(["--json", "normalise"])
+        .assert()
+        .get_output()
+        .status
+        .code();
+    assert!(matches!(code, Some(0 | 2)), "normalise exited {code:?}");
+    let out = porter(d.path())
+        .args(["--json", "status"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("normalise"), "{stdout}");
 }

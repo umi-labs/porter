@@ -83,8 +83,8 @@ pub enum ConnectorConfig {
         site_url: Option<String>,
     },
     UmbracoJson {
-        #[serde(flatten)]
-        extra: toml::Table,
+        /// Umbraco JSON export files; relative paths resolve against the project folder.
+        paths: Vec<PathBuf>,
     },
 }
 
