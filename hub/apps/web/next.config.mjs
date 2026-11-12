@@ -2,6 +2,8 @@
 /** @type {import("next").NextConfig} */
 export default {
   output: "standalone",
+  // A long-running `next dev` can use its own build dir so a `next build` in the same checkout doesn't clobber it.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   // Linting is biome (`pnpm -C hub lint`).
   eslint: { ignoreDuringBuilds: true },
   // forbidden() for the 403 on pages a role may not see.

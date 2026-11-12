@@ -28,6 +28,7 @@
 /hub/**/node_modules
 /hub/.env
 /hub/**/.next
+/hub/**/.next-*
 
 # insta pending snapshots
 *.snap.new
