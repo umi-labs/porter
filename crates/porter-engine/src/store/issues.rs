@@ -19,9 +19,16 @@ impl Store {
     /// Dedupes on `(kind, item, stage, message)`. Reopening an existing issue moves
     /// it to `run`, refreshes severity/details, and turns `FixedByRerun` back into
     /// `Open`; `HandledManually` and `WontFix` are kept.
-    pub fn open_issue(&self, run: RunId, issue: Issue) -> Result<()> {
+    pub fn open_issue(&self, run: RunId, issue: Issue) -> Result<Issue> {
         let open = Resolution::Open;
-        self.conn().execute(
+        let key = (
+            wire(&issue.kind)?,
+            issue.item.map(|i| i.to_string()).unwrap_or_default(),
+            wire(&issue.stage)?,
+            issue.message.clone(),
+        );
+        let conn = self.conn();
+        conn.execute(
             &format!(
                 "INSERT INTO issues (id, run_id, kind, severity, item_id, stage, message, details, resolution, resolution_json)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
@@ -45,7 +52,21 @@ impl Store {
                 wire(&Resolution::FixedByRerun)?,
             ],
         )?;
-        Ok(())
+        // The stored row: canonical id and current resolution after any dedupe.
+        let (id, severity, details, resolution): (String, String, String, String) = conn
+            .query_row(
+                "SELECT id, severity, details, resolution_json FROM issues
+             WHERE kind = ?1 AND item_id = ?2 AND stage = ?3 AND message = ?4",
+                params![key.0, key.1, key.2, key.3],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?;
+        Ok(Issue {
+            id: id.parse()?,
+            severity: from_wire(severity)?,
+            details: serde_json::from_str(&details)?,
+            resolution: serde_json::from_str(&resolution)?,
+            ..issue
+        })
     }
 
     pub fn issues(&self, filter: &IssueFilter) -> Result<Vec<Issue>> {

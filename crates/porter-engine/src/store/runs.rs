@@ -62,7 +62,7 @@ impl Store {
 }
 
 impl Store {
-    /// Counts of statuses this run wrote for `stage` and issues it opened or reopened.
+    /// Counts of statuses this run wrote for `stage` and issues it opened or reopened that are still `Open` (waived issues don't count).
     /// `interrupted` is left false for the caller to set.
     pub fn run_tally(&self, run: RunId, stage: Stage) -> Result<Summary> {
         let conn = self.conn();
@@ -80,9 +80,11 @@ impl Store {
             }
         }
         let mut stmt = conn.prepare(
-            "SELECT severity FROM issues WHERE run_id = ?1 AND stage = ?2 AND deleted_at IS NULL",
+            "SELECT severity FROM issues WHERE run_id = ?1 AND stage = ?2 AND resolution = ?3 AND deleted_at IS NULL",
         )?;
-        for row in stmt.query_map([&run_id, &stage], |r| r.get::<_, String>(0))? {
+        for row in stmt.query_map([&run_id, &stage, &wire(&Resolution::Open)?], |r| {
+            r.get::<_, String>(0)
+        })? {
             match super::from_wire(row?)? {
                 Severity::Error => s.errors += 1,
                 Severity::Warning => s.warnings += 1,

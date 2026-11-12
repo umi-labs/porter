@@ -179,3 +179,120 @@ async fn retry_honours_retry_after() {
     assert!(r.status().is_success());
     assert!(t.elapsed() >= Duration::from_secs(1));
 }
+
+#[tokio::test]
+async fn err_emits_stage_finished_interrupted() {
+    let (_d, p, cfg) = setup();
+    let sink = EventSink::new(8);
+    let mut rx = sink.subscribe();
+    let r = run_stage(
+        p,
+        cfg,
+        sink,
+        CancellationToken::new(),
+        Stage::Extract,
+        |_| async { anyhow::bail!("boom") },
+    )
+    .await;
+    assert_eq!(r.unwrap_err().to_string(), "boom");
+    let mut last = None;
+    while let Ok(e) = rx.try_recv() {
+        last = Some(e);
+    }
+    match last {
+        Some(Event::StageFinished { summary, .. }) => assert!(summary.interrupted),
+        other => panic!("expected StageFinished, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn reopened_issue_event_has_stored_id() {
+    use porter_model::Resolution;
+    let (_d, p, cfg) = setup();
+    let open = |ctx: porter_engine::stage::StageCtx| {
+        ctx.issue(
+            IssueKind::WriteFailed,
+            Severity::Error,
+            Some(id("a")),
+            "m",
+            serde_json::json!({}),
+        )
+    };
+    let sink1 = EventSink::new(8);
+    let mut rx1 = sink1.subscribe();
+    run_stage(
+        p.clone(),
+        cfg.clone(),
+        sink1,
+        CancellationToken::new(),
+        Stage::Load,
+        |ctx| async move { open(ctx) },
+    )
+    .await
+    .unwrap();
+    let first = loop {
+        if let Event::IssueOpened { issue } = rx1.try_recv().unwrap() {
+            break issue;
+        }
+    };
+    p.store()
+        .resolve_issue(first.id, Resolution::HandledManually { note: "n".into() })
+        .unwrap();
+
+    let sink2 = EventSink::new(8);
+    let mut rx2 = sink2.subscribe();
+    let s2 = run_stage(
+        p,
+        cfg,
+        sink2,
+        CancellationToken::new(),
+        Stage::Load,
+        |ctx| async move { open(ctx) },
+    )
+    .await
+    .unwrap();
+    let second = loop {
+        if let Event::IssueOpened { issue } = rx2.try_recv().unwrap() {
+            break issue;
+        }
+    };
+    assert_eq!(second.id, first.id);
+    assert_eq!(
+        second.resolution,
+        Resolution::HandledManually { note: "n".into() }
+    );
+    assert_eq!(s2.errors, 0);
+    assert_eq!(exit_code(&s2), 0);
+}
+
+#[tokio::test]
+async fn retry_exhausts_on_5xx() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(3)
+        .mount(&server)
+        .await;
+    let c = http::client("porter-test");
+    let r = http::send_with_retry(c.get(server.uri()), 3).await.unwrap();
+    assert_eq!(r.status().as_u16(), 503);
+}
+
+#[tokio::test]
+async fn retry_without_retry_after_backs_off() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(503))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let c = http::client("porter-test");
+    let t = Instant::now();
+    let r = http::send_with_retry(c.get(server.uri()), 3).await.unwrap();
+    assert!(r.status().is_success());
+    assert!(t.elapsed() >= Duration::from_millis(500));
+}

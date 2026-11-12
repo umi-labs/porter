@@ -85,7 +85,7 @@ impl StageCtx {
             details,
             resolution: Resolution::Open,
         };
-        self.project.store().open_issue(self.run, issue.clone())?;
+        let issue = self.project.store().open_issue(self.run, issue)?;
         self.events.emit(Event::IssueOpened { issue });
         Ok(())
     }
