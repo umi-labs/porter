@@ -57,8 +57,15 @@ impl Store {
                     r.get::<_, Option<String>>(2)?,
                 ))
             })?;
+            let mut normalised = false;
             for row in rows {
                 let (id, url, path) = row?;
+                // Rows with a path (normalised documents) come first; once there are any, raw
+                // rows without one are stale stand-ins and must not answer lookups.
+                normalised |= path.is_some();
+                if normalised && path.is_none() {
+                    break;
+                }
                 let id: ItemId = id.parse()?;
                 if let Some(k) = url.and_then(|u| normalise_url(&u, None)) {
                     idx.hosts.insert(split_key(&k.0).0.to_string());
@@ -85,8 +92,8 @@ impl Store {
     }
 
     /// What a URL points at: a route's target, else a document stored under that URL or
-    /// path (rows with a `path`, i.e. normalised documents, before raw rows), else a media
-    /// item with that URL.
+    /// path (only rows with a `path`, i.e. normalised documents, once there are any), else a
+    /// media item with that URL.
     pub fn lookup_url(&self, url: &str) -> Result<Option<RouteTarget>> {
         let Some(key) = normalise_url(url, None) else {
             return Ok(None);

@@ -27,6 +27,14 @@ pub struct HtmlCtx<'a> {
     /// Hosts whose links are internal; `www.` and case don't matter.
     pub site_hosts: Vec<String>,
     pub issues: &'a mut Vec<PendingIssue>,
+    /// Other URLs a source serves the same file under (e.g. a resized copy's original), tried
+    /// in order when a media URL itself isn't stored. `no_alternates` for none.
+    pub media_alternates: fn(&str) -> Vec<String>,
+}
+
+/// For `HtmlCtx::media_alternates`: no other URLs.
+pub fn no_alternates(_: &str) -> Vec<String> {
+    vec![]
 }
 
 impl HtmlCtx<'_> {
@@ -118,9 +126,15 @@ impl HtmlCtx<'_> {
 
     /// The media item for the first of `urls` the store knows. No issue.
     pub fn find_media<'u>(&self, urls: impl IntoIterator<Item = &'u str>) -> Option<ItemId> {
-        urls.into_iter().find_map(|u| {
-            let abs = self.absolute(u.trim())?;
-            self.store.media_by_url(&abs).ok().flatten()
+        let urls: Vec<String> = urls
+            .into_iter()
+            .filter_map(|u| self.absolute(u.trim()))
+            .collect();
+        let get = |u: &str| self.store.media_by_url(u).ok().flatten();
+        urls.iter().find_map(|u| get(u)).or_else(|| {
+            urls.iter()
+                .flat_map(|u| (self.media_alternates)(u))
+                .find_map(|u| get(&u))
         })
     }
 
@@ -727,6 +741,7 @@ pub(crate) mod tests {
             store: &f.store,
             site_hosts: vec!["www.example.test".into()],
             issues,
+            media_alternates: no_alternates,
         }
     }
 

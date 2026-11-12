@@ -232,7 +232,7 @@ pub(crate) fn write(
         .map(|(v, r)| from_redirection(v, *r))
         .collect();
     for (rid, src, r) in out.store.items_decodable::<Redirect>(ItemKind::Redirect)? {
-        if src.connector == "crawl" {
+        if raw.crawl && src.connector == "crawl" {
             inputs.push(Input {
                 from: r.from,
                 to: r.to,
@@ -361,7 +361,7 @@ pub(crate) fn routes(
     media_ids: &HashMap<u64, ItemId>,
 ) -> Result<()> {
     for (cid, src, r) in out.store.items_decodable::<Route>(ItemKind::Route)? {
-        if src.connector != "crawl" {
+        if !raw.crawl || src.connector != "crawl" {
             continue;
         }
         let Some(k) = url_key(&r.url) else {

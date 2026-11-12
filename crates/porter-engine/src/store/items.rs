@@ -28,6 +28,16 @@ impl Store {
         Ok(())
     }
 
+    /// Marks the item deleted (it stops being read); a later `put_item` revives it.
+    pub fn soft_delete(&self, id: ItemId) -> Result<()> {
+        self.conn().execute(
+            &format!("UPDATE items SET deleted_at = {NOW}, updated_at = {NOW} WHERE id = ?1 AND deleted_at IS NULL"),
+            [id.to_string()],
+        )?;
+        self.drop_url_index();
+        Ok(())
+    }
+
     pub fn get_item<T: DeserializeOwned>(&self, id: ItemId) -> Result<Option<T>> {
         let data: Option<String> = self
             .conn()

@@ -13,7 +13,7 @@ use crate::url::normalise_url;
 use ::url::Url;
 use anyhow::Result;
 use chrono::{DateTime, NaiveDateTime, Utc};
-use porter_model::{Author, ItemId, ItemKind, SourceRef};
+use porter_model::{Author, IssueKind, ItemId, ItemKind, Severity, SourceRef};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap};
@@ -81,6 +81,8 @@ pub(crate) struct Raw {
     pub settings_raw: Vec<ItemId>,
     /// Why a connector row fed nothing, when known.
     pub notes: HashMap<ItemId, String>,
+    /// A crawl connector is configured (its store rows count).
+    pub crawl: bool,
 }
 
 impl Raw {
@@ -292,10 +294,11 @@ fn ndjson(p: &Path) -> Vec<Value> {
         .collect()
 }
 
-fn load_db(r: &mut Raw, dir: &Path, site: &mut SiteParts) {
-    let Some(v) = read_json::<Value>(&dir.join("export.json")) else {
-        return;
-    };
+/// Err when the export can't be read (the caller reports it).
+fn load_db(r: &mut Raw, dir: &Path, site: &mut SiteParts) -> Result<(), String> {
+    let bytes = std::fs::read(dir.join("export.json")).map_err(|e| e.to_string())?;
+    let v: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    drop(bytes);
     let db = |kind, sid: String| row_id(kind, "wp-db", &sid);
     let mut logins = HashMap::new();
     for u in v["users"].as_array().into_iter().flatten() {
@@ -408,6 +411,7 @@ fn load_db(r: &mut Raw, dir: &Path, site: &mut SiteParts) {
         });
         r.submissions.push((row, raw));
     }
+    Ok(())
 }
 
 // ---------- wp-rest ----------
@@ -465,7 +469,8 @@ fn rest_post(
         author: num(&v["author"]).and_then(|a| users.get(&a).cloned()),
         created: wp_date(&s(v, "date_gmt")),
         updated: wp_date(&s(v, "modified_gmt")),
-        content: rendered(v, "content"),
+        content: v["content"]["raw"].as_str().map(str::to_string),
+        content_rendered: v["content"]["rendered"].as_str().map(str::to_string),
         excerpt: rendered(v, "excerpt"),
         meta: obj(&v["meta"]).unwrap_or_default(),
         acf: obj(&v["acf"]).filter(|o| !o.is_empty()),
@@ -864,6 +869,19 @@ fn first<T: Clone>(v: &[Option<T>]) -> Option<T> {
     v.iter().flatten().next().cloned()
 }
 
+/// A connector of this name is in the config.
+pub(crate) fn configured(cfg: &crate::config::ProjectConfig, name: &str) -> bool {
+    cfg.connectors.iter().any(|c| {
+        matches!(
+            (c, name),
+            (ConnectorConfig::WpDb { .. }, "wp-db")
+                | (ConnectorConfig::WpRest { .. }, "wp-rest")
+                | (ConnectorConfig::Wxr { .. }, "wxr")
+                | (ConnectorConfig::Crawl { .. }, "crawl")
+        )
+    })
+}
+
 pub(crate) fn load(ctx: &StageCtx) -> Result<Raw> {
     let mut parts = SiteParts::default();
     let mut wp_root = None;
@@ -911,14 +929,40 @@ pub(crate) fn load(ctx: &StageCtx) -> Result<Raw> {
         },
         settings_raw: vec![],
         notes: HashMap::new(),
+        crawl: false,
     };
+    // Only connectors configured now: a removed one's leftovers in raw/ are not the site.
+    let on = |name: &str| configured(&ctx.config, name);
+    r.crawl = on("crawl");
     let mut db_parts = SiteParts::default();
-    load_db(&mut r, &ctx.project.raw_dir("wp-db"), &mut db_parts);
+    if on("wp-db")
+        && let Err(e) = load_db(&mut r, &ctx.project.raw_dir("wp-db"), &mut db_parts)
+    {
+        ctx.issue(
+            IssueKind::AccessGap,
+            Severity::Error,
+            None,
+            format!("wp-db export unreadable: {e}"),
+            json!({ "connector": "wp-db", "file": "export.json" }),
+        )?;
+    }
     let mut rest_parts = SiteParts::default();
-    load_rest(ctx, &mut r, &mut rest_parts)?;
+    if on("wp-rest") {
+        load_rest(ctx, &mut r, &mut rest_parts)?;
+    }
     let mut wxr_parts = SiteParts::default();
-    load_wxr(ctx, &mut r, &mut wxr_parts)?;
-    load_crawl(ctx, &mut r);
+    if on("wxr") {
+        load_wxr(ctx, &mut r, &mut wxr_parts)?;
+    }
+    if r.crawl {
+        load_crawl(ctx, &mut r);
+    }
+    // Rendered HTML ranks below every connector's raw content.
+    for p in r.posts.values_mut() {
+        if p.content.is_none() {
+            p.content = p.content_rendered.take();
+        }
+    }
     // Configured URL overrides, then db, rest, wxr, then the rest of config.
     let cfg_urls = std::mem::take(&mut parts.urls);
     let (cfg_first, cfg_rest) = cfg_urls.split_at(usize::from(

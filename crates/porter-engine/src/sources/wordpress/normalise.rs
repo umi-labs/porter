@@ -6,7 +6,7 @@
 //! documents. Every item written gets a Normalise status; connector rows that fed nothing get
 //! their own `Skipped`, and `raw/normalise/provenance.json` maps each row to what it became.
 
-use super::load::{Raw, load};
+use super::load::{Raw, configured, load};
 use super::redirects;
 use super::{acf, classic_to_richtext, divi, forms, gutenberg, media, seo};
 use crate::html::{HtmlCtx, PendingIssue, decode_entities};
@@ -71,6 +71,8 @@ pub(crate) struct Post {
     pub created: Option<DateTime<Utc>>,
     pub updated: Option<DateTime<Utc>>,
     pub content: Option<String>,
+    /// REST's rendered HTML, used only when no connector had the raw content.
+    pub content_rendered: Option<String>,
     pub excerpt: Option<String>,
     pub meta: Map<String, Value>,
     pub acf: Option<Map<String, Value>>,
@@ -106,8 +108,26 @@ impl Post {
         }
         text!(post_type, status, slug, title);
         opt!(
-            link, parent, menu_order, author, created, updated, content, excerpt, acf, featured,
-            mime, file, file_meta, alt, caption, lang, head, nav_menu, template
+            link,
+            parent,
+            menu_order,
+            author,
+            created,
+            updated,
+            content,
+            content_rendered,
+            excerpt,
+            acf,
+            featured,
+            mime,
+            file,
+            file_meta,
+            alt,
+            caption,
+            lang,
+            head,
+            nav_menu,
+            template
         );
         for (k, v) in lo.meta {
             self.meta.entry(k).or_insert(v);
@@ -178,8 +198,20 @@ fn not_a_document(p: &Post) -> Option<String> {
         "revision" => "revision".into(),
         "nav_menu_item" => "part of a menu".into(),
         "acf-field" | "acf-field-group" => "ACF field definition (used to type ACF values)".into(),
-        "customize_changeset" | "oembed_cache" | "user_request" | "nf_sub" => {
-            format!("WordPress internal ({})", p.post_type)
+        "wp_block"
+        | "et_pb_layout"
+        | "wp_template"
+        | "wp_template_part"
+        | "wp_navigation"
+        | "wp_global_styles"
+        | "custom_css"
+        | "oembed_cache"
+        | "user_request"
+        | "wp_font_family"
+        | "wp_font_face"
+        | "customize_changeset"
+        | "nf_sub" => {
+            format!("internal WordPress type {}", p.post_type)
         }
         _ => return doc_status(&p.status).err(),
     })
@@ -263,6 +295,7 @@ fn convert(p: &Post, d: &mut Document, sh: &Shared, store: &Store, issues: &mut 
         store,
         site_hosts: sh.site.hosts.clone(),
         issues,
+        media_alternates: media::alternates,
     };
     let content = p.content.as_deref().unwrap_or("");
     let body = if content.contains("[et_pb_") {
@@ -429,16 +462,34 @@ pub(crate) struct Out<'a> {
     pub prov: BTreeMap<ItemId, ItemId>,
     /// Items given a status this run.
     pub statused: HashSet<ItemId>,
+    /// Items written this run.
+    pub written: HashSet<ItemId>,
 }
 
 impl Out<'_> {
     pub fn put<T: Serialize>(
-        &self,
+        &mut self,
         kind: ItemKind,
         (id, src): &(ItemId, SourceRef),
         data: &T,
     ) -> Result<()> {
+        self.written.insert(*id);
         self.store.put_item(kind, *id, src, data)
+    }
+
+    /// Soft-deletes canonical items of `kinds` an earlier run made and this one didn't, so
+    /// they stop answering lookups, with `Skipped { "no longer in the source" }`.
+    fn drop_stale(&mut self, kinds: &[ItemKind]) -> Result<()> {
+        for (id, kind, connector) in self.store.item_rows()? {
+            let kind: ItemKind = serde_json::from_value(json!(kind))?;
+            if connector != CONNECTOR || !kinds.contains(&kind) || self.written.contains(&id) {
+                continue;
+            }
+            self.store.soft_delete(id)?;
+            let reason = "no longer in the source".to_string();
+            self.status(kind, id, ItemStatus::Skipped { reason }, [])?;
+        }
+        Ok(())
     }
 
     /// Sets `id`'s status and maps `raw` rows to it.
@@ -484,6 +535,7 @@ fn normalise(ctx: &StageCtx) -> Result<()> {
         store,
         prov: BTreeMap::new(),
         statused: HashSet::new(),
+        written: HashSet::new(),
     };
     let cancelled = || ctx.cancel.is_cancelled();
 
@@ -492,12 +544,14 @@ fn normalise(ctx: &StageCtx) -> Result<()> {
         media::attachments(ctx, &raw.posts, &raw.site, &mut out.prov, &mut out.statused)?;
     let authors = authors(&mut out, &raw)?;
     let term_ids = terms(&mut out, &raw)?;
-    let mut sk = skeletons(&out, &raw, &authors)?;
+    let mut sk = skeletons(&mut out, &raw, &authors)?;
     if cancelled() {
         return Ok(());
     }
     let redirect_by_key = redirects::write(&mut out, &raw, &mut sk)?;
     redirects::routes(&mut out, &raw, &mut sk, &redirect_by_key, &media_ids)?;
+    // Before content is converted, so links can't resolve to what is gone.
+    out.drop_stale(&[ItemKind::Document, ItemKind::Route, ItemKind::Redirect])?;
     if cancelled() {
         return Ok(());
     }
@@ -609,7 +663,7 @@ pub(crate) struct Skeletons {
     pub routes: BTreeMap<String, Route>,
 }
 
-fn skeletons(out: &Out, raw: &Raw, authors: &HashMap<String, ItemId>) -> Result<Skeletons> {
+fn skeletons(out: &mut Out, raw: &Raw, authors: &HashMap<String, ItemId>) -> Result<Skeletons> {
     let mut docs: HashMap<u64, ItemId> = HashMap::new();
     let mut skipped = vec![];
     for p in raw.posts.values().filter(|p| p.post_type != "attachment") {
@@ -896,21 +950,36 @@ fn settings(out: &mut Out, raw: &Raw, docs: &HashMap<u64, ItemId>) -> Result<()>
 /// Media no attachment claimed are done as they are; connector rows that fed nothing get
 /// their own `Skipped`; the row → item map goes to `raw/normalise/provenance.json`.
 fn account(out: &mut Out, raw: &Raw) -> Result<()> {
+    out.drop_stale(&[
+        ItemKind::Author,
+        ItemKind::Taxonomy,
+        ItemKind::Term,
+        ItemKind::Menu,
+        ItemKind::Form,
+        ItemKind::Submission,
+        ItemKind::Settings,
+    ])?;
     for (id, src, _) in out.store.items::<Value>(ItemKind::Media)? {
         if src.connector == "media" && !out.statused.contains(&id) {
             out.status(ItemKind::Media, id, ItemStatus::Done, [])?;
         }
     }
     for (id, kind, connector) in out.store.item_rows()? {
+        let kind_: ItemKind = serde_json::from_value(json!(kind))?;
         if matches!(connector.as_str(), CONNECTOR | "media") || out.prov.contains_key(&id) {
             continue;
         }
-        let reason = raw.notes.get(&id).cloned().unwrap_or_else(|| {
-            format!("{kind} row from {connector} has nothing to normalise (failed or unreadable in an earlier stage)")
-        });
-        let kind: ItemKind = serde_json::from_value(json!(kind))?;
+        let reason = match raw.notes.get(&id) {
+            Some(n) => n.clone(),
+            None if !configured(&out.ctx.config, &connector) => {
+                format!("connector {connector} is no longer configured")
+            }
+            None => format!(
+                "{kind} row from {connector} has nothing to normalise (failed or unreadable in an earlier stage)"
+            ),
+        };
         out.ctx
-            .item_status(id, kind, ItemStatus::Skipped { reason })?;
+            .item_status(id, kind_, ItemStatus::Skipped { reason })?;
     }
     let dir = out.ctx.project.raw_dir("normalise");
     std::fs::create_dir_all(&dir)?;

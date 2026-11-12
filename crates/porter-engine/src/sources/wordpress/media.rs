@@ -20,6 +20,37 @@ fn stem_ext(name: &str) -> (&str, &str) {
     }
 }
 
+/// URLs WordPress may serve the same upload under, for a URL that isn't stored: without a
+/// `-WxH` size suffix (any size, recorded or not), then also without `-scaled`; each also as
+/// the `-scaled` copy.
+pub(crate) fn alternates(url: &str) -> Vec<String> {
+    static SIZE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"-\d+x\d+$").expect("valid regex"));
+    let bare = url.split(['?', '#']).next().unwrap_or(url);
+    let Some((dir, name)) = bare.rsplit_once('/') else {
+        return vec![];
+    };
+    let (stem, ext) = stem_ext(name);
+    if ext.is_empty() {
+        return vec![];
+    }
+    let unsized_ = SIZE.replace(stem, "").to_string();
+    let unscaled = unsized_
+        .strip_suffix("-scaled")
+        .unwrap_or(&unsized_)
+        .to_string();
+    let mut out = vec![];
+    for s in [&unsized_, &unscaled] {
+        let scaled = (!s.ends_with("-scaled")).then(|| format!("{dir}/{s}-scaled{ext}"));
+        for cand in std::iter::once(format!("{dir}/{s}{ext}")).chain(scaled) {
+            if cand != bare && !out.contains(&cand) {
+                out.push(cand);
+            }
+        }
+    }
+    out
+}
+
 /// File names of every variant WordPress may serve for this attachment.
 pub(crate) fn variant_names(file: &str, metadata: &Value) -> Vec<String> {
     let base = file.rsplit('/').next().unwrap_or(file);
@@ -181,6 +212,7 @@ pub(crate) fn attachments(
                     reason: "no file".into(),
                 },
             )?;
+            done.insert(canon_id);
             for r in &p.raw {
                 prov.insert(*r, canon_id);
             }
@@ -249,6 +281,11 @@ mod tests {
             uploads_path(Some("https://x.test/files/2024/01/a.jpg"), "2024/01/a.jpg"),
             "/files"
         );
+        assert_eq!(
+            alternates("https://x.test/u/a-scaled-640x480.jpg?v=1"),
+            ["https://x.test/u/a-scaled.jpg", "https://x.test/u/a.jpg",]
+        );
+        assert!(alternates("https://x.test/page/").is_empty());
         assert!(!safe_rel("../etc/passwd"));
         assert!(!safe_rel("/etc/passwd"));
         assert!(safe_rel("2024/01/a.jpg"));

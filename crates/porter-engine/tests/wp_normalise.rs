@@ -52,7 +52,7 @@ fn export() -> Value {
         "posts": [
             post(20, "page", "publish", "about", json!({
                 "title": "About",
-                "content": "<p>See <a href=\"https://example.com/hello-world/\">hello</a></p>",
+                "content": "<p>See <a href=\"https://example.com/hello-world/\">hello</a> and <a href=\"https://example.com/five/\">five</a></p>",
                 "meta": {
                     "_yoast_wpseo_title": "%%title%% %%sep%% %%sitename%%",
                     "_yoast_wpseo_metadesc": "About us %%bogus%%",
@@ -64,6 +64,16 @@ fn export() -> Value {
             post(23, "post", "future", "soon", json!({})),
             post(24, "page", "publish", "divi", json!({
                 "content": "[et_pb_section][et_pb_row][et_pb_column type=\"4_4\"][et_pb_text]<p>Hi</p>[/et_pb_text][/et_pb_column][/et_pb_row][/et_pb_section]",
+            })),
+            post(5, "page", "publish", "five", json!({})),
+            post(25, "page", "publish", "photo", json!({
+                "content": "<p><img src=\"https://example.com/wp-content/uploads/2024/05/big-123x45.jpg\"></p>",
+            })),
+            post(26, "wp_block", "publish", "reusable", json!({
+                "content": "<!-- wp:paragraph --><p>Reusable text</p><!-- /wp:paragraph -->",
+            })),
+            post(27, "page", "publish", "uses-block", json!({
+                "content": "<!-- wp:block {\"ref\":26} /-->",
             })),
             post(30, "page", "publish", "loop-a", json!({ "parent": 31 })),
             post(31, "page", "publish", "loop-b", json!({ "parent": 30 })),
@@ -125,9 +135,26 @@ where
     .unwrap()
 }
 
-/// basic.xml extracted, plus a synthetic wp-db export (and its uploads folder) and Redirection
-/// rows `(id, from, to)`; then normalise.
 async fn setup(redirects: &[(u64, &str, &str)]) -> Fx {
+    setup_with(redirects, |_| {}).await
+}
+
+async fn normalise(fx: &Fx) {
+    stage(fx, Stage::Normalise, |ctx| async move {
+        WordPressSource.normalise(&ctx)
+    })
+    .await;
+}
+
+fn write_json(path: &std::path::Path, v: &Value) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, serde_json::to_vec(v).unwrap()).unwrap();
+}
+
+/// basic.xml extracted (page 2's raw content swapped for Divi), a REST record of page 2 with
+/// rendered HTML only, a synthetic wp-db export (and its uploads folder) and Redirection rows
+/// `(id, from, to)`; `tweak` gets the raw/ folder before normalise runs.
+async fn setup_with(redirects: &[(u64, &str, &str)], tweak: impl FnOnce(&std::path::Path)) -> Fx {
     let d = tempfile::tempdir().unwrap();
     let p = Arc::new(Project::init(d.path(), "t", "wordpress").unwrap());
     let root = d.path().join("wproot");
@@ -144,6 +171,11 @@ async fn setup(redirects: &[(u64, &str, &str)]) -> Fx {
             wp_root: Some(root),
             table_prefix: "wp_".into(),
             site_url: None,
+        },
+        ConnectorConfig::WpRest {
+            url: "https://example.com".into(),
+            auth: None,
+            keyring: None,
         },
     ];
     let fx = Fx { _d: d, p, cfg };
@@ -181,6 +213,34 @@ async fn setup(redirects: &[(u64, &str, &str)]) -> Fx {
             ctx.item_status(iid, ItemKind::Redirect, ItemStatus::Done)?;
         }
         std::fs::write(dir.join("redirection.ndjson"), nd)?;
+        // Page 2: Divi in the WXR's raw content, only rendered HTML over REST.
+        let item = ctx.project.raw_dir("wxr").join("items/2.json");
+        let mut v: Value = serde_json::from_slice(&std::fs::read(&item)?)?;
+        v["content"] = json!("[et_pb_section][et_pb_row][et_pb_column type=\"4_4\"][et_pb_text]<p>Raw</p>[/et_pb_text][/et_pb_column][/et_pb_row][/et_pb_section]");
+        std::fs::write(&item, serde_json::to_vec(&v)?)?;
+        let rest = json!({
+            "id": 2, "type": "page", "status": "publish", "slug": "sample-page",
+            "link": "https://example.com/sample-page/", "title": {"rendered": "Sample Page"},
+            "content": {"rendered": "<div class=\"et_pb_section\"><p>Rendered</p></div>"},
+        });
+        write_json(&ctx.project.raw_dir("wp-rest").join("pages/2.json"), &rest);
+        let src = SourceRef {
+            connector: "wp-rest".into(),
+            source_id: "pages:2".into(),
+            url: Some("https://example.com/sample-page/".into()),
+        };
+        let row = RawItem {
+            label: "page".into(),
+            title: Some("Sample Page".into()),
+            status: Some("publish".into()),
+            url: src.url.clone(),
+            raw_path: Some("pages/2.json".into()),
+        };
+        let iid = ItemId::new(ItemKind::Document, &src);
+        ctx.project
+            .store()
+            .put_item(ItemKind::Document, iid, &src, &row)?;
+        ctx.item_status(iid, ItemKind::Document, ItemStatus::Done)?;
         // A file the crawl already downloaded: the scaled original of attachment 60.
         ctx.project.store().put_media_bytes(
             b"big-bytes",
@@ -190,10 +250,8 @@ async fn setup(redirects: &[(u64, &str, &str)]) -> Fx {
         Ok(())
     })
     .await;
-    stage(&fx, Stage::Normalise, |ctx| async move {
-        WordPressSource.normalise(&ctx)
-    })
-    .await;
+    tweak(&fx.p.dir().join("raw"));
+    normalise(&fx).await;
     fx
 }
 
@@ -421,4 +479,109 @@ async fn every_item_has_status() {
         &menu.items[1].target,
         porter_model::MenuTarget::Url(u) if u == "https://other.test/"
     ));
+}
+
+#[tokio::test]
+async fn rerun_soft_deletes_removed_posts() {
+    let fx = setup(&[]).await;
+    let five = canon(ItemKind::Document, "post:5");
+    assert!(fx.p.store().get_item::<Document>(five).unwrap().is_some());
+    let unresolved = |fx: &Fx| {
+        issues(fx, IssueKind::UnresolvedLink)
+            .iter()
+            .any(|i| i.message.contains("/five/"))
+    };
+    assert!(!unresolved(&fx));
+    // Post 5 leaves the source.
+    let path = fx.p.raw_dir("wp-db").join("export.json");
+    let mut v = export();
+    v["posts"].as_array_mut().unwrap().retain(|p| p["id"] != 5);
+    write_json(&path, &v);
+    normalise(&fx).await;
+    let s = fx.p.store();
+    assert!(
+        s.items_decodable::<Document>(ItemKind::Document)
+            .unwrap()
+            .iter()
+            .all(|(id, _, _)| *id != five)
+    );
+    assert!(s.get_item::<Document>(five).unwrap().is_none());
+    assert_eq!(
+        s.status(Stage::Normalise, five).unwrap(),
+        Some(ItemStatus::Skipped {
+            reason: "no longer in the source".into()
+        })
+    );
+    assert_eq!(s.lookup_url("https://example.com/five/").unwrap(), None);
+    assert!(unresolved(&fx));
+}
+
+#[tokio::test]
+async fn unlisted_size_resolves_to_original() {
+    let fx = setup(&[]).await;
+    let photo = doc(&fx, 25);
+    let big =
+        fx.p.store()
+            .media_by_url("https://example.com/wp-content/uploads/2024/05/big.jpg")
+            .unwrap()
+            .unwrap();
+    let json = serde_json::to_string(&photo.fields["content"]).unwrap();
+    assert!(json.contains(&big.to_string()), "{json}");
+    assert!(
+        !issues(&fx, IssueKind::MissingMedia)
+            .iter()
+            .any(|i| i.item == Some(photo.id)),
+    );
+}
+
+#[tokio::test]
+async fn rendered_rest_does_not_beat_wxr_raw() {
+    let fx = setup(&[]).await;
+    match &doc(&fx, 2).fields["content"] {
+        FieldValue::Layout(b) => {
+            let json = serde_json::to_string(b).unwrap();
+            assert!(json.contains("Raw") && !json.contains("Rendered"), "{json}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn unreadable_export_is_an_error() {
+    let fx = setup_with(&[], |raw| {
+        std::fs::write(raw.join("wp-db/export.json"), b"{ not json").unwrap();
+    })
+    .await;
+    let errs: Vec<_> = issues(&fx, IssueKind::AccessGap)
+        .into_iter()
+        .filter(|i| i.severity == Severity::Error)
+        .collect();
+    assert!(
+        errs.iter()
+            .any(|i| i.message.starts_with("wp-db export unreadable:")),
+        "{errs:?}"
+    );
+    // The other connectors still normalised.
+    assert!(matches!(
+        doc(&fx, 1).fields.get("content"),
+        Some(FieldValue::RichText(_))
+    ));
+}
+
+#[tokio::test]
+async fn internal_types_are_skipped() {
+    let fx = setup(&[]).await;
+    let block = canon(ItemKind::Document, "post:26");
+    let s = fx.p.store();
+    assert!(s.get_item::<Document>(block).unwrap().is_none());
+    assert_eq!(
+        s.status(Stage::Normalise, block).unwrap(),
+        Some(ItemStatus::Skipped {
+            reason: "internal WordPress type wp_block".into()
+        })
+    );
+    assert_eq!(s.lookup_url("https://example.com/reusable/").unwrap(), None);
+    // Still expanded where it is used.
+    let json = serde_json::to_string(&doc(&fx, 27).fields["content"]).unwrap();
+    assert!(json.contains("Reusable text"), "{json}");
 }

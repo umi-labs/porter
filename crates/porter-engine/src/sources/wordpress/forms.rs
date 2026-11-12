@@ -466,6 +466,7 @@ pub(crate) fn write(out: &mut Out, raw: &Raw) -> Result<bool> {
                 store: out.store,
                 site_hosts: raw.site.hosts.clone(),
                 issues: &mut issues,
+                media_alternates: super::media::alternates,
             };
             let mapped = if kind == "gf" {
                 gravity(v, &mut html)

@@ -236,9 +236,19 @@ fn from_meta(def: &Value, key: &str, meta: &Map<String, Value>, depth: usize) ->
                         let layout = arr(&def["layouts"])
                             .into_iter()
                             .find(|x| x["name"] == l.as_str());
-                        let mut row = layout
-                            .map(|x| subs(&format!("{key}_{i}"), &x["sub_fields"]))
-                            .unwrap_or_default();
+                        let prefix = format!("{key}_{i}");
+                        let mut row = match layout {
+                            Some(x) => subs(&prefix, &x["sub_fields"]),
+                            // Undefined layout: keep every meta value under the row's prefix.
+                            None => {
+                                let p = format!("{prefix}_");
+                                meta.iter()
+                                    .filter_map(|(k, v)| {
+                                        Some((k.strip_prefix(&p)?.to_string(), v.clone()))
+                                    })
+                                    .collect()
+                            }
+                        };
                         row.insert("acf_fc_layout".into(), json!(l));
                         Value::Object(row)
                     })
@@ -443,10 +453,25 @@ fn typed(def: &Value, v: &Value, cx: &mut AcfCx, at: &str, depth: usize) -> Fiel
                     let layout = arr(&def["layouts"])
                         .into_iter()
                         .find(|l| l["name"] == name.as_str())
-                        .cloned()
-                        .unwrap_or(Value::Null);
+                        .cloned();
                     let mut o = IndexMap::new();
                     o.insert("layout".to_string(), FieldValue::Text(name.clone()));
+                    let Some(layout) = layout else {
+                        cx.html.issue(
+                            IssueKind::UnmappedField,
+                            Severity::Warning,
+                            format!(
+                                "ACF field {at}[{i}]: layout \"{name}\" is not defined; row kept untyped"
+                            ),
+                            json!({ "field": at, "layout": name }),
+                        );
+                        if let Value::Object(fields) = r {
+                            for (k, x) in fields.iter().filter(|(k, _)| *k != "acf_fc_layout") {
+                                o.insert(k.clone(), generic(x));
+                            }
+                        }
+                        return FieldValue::Object(o);
+                    };
                     o.extend(object(
                         &layout["sub_fields"],
                         r,
@@ -572,5 +597,44 @@ mod tests {
                 .iter()
                 .any(|i| i.kind == IssueKind::UnresolvedRelation)
         );
+    }
+
+    #[test]
+    fn unknown_layout_kept_with_warning() {
+        let f = fixture();
+        let mut issues = vec![];
+        let mut html = ctx(&f, &mut issues);
+        let (media_ids, docs) = (HashMap::new(), HashMap::new());
+        let term = |_: &str, _: u64| None;
+        let mut cx = AcfCx {
+            html: &mut html,
+            media_ids: &media_ids,
+            docs: &docs,
+            term: &term,
+        };
+        let def = json!({"name": "blocks", "type": "flexible_content", "layouts": []});
+        let defs = Defs {
+            top: IndexMap::from([("blocks".to_string(), tidy(def))]),
+        };
+        let want = FieldValue::List(vec![FieldValue::Object(IndexMap::from([
+            ("layout".to_string(), FieldValue::Text("gone".into())),
+            ("text".to_string(), FieldValue::Text("kept".into())),
+        ]))]);
+        // From an ACF value…
+        let acf: Map<String, Value> =
+            serde_json::from_value(json!({"blocks": [{"acf_fc_layout": "gone", "text": "kept"}]}))
+                .unwrap();
+        let got = fields(&defs, Some(&acf), &Map::new(), &mut cx);
+        assert_eq!(got[0].1, want);
+        // …and rebuilt from flattened meta.
+        let meta: Map<String, Value> =
+            serde_json::from_value(json!({"blocks": ["gone"], "blocks_0_text": "kept"})).unwrap();
+        let got = fields(&defs, None, &meta, &mut cx);
+        assert_eq!(got[0].1, want);
+        let warned = issues
+            .iter()
+            .filter(|i| i.kind == IssueKind::UnmappedField && i.severity == Severity::Warning)
+            .count();
+        assert_eq!(warned, 2);
     }
 }
