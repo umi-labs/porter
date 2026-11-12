@@ -11,6 +11,30 @@ cargo run -p porter-desktop
 cargo test -p porter-desktop
 ```
 
+## Unsigned app bundle
+
+```sh
+crates/porter-desktop/scripts/bundle.sh          # release build -> target/Porter.app
+PROFILE=debug crates/porter-desktop/scripts/bundle.sh   # faster, larger
+open target/Porter.app
+```
+
+The script builds `-p porter-desktop` and assembles `Contents/MacOS/porter-desktop` plus an
+`Info.plist` (bundle id `uk.co.umidigital.porter`, version from Cargo, minimum macOS 11.0).
+There is no icon yet. The bundle is **unsigned and not notarized**; for local use, clear the
+quarantine flag if it was copied from another machine or downloaded:
+
+```sh
+xattr -dr com.apple.quarantine target/Porter.app
+```
+
+(`dist`, the release tool this repo uses for the CLI, only makes shell, PowerShell, npm,
+Homebrew and MSI installers; it has no macOS `.app` target, hence the script.)
+
+Quitting with Cmd-Q while a stage runs cancels it first. GPUI gives quit handlers only 100 ms
+and cannot ask a question, so a writing load is cancelled without the confirmation the window's
+close button shows; it stops at the next safe point and can be resumed.
+
 ## Build notes
 
 - GPUI is built with its `runtime_shaders` feature: Metal shaders are compiled when the app
@@ -58,3 +82,24 @@ To upgrade:
 - *Apply load…* without a dry run, or after editing `porter.toml` or re-running normalise,
   refuses. After a fresh *Load (dry run)* it lists the counts, and *Apply* stays disabled until
   the destination host is typed; Enter never applies.
+
+### Smoke results
+
+Built `target/Porter.app` (release) and checked its structure and `Info.plist` (`plutil -lint`
+OK). The build machine has no display, so **nothing below has been run**; every item is
+*not yet run (needs a display)*. Run them against the WXR fixture project
+(`crates/porter-engine/tests/fixtures/wxr/basic.xml`) before shipping.
+
+| item | result |
+| ---- | ------ |
+| Launcher shows recent projects | not yet run (needs a display) |
+| Open folder on a porter project opens a window and adds it to recent | not yet run (needs a display) |
+| Open folder on a non-project shows the error verbatim | not yet run (needs a display) |
+| Project window: sidebar, top bar, Overview | not yet run (needs a display) |
+| Run all (dry) on the WXR fixture ends in true states, never green with errors; Cancel interrupts | not yet run (needs a display) |
+| Browse content (list, detail) | not yet run (needs a display) |
+| Edit the mapping, save; issues update | not yet run (needs a display) |
+| Runs: live log and history, dry run labelled | not yet run (needs a display) |
+| Apply load…: refuses without a fresh dry run; Enter never applies | not yet run (needs a display) |
+| Cmd-Q and window close during a run cancel it | not yet run (needs a display) |
+| `open target/Porter.app` launches (after the `xattr` step) | not yet run (needs a display) |
