@@ -262,7 +262,11 @@ fn settle(
         Value::Array(a) => a.iter_mut().for_each(|x| settle(x, f, blocks, out)),
         // Lexical state (a richText value): its link and upload nodes already carry
         // `{relationTo, value}` as Payload wants it.
-        Value::Object(o) if o.contains_key("root") => {}
+        Value::Object(o)
+            if o.get("root")
+                .and_then(|r| r.get("type"))
+                .and_then(Value::as_str)
+                == Some("root") => {}
         Value::Object(o) => {
             // A block reads its slug's fields; a group or array row its field's sub-fields.
             let fields = match o.get("blockType").and_then(Value::as_str) {
@@ -429,12 +433,20 @@ mod tests {
 
     #[test]
     fn settle_leaves_rich_text_links_alone() {
-        let mut v = json!([{"blockType": "richText", "content": {"root": {"children": [
+        let mut v = json!([{"blockType": "richText", "content": {"root": {"type": "root", "children": [
             {"type": "link", "fields": {"doc": {"relationTo": "posts", "value": 8}}}
         ]}}}]);
         let before = v.clone();
         assert!(settle_relations(&mut v, None).is_empty());
         assert_eq!(v, before);
+    }
+
+    #[test]
+    fn settle_walks_a_field_named_root() {
+        let mut v =
+            json!([{"blockType": "card", "root": {"page": {"relationTo": "pages", "value": 7}}}]);
+        assert!(settle_relations(&mut v, None).is_empty());
+        assert_eq!(v, json!([{"blockType": "card", "root": {"page": 7}}]));
     }
 
     #[test]

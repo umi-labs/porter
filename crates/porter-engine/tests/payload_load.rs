@@ -938,6 +938,78 @@ async fn required_forward_reference_says_rerun_fixes_it() {
     assert_eq!(f.status(did("post:1")), Some(ItemStatus::Done));
 }
 
+/// The parent was removed at the source: the re-run must clear it in Payload, though no
+/// schema lists nested-docs' `parent`. Same for terms.
+#[tokio::test]
+async fn removed_parent_is_cleared_on_rerun() {
+    use porter_model::Term;
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let mut f = fx(&s.uri());
+    f.cfg
+        .mapping
+        .taxonomies
+        .insert("category".into(), "categories".into());
+    let term = |sid: &str, parent: Option<ItemId>| {
+        let src = SourceRef {
+            connector: "wordpress".into(),
+            source_id: sid.into(),
+            url: None,
+        };
+        let id = ItemId::new(ItemKind::Term, &src);
+        let t = Term {
+            taxonomy: "category".into(),
+            name: sid.into(),
+            slug: sid.replace(':', "-"),
+            parent,
+        };
+        f.p.store().put_item(ItemKind::Term, id, &src, &t).unwrap();
+        id
+    };
+    let top = term("term:1", None);
+    let sub = term("term:2", Some(top));
+    f.put(&doc("page", "post:1", "a", None));
+    f.put(&doc("page", "post:2", "b", Some("post:1")));
+    f.load(true, CancellationToken::new()).await;
+    assert_eq!(patch_of(&fake, "pages/2")["parent"], json!(1));
+    let cat = |fake: &Fake| {
+        fake.0
+            .lock()
+            .unwrap()
+            .docs
+            .iter()
+            .find(|(c, d)| c == "categories" && d["legacyId"] == sub.to_string())
+            .unwrap()
+            .1
+            .clone()
+    };
+    assert_eq!(cat(&fake)["parent"], json!(1));
+
+    // Both parents removed at the source.
+    f.put(&doc("page", "post:2", "b", None));
+    term("term:2", None);
+    let before = fake.log().len();
+    f.load(true, CancellationToken::new()).await;
+    let rerun = fake.log()[before..].to_vec();
+    let page = rerun
+        .iter()
+        .rfind(|(m, p, _)| m == "PATCH" && p == "pages/2")
+        .unwrap();
+    assert_eq!(page.2["parent"], Value::Null, "{}", page.2);
+    assert!(page.2.as_object().unwrap().contains_key("parent"));
+    let term_patch = rerun
+        .iter()
+        .rfind(|(m, p, _)| m == "PATCH" && p == "categories/2")
+        .unwrap();
+    assert!(
+        term_patch.2.as_object().unwrap().contains_key("parent"),
+        "{}",
+        term_patch.2
+    );
+    assert_eq!(cat(&fake)["parent"], Value::Null);
+    assert_eq!(f.status(did("post:2")), Some(ItemStatus::Done));
+}
+
 // ---- live ----
 
 /// A valid 1x1 transparent PNG.

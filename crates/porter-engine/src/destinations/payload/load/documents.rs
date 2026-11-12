@@ -198,6 +198,12 @@ pub(super) async fn load(l: &mut Loader<'_>) -> Result<()> {
             mut data, issues, ..
         } = build(l, d, tm, coll);
         settle_nulls(l.coll(coll).map(|c| &c.fields[..]), &mut data);
+        // A parent removed at the source must be cleared on re-run. nested-docs adds
+        // `parent` as a plugin field the schema reader can't see, so send it whatever the
+        // schema says: null for an optional relation is safe, and Payload drops unknown keys.
+        if d.parent.is_none() {
+            data.insert("parent".into(), Value::Null);
+        }
         let partial = l.emit(d.id, issues)?;
         let body = Value::Object(data);
         let Some(client) = l.client.clone() else {
@@ -329,36 +335,31 @@ fn build(l: &Loader, d: &Document, tm: &TypeMap, coll: &str) -> Built {
     }
     // nested-docs' `parent`: plugin-added, so usually not in the read schema.
     let pf = fields.and_then(|fs| find(fs, "parent"));
-    match d.parent {
-        Some(p) => {
-            b.refs.insert("parent".into());
-            // nested-docs parents are in the item's own collection; another collection's id
-            // would point at an unrelated doc, so the parent is left unset instead.
-            let miss = match l.ids.get(p) {
-                Some(r) if r.collection == coll => None,
-                Some(r) => Some(format!(
-                    "parent {p} was loaded into {}, not {coll}",
-                    r.collection
-                )),
-                None => Some(format!("parent {p} is not loaded")),
-            };
-            match miss {
-                None => {
-                    let v = l.relation(p, pf, IssueKind::ParentMissing, &mut b.issues);
-                    b.data.insert("parent".into(), v);
-                }
-                Some(message) => b.issues.push(PendingIssue {
-                    kind: IssueKind::ParentMissing,
-                    severity: Severity::Warning,
-                    message,
-                    details: json!({"parent": p, "old_url": l.ids.old_url(p)}),
-                }),
+    // No parent: pass 2 sends `parent: null` (see there).
+    if let Some(p) = d.parent {
+        b.refs.insert("parent".into());
+        // nested-docs parents are in the item's own collection; another collection's id
+        // would point at an unrelated doc, so the parent is left unset instead.
+        let miss = match l.ids.get(p) {
+            Some(r) if r.collection == coll => None,
+            Some(r) => Some(format!(
+                "parent {p} was loaded into {}, not {coll}",
+                r.collection
+            )),
+            None => Some(format!("parent {p} is not loaded")),
+        };
+        match miss {
+            None => {
+                let v = l.relation(p, pf, IssueKind::ParentMissing, &mut b.issues);
+                b.data.insert("parent".into(), v);
             }
+            Some(message) => b.issues.push(PendingIssue {
+                kind: IssueKind::ParentMissing,
+                severity: Severity::Warning,
+                message,
+                details: json!({"parent": p, "old_url": l.ids.old_url(p)}),
+            }),
         }
-        None if pf.is_some() => {
-            b.data.insert("parent".into(), Value::Null);
-        }
-        None => {}
     }
     b
 }

@@ -75,23 +75,30 @@ pub(super) async fn terms(l: &mut Loader<'_>) -> Result<()> {
             continue;
         };
         let mut issues = vec![];
-        let mut data = json!({"title": t.name, "slug": t.slug});
+        // `parent: null` unless set below, so a parent removed at the source is cleared.
+        let mut data = json!({"title": t.name, "slug": t.slug, "parent": null});
         if let Some(p) = t.parent {
             // Only a parent in this term's own collection; otherwise leave it unset.
             match l.ids.get(p) {
                 Some(r) if r.collection == *coll => data["parent"] = r.id,
-                found => issues.push(PendingIssue {
-                    kind: IssueKind::ParentMissing,
-                    severity: Severity::Warning,
-                    message: match found {
-                        Some(r) => format!(
-                            "parent term {p} was loaded into {}, not {coll}",
-                            r.collection
-                        ),
-                        None => format!("parent term {p} is not loaded"),
-                    },
-                    details: json!({"parent": p}),
-                }),
+                found => {
+                    // Leave the parent as it is rather than clear it.
+                    if let Some(o) = data.as_object_mut() {
+                        o.remove("parent");
+                    }
+                    issues.push(PendingIssue {
+                        kind: IssueKind::ParentMissing,
+                        severity: Severity::Warning,
+                        message: match found {
+                            Some(r) => format!(
+                                "parent term {p} was loaded into {}, not {coll}",
+                                r.collection
+                            ),
+                            None => format!("parent term {p} is not loaded"),
+                        },
+                        details: json!({"parent": p}),
+                    });
+                }
             }
         }
         put(l, id, ItemKind::Term, coll, KEY, &key(id), data, issues).await?;
