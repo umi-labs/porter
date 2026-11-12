@@ -94,7 +94,8 @@ pub struct TypeMap {
     pub path: Option<String>,
     pub key_field: String,
     pub key_type: KeyType,
-    /// Source status -> destination status, e.g. `private = "draft"`.
+    /// Source status -> destination status, e.g. `private = "draft"`; `"skip"` leaves
+    /// documents with that status out of the load.
     #[serde(skip_serializing_if = "IndexMap::is_empty")]
     pub status: IndexMap<String, String>,
     /// Neutral field path -> destination field.
@@ -198,6 +199,19 @@ pub fn block_kind_name(k: &BlockKind) -> String {
         .unwrap_or_default()
 }
 
+/// Paths `lookup` answers from the document itself when no custom field has that name.
+pub const DOC_PATHS: [&str; 9] = [
+    "seo.title",
+    "seo.description",
+    "seo.canonical",
+    "seo.og_title",
+    "seo.og_description",
+    "seo.noindex",
+    "seo.og_image",
+    "created",
+    "updated",
+];
+
 /// A document field by its neutral path; `seo.*`, `created` and `updated` name the
 /// document's own fields when no custom field has that name.
 pub fn lookup(d: &Document, path: &str) -> FieldValue {
@@ -278,12 +292,17 @@ impl Default for MediaMap {
 #[serde(default)]
 pub struct RedirectsMap {
     pub collection: String,
+    /// Fields that hold a document's earlier URL (e.g. `acf.old_site_url`): each value
+    /// becomes a redirect from that URL to the document.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub from_fields: Vec<String>,
 }
 
 impl Default for RedirectsMap {
     fn default() -> Self {
         Self {
             collection: "redirects".into(),
+            from_fields: vec![],
         }
     }
 }

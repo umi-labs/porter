@@ -93,6 +93,7 @@ async fn extract(
         wp_root,
         table_prefix: "wp_".into(),
         site_url: None,
+        uploads_dir: None,
     }));
     let r = run_stage(
         p.clone(),
@@ -347,6 +348,7 @@ async fn wpdb_cancel_cleans_up() {
         wp_root: None,
         table_prefix: "wp_".into(),
         site_url: None,
+        uploads_dir: None,
     }));
     let cancel = CancellationToken::new();
     let c2 = cancel.clone();

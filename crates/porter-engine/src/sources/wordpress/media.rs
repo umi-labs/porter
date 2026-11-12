@@ -1,5 +1,6 @@
 //! Attachments → `Media` items. The file is whichever a connector already stored under one of
-//! the attachment's URLs, else the copy in `wp_root/wp-content/uploads` (local, no network).
+//! the attachment's URLs, else the copy in the uploads folder (`wp_root/wp-content/uploads`, or
+//! `uploads_dir`; local, no network).
 //! Every size WordPress generated, the `-scaled` copy and the original are registered as
 //! variants on every known host, so any of those URLs resolves to the one item.
 
@@ -179,9 +180,9 @@ pub(crate) fn attachments(
         let mut found = p.link.iter().chain(&urls).find_map(|u| known.get(u));
         if found.is_none()
             && safe_rel(&file)
-            && let Some(root) = &site.wp_root
+            && let Some(root) = &site.uploads
         {
-            let path = root.join("wp-content/uploads").join(&file);
+            let path = root.join(&file);
             if let Ok(bytes) = std::fs::read(&path) {
                 let url = p.link.clone().or_else(|| urls.first().cloned());
                 let name = file.rsplit('/').next().unwrap_or(&file);
@@ -199,7 +200,7 @@ pub(crate) fn attachments(
                 Severity::Warning,
                 Some(canon_id),
                 format!(
-                    "attachment {} ({}) has no file: not downloaded and not in wp_root",
+                    "attachment {} ({}) has no file: not downloaded and not in uploads",
                     p.id,
                     p.link.as_deref().unwrap_or(&file)
                 ),

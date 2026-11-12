@@ -9,7 +9,7 @@ use porter_engine::stage::{Connector, Source, run_stage};
 use porter_engine::store::IssueFilter;
 use porter_model::{
     DocStatus, Document, FieldValue, IssueKind, ItemId, ItemKind, ItemStatus, Media, Redirect,
-    Severity, SourceRef, Stage,
+    RedirectOrigin, Severity, SourceRef, Stage,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -155,10 +155,25 @@ fn write_json(path: &std::path::Path, v: &Value) {
 /// rendered HTML only, a synthetic wp-db export (and its uploads folder) and Redirection rows
 /// `(id, from, to)`; `tweak` gets the raw/ folder before normalise runs.
 async fn setup_with(redirects: &[(u64, &str, &str)], tweak: impl FnOnce(&std::path::Path)) -> Fx {
+    setup_full(redirects, tweak, false, |_| {}).await
+}
+
+/// `uploads_apart`: the uploads folder lives outside `wp_root`, named by `uploads_dir`.
+async fn setup_full(
+    redirects: &[(u64, &str, &str)],
+    tweak: impl FnOnce(&std::path::Path),
+    uploads_apart: bool,
+    configure: impl FnOnce(&mut porter_engine::config::ProjectConfig),
+) -> Fx {
     let d = tempfile::tempdir().unwrap();
     let p = Arc::new(Project::init(d.path(), "t", "wordpress").unwrap());
     let root = d.path().join("wproot");
-    let up = root.join("wp-content/uploads/2024/03");
+    std::fs::create_dir_all(&root).unwrap();
+    let uploads = match uploads_apart {
+        true => d.path().join("uploads-copy"),
+        false => root.join("wp-content/uploads"),
+    };
+    let up = uploads.join("2024/03");
     std::fs::create_dir_all(&up).unwrap();
     std::fs::write(up.join("a.jpg"), b"jpeg-a").unwrap();
     let mut cfg = p.config().clone();
@@ -171,6 +186,7 @@ async fn setup_with(redirects: &[(u64, &str, &str)], tweak: impl FnOnce(&std::pa
             wp_root: Some(root),
             table_prefix: "wp_".into(),
             site_url: None,
+            uploads_dir: uploads_apart.then_some(uploads),
         },
         ConnectorConfig::WpRest {
             url: "https://example.com".into(),
@@ -178,6 +194,7 @@ async fn setup_with(redirects: &[(u64, &str, &str)], tweak: impl FnOnce(&std::pa
             keyring: None,
         },
     ];
+    configure(&mut cfg);
     let fx = Fx { _d: d, p, cfg };
     let wxr = WxrConnector::new(&fx.cfg.connectors[0]);
     stage(&fx, Stage::Extract, |ctx| async move {
@@ -366,6 +383,27 @@ async fn acf_repeater_typed() {
 }
 
 #[tokio::test]
+async fn uploads_dir_outside_wp_root() {
+    let fx = setup_full(&[], |_| {}, true, |_| {}).await;
+    let about = doc(&fx, 20);
+    let FieldValue::List(rows) = &about.fields["acf.slides"] else {
+        panic!("{:?}", about.fields["acf.slides"]);
+    };
+    let FieldValue::Object(row) = &rows[0] else {
+        panic!("{rows:?}");
+    };
+    let Some(FieldValue::Media(m)) = row.get("image") else {
+        panic!("{row:?}");
+    };
+    let media: Media = fx.p.store().get_item(*m).unwrap().unwrap();
+    assert_eq!(media.folder.as_deref(), Some("2024/03"));
+    assert_eq!(
+        std::fs::read(fx.p.store().media_path(*m).unwrap()).unwrap(),
+        b"jpeg-a"
+    );
+}
+
+#[tokio::test]
 async fn yoast_vars_substituted() {
     let fx = setup(&[]).await;
     let about = doc(&fx, 20);
@@ -544,6 +582,69 @@ async fn rendered_rest_does_not_beat_wxr_raw() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+/// `[mapping.redirects] from_fields`: a live document's old URL field redirects to it; a
+/// published claim beats a private one, other sites and drafts don't count.
+#[tokio::test]
+async fn old_url_field_becomes_redirect() {
+    let fx = setup_full(
+        &[],
+        |raw| {
+            let path = raw.join("wp-db/export.json");
+            let mut v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let posts = v["posts"].as_array_mut().unwrap();
+            let old = |p: &mut Value, url: &str| p["acf"] = json!({ "old_url": url });
+            for p in posts.iter_mut() {
+                match p["id"].as_u64() {
+                    Some(5) => old(p, "/en/five.html"),
+                    Some(22) => old(p, "https://example.com/en/five.html"),
+                    Some(24) => old(p, "https://elsewhere.test/divi/"),
+                    Some(21) => old(p, "/en/drafty.html"),
+                    _ => {}
+                }
+            }
+            std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+        },
+        false,
+        |cfg| cfg.mapping.redirects.from_fields = vec!["acf.old_url".into()],
+    )
+    .await;
+    let reds: Vec<Redirect> =
+        fx.p.store()
+            .items_decodable::<Redirect>(ItemKind::Redirect)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.2)
+            .filter(|r| r.origin == RedirectOrigin::Field)
+            .collect();
+    assert_eq!(reds.len(), 1, "{reds:?}");
+    assert_eq!(reds[0].from, "/en/five.html");
+    assert_eq!(reds[0].to, "https://example.com/five/");
+}
+
+#[tokio::test]
+async fn post_shadowed_by_page_at_same_url_is_skipped() {
+    let fx = setup_with(&[], |raw| {
+        let path = raw.join("wp-db/export.json");
+        let mut v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let posts = v["posts"].as_array_mut().unwrap();
+        // Same URL as live page 5 ("five"); same URL as draft page 21 ("drafty").
+        posts.push(post(40, "post", "publish", "five", json!({})));
+        posts.push(post(41, "post", "publish", "drafty", json!({})));
+        std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+    })
+    .await;
+    let s = fx.p.store();
+    let id = canon(ItemKind::Document, "post:40");
+    assert!(s.get_item::<Document>(id).unwrap().is_none());
+    match s.status(Stage::Normalise, id).unwrap() {
+        Some(ItemStatus::Skipped { reason }) => assert!(reason.contains("page 5"), "{reason}"),
+        other => panic!("{other:?}"),
+    }
+    // A draft page doesn't shadow: WordPress serves the post there.
+    assert_eq!(doc(&fx, 41).doc_type, "post");
+    assert_eq!(doc(&fx, 5).doc_type, "page");
 }
 
 #[tokio::test]

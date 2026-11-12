@@ -884,17 +884,22 @@ pub(crate) fn configured(cfg: &crate::config::ProjectConfig, name: &str) -> bool
 
 pub(crate) fn load(ctx: &StageCtx) -> Result<Raw> {
     let mut parts = SiteParts::default();
-    let mut wp_root = None;
+    let mut uploads = None;
     // Configured URLs come first: a site_url override beats the dump's own home.
     for c in &ctx.config.connectors {
         match c {
             ConnectorConfig::WpDb {
                 site_url,
                 wp_root: root,
+                uploads_dir,
                 ..
             } => {
                 parts.urls.insert(0, site_url.clone());
-                wp_root = root.as_ref().map(|p| ctx.project.dir().join(p));
+                let dir = ctx.project.dir();
+                uploads = uploads_dir.as_ref().map(|p| dir.join(p)).or_else(|| {
+                    root.as_ref()
+                        .map(|p| dir.join(p).join("wp-content/uploads"))
+                });
             }
             ConnectorConfig::WpRest { url, .. } | ConnectorConfig::Crawl { url, .. } => {
                 parts.urls.push(Some(url.clone()));
@@ -925,7 +930,7 @@ pub(crate) fn load(ctx: &StageCtx) -> Result<Raw> {
             front_page: None,
             permalink: None,
             titles: Value::Null,
-            wp_root: None,
+            uploads: None,
         },
         settings_raw: vec![],
         notes: HashMap::new(),
@@ -1028,7 +1033,7 @@ pub(crate) fn load(ctx: &StageCtx) -> Result<Raw> {
         front_page: first(&parts.front),
         permalink: first(&parts.permalink).filter(|p| !p.is_empty()),
         titles: db_parts.titles,
-        wp_root,
+        uploads,
     };
     if !r.terms.is_empty() || !r.taxonomies.is_empty() {
         for (t, h) in [("category", true), ("post_tag", false)] {

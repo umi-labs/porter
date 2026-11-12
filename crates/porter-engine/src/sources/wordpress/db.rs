@@ -83,6 +83,7 @@ impl WpDbConnector {
                 wp_root,
                 table_prefix,
                 site_url,
+                ..
             } => WpDbConnector {
                 dump: dump.clone(),
                 wp_root: wp_root.clone(),

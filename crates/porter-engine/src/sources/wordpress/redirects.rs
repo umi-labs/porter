@@ -219,6 +219,66 @@ pub(crate) fn from_redirection(v: &Value, raw: Option<ItemId>) -> Input {
     }
 }
 
+/// `[mapping.redirects] from_fields`: a live document's earlier URL, held in one of its
+/// fields (`acf.<name>` or `meta.<name>`), redirects to it. When several documents claim one
+/// URL, published beats private, then the newest (by date) wins. Other sites' URLs, query strings and
+/// values that aren't one URL are skipped.
+fn field_inputs(
+    raw: &Raw,
+    sk: &Skeletons,
+    fields: &[String],
+    own_hosts: &HashSet<String>,
+) -> Vec<Input> {
+    let mut claims = vec![];
+    for (&wp, d) in &sk.skeletons {
+        let p = &raw.posts[&wp];
+        let (Some(link), true) = (&p.link, matches!(p.status.as_str(), "publish" | "private"))
+        else {
+            continue;
+        };
+        for f in fields {
+            let v = match f.split_once('.') {
+                Some(("acf", k)) => p.acf.as_ref().and_then(|a| a.get(k)),
+                Some(("meta", k)) => p.meta.get(k),
+                _ => None,
+            };
+            let Some(old) = v
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|o| !o.is_empty())
+            else {
+                continue;
+            };
+            let foreign = url_key(old).is_some_and(|k| {
+                let host = &k[..k.find('/').unwrap_or(k.len())];
+                (old.starts_with("http") || old.starts_with("//")) && !own_hosts.contains(host)
+            });
+            if foreign || old.contains(['?', '#', ',', ' ', '\t', '\n']) {
+                continue;
+            }
+            claims.push((
+                p.status == "publish",
+                d.created,
+                old.to_string(),
+                link.clone(),
+            ));
+        }
+    }
+    // First input wins among equals in `plan`: best claim first.
+    claims.sort_by_key(|c| std::cmp::Reverse((c.0, c.1)));
+    claims
+        .into_iter()
+        .map(|(_, _, from, to)| Input {
+            from,
+            to,
+            code: 301,
+            origin: RedirectOrigin::Field,
+            raw: None,
+            skip: None,
+        })
+        .collect()
+}
+
 /// Redirects from every source; kept ones become routes. Returns `from` key → redirect.
 pub(crate) fn write(
     out: &mut Out,
@@ -260,6 +320,12 @@ pub(crate) fn write(
         .filter_map(|h| url_key(&format!("https://{h}/")))
         .map(|k| k.trim_end_matches('/').to_string())
         .collect();
+    inputs.extend(field_inputs(
+        raw,
+        sk,
+        &out.ctx.config.mapping.redirects.from_fields,
+        &own_hosts,
+    ));
     let abs = |u: &str| base.join(u).map_or(u.to_string(), |x| x.to_string());
     let mut by_key = HashMap::new();
     for planned in plan(inputs, base) {

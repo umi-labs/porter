@@ -100,6 +100,14 @@ fn routing(to: &str, fields: &[FormField]) -> Vec<Value> {
     out
 }
 
+/// A field's `conditionalLogic`; Gravity stores `""` (or nothing) when there is none.
+fn logic(x: &Value) -> Value {
+    match &x["conditionalLogic"] {
+        v @ Value::Object(_) => v.clone(),
+        _ => Value::Null,
+    }
+}
+
 /// Gravity Forms: fields, conditional logic, active notifications, default confirmation.
 pub(crate) fn gravity(f: &Value, html: &mut HtmlCtx) -> Mapped {
     let mut taken = HashSet::new();
@@ -132,7 +140,7 @@ pub(crate) fn gravity(f: &Value, html: &mut HtmlCtx) -> Mapped {
                 let words = plain(&(s(x, "content") + " " + &label));
                 let name = name_for(&format!("message-{id}"), &mut taken);
                 let mut m = field(&name, &words, "message", false);
-                m.conditions = x["conditionalLogic"].clone();
+                m.conditions = logic(x);
                 fields.push(m);
                 continue;
             }
@@ -161,12 +169,12 @@ pub(crate) fn gravity(f: &Value, html: &mut HtmlCtx) -> Mapped {
         }
         let mut fd = field(&name, &label, kind, required);
         fd.options = options;
-        fd.conditions = x["conditionalLogic"].clone();
+        fd.conditions = logic(x);
         fields.push(fd);
     }
     // Conditions refer to fields by id; point them at names.
     for fd in &mut fields {
-        if let Some(rules) = fd.conditions["rules"].as_array_mut() {
+        if let Some(rules) = fd.conditions.get_mut("rules").and_then(Value::as_array_mut) {
             for r in rules {
                 let id = s(r, "fieldId");
                 let target = id.split('.').next().unwrap_or("").to_string();
@@ -531,7 +539,7 @@ mod tests {
             "fields": [
                 {"id": 1, "type": "name", "label": "Name", "isRequired": true,
                  "inputs": [{"id": "1.3", "label": "First"}, {"id": "1.6", "label": "Last"}, {"id": "1.2", "label": "Prefix", "isHidden": true}]},
-                {"id": 2, "type": "email", "label": "Email"},
+                {"id": 2, "type": "email", "label": "Email", "conditionalLogic": ""},
                 {"id": 4, "type": "select", "label": "Team", "choices": [{"text": "Sales", "value": "sales@example.test"}]},
                 {"id": 5, "type": "checkbox", "label": "Topics", "choices": [{"text": "A", "value": "a"}],
                  "inputs": [{"id": "5.1"}, {"id": "5.2"}],
@@ -548,6 +556,8 @@ mod tests {
             ["name-first", "name-last", "email", "team", "topics"]
         );
         assert_eq!(m.form.fields[4].conditions["rules"][0]["field"], "email");
+        // Gravity's "" for "no logic" is no conditions, not a panic.
+        assert_eq!(m.form.fields[2].conditions, Value::Null);
         assert_eq!(m.form.notifications.len(), 1);
         assert_eq!(m.form.notifications[0]["to"], "{{team}}");
         assert_eq!(m.form.notifications[0]["subject"], "Hi {{email}}");

@@ -81,6 +81,9 @@ pub enum ConnectorConfig {
         /// Overrides the dump's `home` for permalinks.
         #[serde(default)]
         site_url: Option<String>,
+        /// Uploads folder when it isn't at `wp_root/wp-content/uploads` (e.g. copied apart).
+        #[serde(default)]
+        uploads_dir: Option<PathBuf>,
     },
     UmbracoJson {
         /// Umbraco JSON export files; relative paths resolve against the project folder.

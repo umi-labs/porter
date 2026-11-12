@@ -158,7 +158,8 @@ pub(crate) struct Site {
     pub permalink: Option<String>,
     /// Yoast `wpseo_titles`.
     pub titles: Value,
-    pub wp_root: Option<PathBuf>,
+    /// The uploads folder (`wp_root/wp-content/uploads` unless `uploads_dir` is set).
+    pub uploads: Option<PathBuf>,
 }
 
 /// Runs normalise on its own thread with a big stack; errors and panics come back here.
@@ -666,10 +667,26 @@ pub(crate) struct Skeletons {
 fn skeletons(out: &mut Out, raw: &Raw, authors: &HashMap<String, ItemId>) -> Result<Skeletons> {
     let mut docs: HashMap<u64, ItemId> = HashMap::new();
     let mut skipped = vec![];
+    // A page and a post at one URL: WordPress resolves the path to the page first, so the
+    // post never showed there (only a page that is live wins; a draft page doesn't).
+    let live_page =
+        |p: &Post| p.post_type == "page" && matches!(p.status.as_str(), "publish" | "private");
+    let page_at: HashMap<String, u64> = raw
+        .posts
+        .values()
+        .filter(|p| live_page(p))
+        .filter_map(|p| Some((url_key(p.link.as_deref()?)?, p.id)))
+        .collect();
     for p in raw.posts.values().filter(|p| p.post_type != "attachment") {
-        match not_a_document(p) {
-            Some(why) => skipped.push((p.id, why)),
-            None => {
+        let shadow = (p.post_type == "post")
+            .then(|| page_at.get(&url_key(p.link.as_deref()?)?))
+            .flatten();
+        match (not_a_document(p), shadow) {
+            (Some(why), _) => skipped.push((p.id, why)),
+            (None, Some(page)) => {
+                skipped.push((p.id, format!("page {page} is served at the same URL")))
+            }
+            (None, None) => {
                 docs.insert(p.id, post_id(p.id));
             }
         }
