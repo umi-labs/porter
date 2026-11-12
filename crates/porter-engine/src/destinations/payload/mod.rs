@@ -3,6 +3,7 @@ pub mod blocks;
 pub mod client;
 pub mod lexical;
 mod load;
+mod refs;
 pub mod schema_check;
 pub mod schema_generate;
 pub mod schema_prompt;
@@ -10,7 +11,7 @@ pub mod ts;
 
 use crate::config::DestinationConfig;
 use crate::mapping::summary::TypeSummary;
-use crate::stage::{Capabilities, Destination, Feature, SchemaMode, StageCtx};
+use crate::stage::{Capabilities, Destination, Feature, LoadedRefs, SchemaMode, StageCtx};
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use client::PayloadClient;
@@ -20,11 +21,29 @@ const DEFAULT_KEY_ENV: &str = "PORTER_PAYLOAD_API_KEY";
 
 pub struct PayloadDestination {
     cfg: DestinationConfig,
+    /// The Payload config, read once for `references` (None: no `config_dir`).
+    schema: std::sync::OnceLock<Option<ts::DestSchema>>,
 }
 
 impl PayloadDestination {
     pub fn new(cfg: &DestinationConfig) -> Self {
-        Self { cfg: cfg.clone() }
+        Self {
+            cfg: cfg.clone(),
+            schema: Default::default(),
+        }
+    }
+
+    fn schema(&self, ctx: &StageCtx) -> Result<Option<&ts::DestSchema>> {
+        if let Some(s) = self.schema.get() {
+            return Ok(s.as_ref());
+        }
+        let dir = self
+            .cfg
+            .config_dir
+            .as_ref()
+            .map(|d| ctx.project.dir().join(d));
+        let read = dir.map(|d| ts::read_payload_config(&d)).transpose()?;
+        Ok(self.schema.get_or_init(|| read).as_ref())
     }
 
     /// Reads the key from the env var named in config; it is never logged or stored.
@@ -145,6 +164,15 @@ impl Destination for PayloadDestination {
     /// in a global, or is gone from Payload.
     async fn fetch_loaded(&self, ctx: &StageCtx, id: ItemId) -> Result<Option<serde_json::Value>> {
         load::fetch(&self.client()?, ctx, id).await
+    }
+
+    fn references(
+        &self,
+        ctx: &StageCtx,
+        collection: &str,
+        loaded: &serde_json::Value,
+    ) -> Result<LoadedRefs> {
+        Ok(refs::references(loaded, collection, self.schema(ctx)?))
     }
 }
 

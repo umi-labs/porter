@@ -155,6 +155,28 @@ pub trait Source: Send + Sync {
     fn normalise(&self, ctx: &StageCtx) -> Result<()>;
 }
 
+/// A reference held by a loaded document, as the destination stores it: what verify
+/// compares with the references the source model says the document should have.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DestReference {
+    /// Dotted path to where it sits; the first segment is the top-level field.
+    pub field: String,
+    pub collection: String,
+    pub id: serde_json::Value,
+    /// The document's parent in the destination's page tree.
+    pub parent: bool,
+}
+
+/// What `Destination::references` found. `complete` is false when some references may
+/// be stored in a form the destination can't recognise without more information (bare
+/// ids with no schema to say which fields are relations): verify then reports a missing
+/// reference as a warning, not an error.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LoadedRefs {
+    pub refs: Vec<DestReference>,
+    pub complete: bool,
+}
+
 #[async_trait]
 pub trait Destination: Send + Sync {
     fn capabilities(&self) -> Capabilities;
@@ -162,4 +184,12 @@ pub trait Destination: Send + Sync {
     async fn load(&self, ctx: &StageCtx, apply: bool) -> Result<()>;
     async fn count(&self, ctx: &StageCtx, dest_type: &str) -> Result<u64>;
     async fn fetch_loaded(&self, ctx: &StageCtx, id: ItemId) -> Result<Option<serde_json::Value>>;
+    /// Every relation, link, upload and parent in `loaded` (a doc from `fetch_loaded`
+    /// that landed in `collection`). Verify's only view into the destination's shapes.
+    fn references(
+        &self,
+        ctx: &StageCtx,
+        collection: &str,
+        loaded: &serde_json::Value,
+    ) -> Result<LoadedRefs>;
 }

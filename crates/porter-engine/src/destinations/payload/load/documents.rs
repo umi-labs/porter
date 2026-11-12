@@ -7,7 +7,7 @@ use crate::destinations::payload::lexical::{IdMap, to_lexical};
 use crate::destinations::payload::schema_check::find;
 use crate::destinations::payload::ts::DestField;
 use crate::html::PendingIssue;
-use crate::mapping::{KeyType, TypeMap, apply, paths};
+use crate::mapping::{KeyType, TypeMap, apply, lookup, paths};
 use anyhow::Result;
 use porter_model::{DocStatus, Document, FieldValue, IssueKind, ItemId, ItemKind, Severity};
 use serde_json::{Map, Value, json};
@@ -77,40 +77,31 @@ pub(super) async fn load(l: &mut Loader<'_>) -> Result<()> {
     }
 
     // New paths (parents first, so `{parent.path}` resolves) and old URLs.
-    let by_id: HashMap<ItemId, &Document> = docs.iter().map(|d| (d.id, d)).collect();
     for d in &docs {
         if let Some(u) = &d.source.url {
             l.ids.urls.insert(d.id, u.clone());
         }
     }
-    let depth = |d: &Document| {
-        let (mut n, mut cur, mut seen) = (0usize, d.parent, HashSet::new());
-        while let Some(p) = cur.filter(|p| seen.insert(*p)) {
-            n += 1;
-            cur = by_id.get(&p).and_then(|d| d.parent);
-        }
-        n
-    };
+    let depth = paths::depths(&docs);
     // Sort by tree depth (topological: a parent is always shallower), then path depth.
-    todo.sort_by_key(|(d, ..)| (depth(d), d.path.matches('/').count()));
-    for (d, tm, _) in &todo {
-        let Some(pattern) = &tm.path else { continue };
-        let parent = match d.parent {
-            Some(p) => l.ids.paths.get(&p).cloned(),
-            None => Some(String::new()),
-        };
-        match paths::render(pattern, d, parent.as_deref()) {
+    todo.sort_by_key(|(d, ..)| (depth[&d.id], d.path.matches('/').count()));
+    for (id, r) in paths::render_all(&docs, &mapping) {
+        match r {
             Ok(p) => {
-                l.ids.paths.insert(d.id, p.clone());
-                if let Some(r) = l.ids.refs.get_mut(&d.id) {
+                l.ids.paths.insert(id, p.clone());
+                if let Some(r) = l.ids.refs.get_mut(&id) {
                     r.path = Some(p);
                 }
             }
             Err(e) => {
+                let pattern = mapping
+                    .types
+                    .get(&by_type(&docs, id))
+                    .and_then(|tm| tm.path.clone());
                 l.ctx.issue(
                     IssueKind::SchemaMismatch,
                     Severity::Warning,
-                    Some(d.id),
+                    Some(id),
                     format!("no new URL path: {e}"),
                     json!({"pattern": pattern}),
                 )?;
@@ -225,6 +216,13 @@ pub(super) async fn load(l: &mut Loader<'_>) -> Result<()> {
     Ok(())
 }
 
+fn by_type(docs: &[Document], id: ItemId) -> String {
+    docs.iter()
+        .find(|d| d.id == id)
+        .map(|d| d.doc_type.clone())
+        .unwrap_or_default()
+}
+
 fn schema_fail(l: &Loader, id: ItemId, error: String) -> Result<()> {
     l.ctx.issue(
         IssueKind::SchemaMismatch,
@@ -267,27 +265,6 @@ fn key_of(tm: &TypeMap, d: &Document) -> Result<Value, String> {
                 .map(|n| json!(n))
                 .map_err(|_| format!("key_type is number but source id `{sid}` has no number"))
         }
-    }
-}
-
-/// A document field by its neutral path; `seo.*`, `created` and `updated` name the
-/// document's own fields when no custom field has that name.
-fn lookup(d: &Document, path: &str) -> FieldValue {
-    if let Some(v) = d.fields.get(path) {
-        return v.clone();
-    }
-    let text = |s: &Option<String>| s.clone().map_or(FieldValue::Null, FieldValue::Text);
-    match path {
-        "seo.title" => text(&d.seo.title),
-        "seo.description" => text(&d.seo.description),
-        "seo.canonical" => text(&d.seo.canonical),
-        "seo.og_title" => text(&d.seo.og_title),
-        "seo.og_description" => text(&d.seo.og_description),
-        "seo.noindex" => FieldValue::Bool(d.seo.noindex),
-        "seo.og_image" => d.seo.og_image.map_or(FieldValue::Null, FieldValue::Media),
-        "created" => d.created.map_or(FieldValue::Null, FieldValue::Date),
-        "updated" => d.updated.map_or(FieldValue::Null, FieldValue::Date),
-        _ => FieldValue::Null,
     }
 }
 

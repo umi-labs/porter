@@ -5,7 +5,7 @@
 use super::lexical::{IdMap, to_html, to_lexical};
 use super::ts::DestField;
 use crate::html::PendingIssue;
-use crate::mapping::BlockMap;
+use crate::mapping::{BlockMap, block_kind_name};
 use indexmap::IndexMap;
 use porter_model::{Block, BlockKind, FieldValue, IssueKind, Severity};
 use serde_json::{Map, Value, json};
@@ -38,22 +38,6 @@ struct W<'a> {
     issues: Vec<PendingIssue>,
 }
 
-/// The kind's kebab-case wire name (`rich-text`, `column`, ...), what `match.kind` names.
-fn kind_name(k: &BlockKind) -> String {
-    serde_json::to_value(k)
-        .ok()
-        .and_then(|v| v["type"].as_str().map(String::from))
-        .unwrap_or_default()
-}
-
-/// Every condition the map sets must hold; a map setting none matches nothing.
-fn matches(m: &BlockMap, kind: &str, module: Option<&str>) -> bool {
-    let (k, md) = (m.r#match.kind.as_deref(), m.r#match.module.as_deref());
-    (k.is_some() || md.is_some())
-        && k.is_none_or(|k| k == kind)
-        && md.is_none_or(|md| Some(md) == module)
-}
-
 impl W<'_> {
     fn issue(&mut self, kind: IssueKind, severity: Severity, message: String, details: Value) {
         self.issues.push(PendingIssue {
@@ -73,9 +57,9 @@ impl W<'_> {
     }
 
     fn block(&mut self, b: &Block, out: &mut Vec<Value>) {
-        let kind = kind_name(&b.kind);
+        let kind = block_kind_name(&b.kind);
         let module = b.original.as_ref().map(|o| o.module.as_str());
-        if let Some(m) = self.maps.iter().find(|m| matches(m, &kind, module)) {
+        if let Some(m) = self.maps.iter().find(|m| m.matches(b)) {
             let mut obj = Map::new();
             obj.insert("blockType".into(), json!(m.to));
             let mut unmapped = vec![];

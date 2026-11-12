@@ -168,8 +168,13 @@ async fn exec(env: &Env, cmd: StageCmd) -> Result<Summary> {
             )
             .await
         }
-        // ponytail: Task 22 swaps this for porter_engine::verify::run.
-        _ => bail!("verify not available in this build"),
+        StageCmd::Verify => {
+            run_stage(p, c, e, k, s, |ctx| async move {
+                porter_engine::verify::run(&ctx, dest.as_ref()).await
+            })
+            .await
+        }
+        _ => bail!("not a destination stage"),
     }
 }
 

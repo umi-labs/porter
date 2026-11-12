@@ -1,4 +1,54 @@
-use porter_model::Document;
+use super::MappingConfig;
+use porter_model::{Document, ItemId};
+use std::collections::{HashMap, HashSet};
+
+/// Each document's depth in the parent tree (a parent is always shallower; cycles stop).
+pub fn depths(docs: &[Document]) -> HashMap<ItemId, usize> {
+    let by_id: HashMap<ItemId, &Document> = docs.iter().map(|d| (d.id, d)).collect();
+    docs.iter()
+        .map(|d| {
+            let (mut n, mut cur, mut seen) = (0usize, d.parent, HashSet::new());
+            while let Some(p) = cur.filter(|p| seen.insert(*p)) {
+                n += 1;
+                cur = by_id.get(&p).and_then(|d| d.parent);
+            }
+            (d.id, n)
+        })
+        .collect()
+}
+
+/// The new URL path of every document whose type maps somewhere with a path pattern,
+/// parents first so `{parent.path}` resolves. Parents that don't render leave their
+/// children an error too.
+pub fn render_all(
+    docs: &[Document],
+    mapping: &MappingConfig,
+) -> Vec<(ItemId, Result<String, String>)> {
+    let depth = depths(docs);
+    let mut todo: Vec<(&Document, &str)> = docs
+        .iter()
+        .filter_map(|d| {
+            let tm = mapping.types.get(&d.doc_type)?;
+            tm.to.as_ref()?;
+            Some((d, tm.path.as_deref()?))
+        })
+        .collect();
+    todo.sort_by_key(|(d, _)| (depth[&d.id], d.path.matches('/').count()));
+    let mut done: HashMap<ItemId, String> = HashMap::new();
+    let mut out = vec![];
+    for (d, pattern) in todo {
+        let parent = match d.parent {
+            Some(p) => done.get(&p).cloned(),
+            None => Some(String::new()),
+        };
+        let r = render(pattern, d, parent.as_deref());
+        if let Ok(p) = &r {
+            done.insert(d.id, p.clone());
+        }
+        out.push((d.id, r));
+    }
+    out
+}
 
 /// Renders a URL path pattern. Placeholders: `{slug}`, `{id}`, `{type}`, `{yyyy}`, `{mm}`,
 /// `{parent.path}`. Date placeholders use `created`, then `updated`.

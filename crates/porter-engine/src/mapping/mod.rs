@@ -9,7 +9,7 @@ use crate::connectors::RawItem;
 use crate::store::Store;
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
-use porter_model::{Document, ItemKind};
+use porter_model::{Block, BlockKind, Document, FieldValue, ItemKind};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::path::Path;
 pub use transforms::{Transform, apply};
@@ -176,6 +176,47 @@ pub struct BlockMap {
     pub to: String,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub fields: IndexMap<String, String>,
+}
+
+impl BlockMap {
+    /// Every condition the map sets must hold; a map setting none matches nothing.
+    pub fn matches(&self, b: &Block) -> bool {
+        let kind = block_kind_name(&b.kind);
+        let module = b.original.as_ref().map(|o| o.module.as_str());
+        let (k, md) = (self.r#match.kind.as_deref(), self.r#match.module.as_deref());
+        (k.is_some() || md.is_some())
+            && k.is_none_or(|k| k == kind)
+            && md.is_none_or(|md| Some(md) == module)
+    }
+}
+
+/// The kind's kebab-case wire name (`rich-text`, `column`, ...), what `match.kind` names.
+pub fn block_kind_name(k: &BlockKind) -> String {
+    serde_json::to_value(k)
+        .ok()
+        .and_then(|v| v["type"].as_str().map(String::from))
+        .unwrap_or_default()
+}
+
+/// A document field by its neutral path; `seo.*`, `created` and `updated` name the
+/// document's own fields when no custom field has that name.
+pub fn lookup(d: &Document, path: &str) -> FieldValue {
+    if let Some(v) = d.fields.get(path) {
+        return v.clone();
+    }
+    let text = |s: &Option<String>| s.clone().map_or(FieldValue::Null, FieldValue::Text);
+    match path {
+        "seo.title" => text(&d.seo.title),
+        "seo.description" => text(&d.seo.description),
+        "seo.canonical" => text(&d.seo.canonical),
+        "seo.og_title" => text(&d.seo.og_title),
+        "seo.og_description" => text(&d.seo.og_description),
+        "seo.noindex" => FieldValue::Bool(d.seo.noindex),
+        "seo.og_image" => d.seo.og_image.map_or(FieldValue::Null, FieldValue::Media),
+        "created" => d.created.map_or(FieldValue::Null, FieldValue::Date),
+        "updated" => d.updated.map_or(FieldValue::Null, FieldValue::Date),
+        _ => FieldValue::Null,
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

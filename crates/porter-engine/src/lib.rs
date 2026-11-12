@@ -15,3 +15,4 @@ pub mod sources;
 pub mod stage;
 pub mod store;
 pub mod url;
+pub mod verify;
