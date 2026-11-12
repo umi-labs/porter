@@ -623,6 +623,93 @@ async fn old_url_field_becomes_redirect() {
     assert_eq!(reds[0].to, "https://example.com/five/");
 }
 
+/// On disk only `Photo.jpg`; the attachment asks for `photo.jpg`. A case-insensitive disk
+/// would open the sibling: it must be a missing file, never the sibling's bytes as Done.
+#[tokio::test]
+async fn upload_read_needs_exact_case() {
+    let fx = setup_with(&[], |raw| {
+        let up = raw
+            .parent()
+            .unwrap()
+            .join("wproot/wp-content/uploads/2024/03");
+        std::fs::rename(up.join("a.jpg"), up.join("tmp.jpg")).unwrap();
+        std::fs::rename(up.join("tmp.jpg"), up.join("Photo.jpg")).unwrap();
+        let path = raw.join("wp-db/export.json");
+        let mut v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        // The sibling is an attachment of its own, read first: its URL must not stand in.
+        v["posts"].as_array_mut().unwrap().push(post(
+            49,
+            "attachment",
+            "inherit",
+            "photo-cap",
+            json!({
+                "link": "https://example.com/wp-content/uploads/2024/03/Photo.jpg",
+                "mime": "image/jpeg",
+                "meta": { "_wp_attached_file": "2024/03/Photo.jpg" },
+                "attachment": { "file": "2024/03/Photo.jpg", "metadata": { "sizes": {} } },
+            }),
+        ));
+        for p in v["posts"].as_array_mut().unwrap() {
+            if p["id"] == 50 {
+                p["link"] = json!("https://example.com/wp-content/uploads/2024/03/photo.jpg");
+                p["meta"]["_wp_attached_file"] = json!("2024/03/photo.jpg");
+                p["attachment"]["file"] = json!("2024/03/photo.jpg");
+            }
+        }
+        std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+    })
+    .await;
+    let s = fx.p.store();
+    // Only the sibling's own attachment holds its bytes.
+    let holders: Vec<_> = s
+        .items::<Media>(ItemKind::Media)
+        .unwrap()
+        .into_iter()
+        .filter(|m| std::fs::read(s.media_path(m.0).unwrap()).unwrap() == b"jpeg-a")
+        .collect();
+    assert_eq!(holders.len(), 1);
+    assert_eq!(holders[0].2.filename, "Photo.jpg");
+    assert!(matches!(
+        s.status(Stage::Normalise, canon(ItemKind::Document, "post:50"))
+            .unwrap(),
+        Some(ItemStatus::Skipped { .. })
+    ));
+    let miss = issues(&fx, IssueKind::MissingMedia);
+    assert!(
+        miss.iter().any(|i| i
+            .message
+            .contains("2024/03/photo.jpg not found with exact case (found Photo.jpg)")),
+        "{miss:?}"
+    );
+}
+
+/// Two attachments, one file, different alt text: one item, and an info issue says which
+/// values were kept.
+#[tokio::test]
+async fn shared_file_attachments_reported() {
+    let fx = setup_with(&[], |raw| {
+        let up = raw.parent().unwrap().join("wproot/wp-content/uploads/2024/04");
+        std::fs::create_dir_all(&up).unwrap();
+        std::fs::write(up.join("copy.jpg"), b"jpeg-a").unwrap();
+        let path = raw.join("wp-db/export.json");
+        let mut v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        v["posts"].as_array_mut().unwrap().push(post(51, "attachment", "inherit", "copy", json!({
+            "link": "https://example.com/wp-content/uploads/2024/04/copy.jpg",
+            "mime": "image/jpeg",
+            "meta": { "_wp_attached_file": "2024/04/copy.jpg", "_wp_attachment_image_alt": "Alt B" },
+            "attachment": { "file": "2024/04/copy.jpg", "metadata": { "sizes": {} } },
+        })));
+        std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+    })
+    .await;
+    let info: Vec<_> = issues(&fx, IssueKind::MissingMedia)
+        .into_iter()
+        .filter(|i| i.severity == Severity::Info && i.message.contains("share one media item"))
+        .collect();
+    assert_eq!(info.len(), 1, "{info:?}");
+    assert!(info[0].message.contains("[50, 51]"), "{}", info[0].message);
+}
+
 #[tokio::test]
 async fn post_shadowed_by_page_at_same_url_is_skipped() {
     let fx = setup_with(&[], |raw| {

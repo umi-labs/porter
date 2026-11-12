@@ -22,8 +22,10 @@ same database dump, produces what that importer produced. The only things commit
 acceptance/run.sh landmark --local-only
 ```
 
-Runs analyse, extract, normalise and `schema check` with the wp-db connector only, then prints
-the table. Re-print the table with `--table`; run single stages with `--stage NAME`.
+Runs extract, analyse (wp-db's analyse reads the extract), normalise and `schema check` with
+the wp-db connector only, then prints the table. Re-print the table with `--table`; run single
+stages with `--stage NAME`. The script exits 1 when a stage fails or a count differs from the
+reconstruction; `--no-fail` keeps going for exploration.
 
 ## Full run
 
@@ -32,8 +34,10 @@ Each of these steps needs an explicit go-ahead first.
 1. **Snapshot the old site, once, before launch replaces it.** In a scratch project with only
    a `crawl` connector pointing at the live site, run `porter extract`, then copy its
    `raw/crawl` and `media` folders into `acceptance/landmark/snapshot/` (as `snapshot/crawl/`
-   and `snapshot/media/`). From then on the `crawl` connector reads the snapshot through
-   `url = "file://.../snapshot"` and never touches the network.
+   and `snapshot/media/`). That is the whole crawl: `raw/crawl` holds the pages, their HTML,
+   the media index (`media.ndjson`) and every redirect hop (`redirects.ndjson`). From then on
+   the `crawl` connector reads the snapshot through `url = "file://.../snapshot"` and never
+   touches the network.
 2. **Start the app on a fresh, throwaway database.** Never point porter at Landmark's real
    database. In the Landmark repo: create a new Postgres database (for example
    `landmark_porter`), start the app against it (`DATABASE_URI=.../landmark_porter pnpm dev`),
@@ -45,6 +49,9 @@ Each of these steps needs an explicit go-ahead first.
 Afterwards drop the throwaway database.
 
 ## What the table compares
+
+The Landmark side is a reconstruction: the importer's logic applied to its own extract, not its
+logged output.
 
 | Row | Landmark side |
 | --- | --- |

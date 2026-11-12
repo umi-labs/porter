@@ -7,18 +7,22 @@
 #                                              wp-db connector only (no crawl, nothing loaded)
 #   acceptance/run.sh landmark --stage normalise --stage schema   just those stages
 #   acceptance/run.sh landmark --table         just print the table
+#   --no-fail                                  exit 0 even when a stage fails or a count differs
+#
+# Exits 1 when any stage exits non-zero or any count row differs from the importer's.
 #
 # LANDMARK_DIR (default ~/Desktop/work/clients/landmark) is only read.
 set -euo pipefail
 
 site="${1:-}"
-[[ "$site" == landmark ]] || { echo "usage: $0 landmark [--local-only] [--stage NAME]... [--table]" >&2; exit 1; }
+[[ "$site" == landmark ]] || { echo "usage: $0 landmark [--local-only] [--stage NAME]... [--table] [--no-fail]" >&2; exit 1; }
 shift
-local_only=0 table_only=0 stages=()
+local_only=0 table_only=0 no_fail=0 failed=0 stages=()
 while (($#)); do
   case "$1" in
     --local-only) local_only=1 ;;
     --table) table_only=1 ;;
+    --no-fail) no_fail=1 ;;
     --stage) stages+=("$2"); shift ;;
     *) echo "unknown option $1" >&2; exit 1 ;;
   esac
@@ -53,23 +57,27 @@ if os.environ['CRAWL'] != '1':
 sys.stdout.write(s)
 PY
 
-run() { echo "== porter $*" >&2; "$porter" --project "$project" "$@" || echo "(exit $?)" >&2; }
+run() {
+  echo "== porter $*" >&2
+  "$porter" --project "$project" "$@" || { echo "(exit $?)" >&2; failed=1; }
+}
 if ((!table_only)); then
   if ((${#stages[@]})); then
     for s in "${stages[@]}"; do
       case "$s" in schema) run schema check ;; *) run "$s" ;; esac
     done
   elif ((local_only)); then
-    for s in analyse extract normalise; do run "$s"; done
+    # wp-db's analyse reads what extract exported, so it runs after it.
+    for s in extract analyse normalise; do run "$s"; done
     run schema check
   else
     [[ -n "${PORTER_PAYLOAD_API_KEY:-}" ]] || { echo "set PORTER_PAYLOAD_API_KEY (see acceptance/landmark/README.md)" >&2; exit 1; }
-    "$porter" --project "$project" --json run --apply >"$project/run.ndjson" || echo "(porter run exit $?)" >&2
+    "$porter" --project "$project" --json run --apply >"$project/run.ndjson" || { echo "(porter run exit $?)" >&2; failed=1; }
   fi
 fi
 
 # The table: porter's counts against what Landmark's importer produced from the same data.
-LANDMARK_DIR="$LANDMARK_DIR" python3 -I - "$project/project.db" <<'PY'
+LANDMARK_DIR="$LANDMARK_DIR" python3 -I - "$project/project.db" <<'PY' || failed=1
 import json, os, re, sqlite3, sys
 from urllib.parse import urlparse
 
@@ -164,12 +172,20 @@ rows += [
     ('redirects', final, red_n, '-'),
     ('submissions', subs_want, subs_n, '-'),
 ]
+differs = False
 print(f"{'':34} {'Landmark':>9} {'porter':>28} {'loaded':>7}")
 for name, w, p, l in rows:
     mark = '' if str(w) == str(p).split(' ')[0] else '  <-'
+    differs |= bool(mark)
     print(f'{name:34} {w:>9} {str(p):>28} {str(l):>7}{mark}')
 print('\nopen issues, by stage and kind:')
 for st, k, sev, n in q("""select stage, kind, severity, count(*) from issues where deleted_at is null
   and resolution='open' group by 1,2,3 order by 1,2"""):
     print(f'  {st:10} {k:20} {sev:8} {n}')
+sys.exit(1 if differs else 0)
 PY
+
+if ((failed && !no_fail)); then
+  echo "acceptance: a stage failed or a count differs (--no-fail to ignore)" >&2
+  exit 1
+fi

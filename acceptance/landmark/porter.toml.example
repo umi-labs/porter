@@ -37,7 +37,7 @@ locales = { mode = "skip" }
 taxonomies = { category = "categories", post_tag = "tags" }
 forms = { collection = "forms", submissions = "form-submissions" }
 media = { collection = "media", folders = true }
-# old_site_url: the pre-WordPress site's URLs, kept on each item
+# Each item's earlier URL, kept in an ACF field
 redirects = { collection = "redirects", from_fields = ["acf.old_site_url"] }
 settings = { global = "settings", front_page = "homePage" }
 
@@ -98,11 +98,11 @@ key_field = "legacyId"
 key_type = "number"
 status = { private = "draft", draft = "skip", scheduled = "skip" }
 [mapping.types.page.fields]
-"acf.booking_widget" = { drop = true, reason = "unused on the old site" }
-"acf.member_offer" = { drop = true, reason = "members area retired" }
-"acf.members_offers" = { drop = true, reason = "members area retired" }
-"acf.old_site_url" = { drop = true, reason = "becomes redirects (the importer does the same)" }
-"acf.slides" = { drop = true, reason = "hero slides are read as images by the page template, not copied" }
+"acf.booking_widget" = { drop = true, reason = "not used on the new site" }
+"acf.member_offer" = { drop = true, reason = "not used on the new site" }
+"acf.members_offers" = { drop = true, reason = "not used on the new site" }
+"acf.old_site_url" = { drop = true, reason = "becomes a redirect (mapping.redirects.from_fields)" }
+"acf.slides" = { drop = true, reason = "not used on the new site" }
 "seo.title" = { to = "meta.title" }
 "seo.description" = { to = "meta.description" }
 "seo.og_image" = { to = "meta.image" }
@@ -118,7 +118,7 @@ key_field = "legacyId"
 key_type = "number"
 status = { private = "draft", draft = "skip", scheduled = "skip" }
 [mapping.types.post.fields]
-"acf.slides" = { drop = true, reason = "hero slides are read as images by the page template, not copied" }
+"acf.slides" = { drop = true, reason = "not used on the new site" }
 "terms.category" = { drop = true, reason = "pages have no categories" }
 "seo.title" = { to = "meta.title" }
 "seo.description" = { to = "meta.description" }
@@ -134,7 +134,7 @@ key_field = "legacyId"
 key_type = "number"
 status = { private = "draft", draft = "skip", scheduled = "skip" }
 [mapping.types.rooms.fields]
-"acf.old_site_url" = { drop = true, reason = "becomes redirects (the importer does the same)" }
+"acf.old_site_url" = { drop = true, reason = "becomes a redirect (mapping.redirects.from_fields)" }
 "content" = { drop = true, reason = "the collection keeps its text in its own fields" }
 "seo.title" = { to = "meta.title" }
 "seo.description" = { to = "meta.description" }
@@ -174,7 +174,7 @@ key_field = "legacyId"
 key_type = "number"
 status = { private = "draft", draft = "skip", scheduled = "skip" }
 [mapping.types.events.fields]
-"acf.old_site_url" = { drop = true, reason = "becomes redirects (the importer does the same)" }
+"acf.old_site_url" = { drop = true, reason = "becomes a redirect (mapping.redirects.from_fields)" }
 "content" = { drop = true, reason = "the collection keeps its text in its own fields" }
 "seo.title" = { to = "meta.title" }
 "seo.description" = { to = "meta.description" }
@@ -259,7 +259,7 @@ key_field = "legacyId"
 key_type = "number"
 status = { private = "draft", draft = "skip", scheduled = "skip" }
 [mapping.types.bars.fields]
-"acf.old_site_url" = { drop = true, reason = "becomes redirects (the importer does the same)" }
+"acf.old_site_url" = { drop = true, reason = "becomes a redirect (mapping.redirects.from_fields)" }
 "content" = { drop = true, reason = "the collection keeps its text in its own fields" }
 "seo.title" = { to = "meta.title" }
 "seo.description" = { to = "meta.description" }
@@ -293,7 +293,7 @@ key_field = "legacyId"
 key_type = "number"
 status = { private = "draft", draft = "skip", scheduled = "skip" }
 [mapping.types.guides.fields]
-"acf.bind_to_package" = { drop = true, reason = "the packages taxonomy does not exist in the new site" }
+"acf.bind_to_package" = { drop = true, reason = "no destination field" }
 "content" = { drop = true, reason = "the collection keeps its text in its own fields" }
 "seo.title" = { to = "meta.title" }
 "seo.description" = { to = "meta.description" }
@@ -377,61 +377,60 @@ key_field = "legacyId"
 key_type = "number"
 status = { private = "draft", draft = "skip", scheduled = "skip" }
 [mapping.types.notifications.fields]
-"content" = { drop = true, reason = "the message is a plain textarea; one notification, set by hand" }
+"content" = { drop = true, reason = "rich text does not fit the plain-text destination field" }
 "acf.Additional_headers" = { to = "additionalHeaders" }
 "acf.Email_Subject" = { to = "emailSubject" }
 "acf.Email_address" = { to = "emailAddress" }
 
 [mapping.types.um_directory]
-drop_reason = "Ultimate Member directory: the members area is retired (members now join through the hotel group)"
+drop_reason = "plugin data, not content (not used on the new site)"
 
 [mapping.types.um_form]
-drop_reason = "Ultimate Member forms: the members area is retired"
+drop_reason = "plugin data, not content (not used on the new site)"
 
 [mapping.types.wpdiscuz_form]
-drop_reason = "comment-plugin form definitions, not content"
+drop_reason = "plugin settings, not content"
 
 [mapping.types.frm_form_actions]
-drop_reason = "Formidable form actions, not content (forms come from Gravity and Ninja Forms)"
+drop_reason = "plugin settings, not content"
 
 [mapping.types.frm_styles]
-drop_reason = "Formidable styles, not content"
+drop_reason = "plugin settings, not content"
 
 [mapping.types.wpforms]
-drop_reason = "WPForms definitions, unused on the live site"
+drop_reason = "plugin settings, not content"
 
 [mapping.types.pys_event]
-drop_reason = "pixel tracking events, not content"
+drop_reason = "plugin settings, not content"
 
 [mapping.types.bnfw_notification]
-drop_reason = "notification plugin settings, not content"
+drop_reason = "plugin settings, not content"
 
 [mapping.types.mgmlp_media_folder]
-drop_reason = "media folder plugin rows: folders come from the uploads directories"
+drop_reason = "plugin data: media folders come from the upload directories"
 
 [mapping.types.inc_popup]
-drop_reason = "old popup plugin, replaced by the popups type"
+drop_reason = "plugin data, superseded by the popups type"
 
 [mapping.types.popup]
-drop_reason = "old popup plugin, replaced by the popups type"
+drop_reason = "plugin data, superseded by the popups type"
 
 [mapping.types.popup_theme]
-drop_reason = "old popup plugin styles"
+drop_reason = "plugin settings, not content"
 
 [mapping.types.wdi_instagram]
-drop_reason = "Instagram feed settings: the instagram global is set up by hand"
+drop_reason = "plugin settings, not content"
 
 [mapping.types.acf]
-drop_reason = "ACF options rows, not content"
+drop_reason = "plugin settings, not content"
 
 [mapping.types.news]
-drop_reason = "retired type, nothing published"
+drop_reason = "not used on the new site"
 
 [mapping.types.digital_menu]
-drop_reason = "menus are PDFs in the media library; the type is not rebuilt"
+drop_reason = "not used on the new site"
 
-# Hand-written rules from the importer (import-redirects.ts): the retired members area,
-# payment pages, routes not rebuilt and the old sitemaps.
+# Hand-written rules, transcribed from the importer (import-redirects.ts).
 [[redirects]]
 from = "/friends-of-the-landmark-london/"
 to = "/promotions/leaders-club/"

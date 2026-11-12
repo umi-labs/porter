@@ -425,7 +425,12 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
 #[tokio::test]
 async fn crawl_from_snapshot_dir() {
     let s = MockServer::start().await;
-    page(&s, "/", r#"<title>Home</title><a href="/p">p</a>"#).await;
+    page(&s, "/", r#"<title>Home</title><a href="/old">old</a>"#).await;
+    Mock::given(method("GET"))
+        .and(path("/old"))
+        .respond_with(ResponseTemplate::new(301).insert_header("location", "/p"))
+        .mount(&s)
+        .await;
     page(
         &s,
         "/p",
@@ -464,7 +469,31 @@ async fn crawl_from_snapshot_dir() {
     };
     let replayed = key(routes(&p));
     assert_eq!(replayed, key(routes(&live)));
-    assert_eq!(replayed.len(), 2, "{replayed:?}");
+    assert_eq!(replayed.len(), 3, "{replayed:?}");
+    // The 301 hop survives: the same Redirect item, and /old's route points at it.
+    let reds = |p: &Project| {
+        let mut v: Vec<(String, String, u16)> = p
+            .store()
+            .items::<Redirect>(ItemKind::Redirect)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.2.from, r.2.to, r.2.code))
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(reds(&p), reds(&live));
+    assert_eq!(reds(&p).len(), 1);
+    assert_eq!(reds(&p)[0].2, 301);
+    let old = routes(&p)
+        .into_iter()
+        .find(|r| r.url.ends_with("/old"))
+        .unwrap();
+    assert_eq!(old.http_status, Some(301));
+    assert!(
+        matches!(old.target, porter_model::RouteTarget::Redirect(_)),
+        "{old:?}"
+    );
     let html = std::fs::read_dir(p.raw_dir("crawl").join("html")).unwrap();
     assert_eq!(html.count(), 2);
     let media = p.store().items::<Media>(ItemKind::Media).unwrap();
@@ -490,7 +519,7 @@ async fn crawl_from_snapshot_dir() {
 
     // Analyse replays too, and writes what it detected.
     let (_d2, a) = run(cfg(&url, &[]), Stage::Analyse, false).await;
-    assert_eq!(key(routes(&a)).len(), 2);
+    assert_eq!(key(routes(&a)).len(), 3);
     assert!(a.raw_dir("crawl").join("detect.json").exists());
 }
 

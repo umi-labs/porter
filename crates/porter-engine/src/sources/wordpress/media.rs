@@ -96,6 +96,33 @@ fn safe_rel(file: &str) -> bool {
             .all(|c| matches!(c, Component::Normal(_)))
 }
 
+/// Whether `rel` exists under `root` with exactly this case. A case-insensitive disk (macOS)
+/// opens `photo.jpg` when only `Photo.jpg` is there, which would be another file's bytes.
+/// `Err(Some(name))` names the entry that differs only by case; listings are cached per folder.
+fn exact_case(
+    root: &Path,
+    rel: &str,
+    cache: &mut HashMap<std::path::PathBuf, Vec<String>>,
+) -> std::result::Result<(), Option<String>> {
+    let mut dir = root.to_path_buf();
+    for part in rel.split('/') {
+        let names = cache.entry(dir.clone()).or_insert_with(|| {
+            std::fs::read_dir(&dir)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok()?.file_name().into_string().ok())
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        if !names.iter().any(|n| n == part) {
+            let lower = part.to_lowercase();
+            return Err(names.iter().find(|n| n.to_lowercase() == lower).cloned());
+        }
+        dir.push(part);
+    }
+    Ok(())
+}
+
 /// Every stored file's variant URLs, by URL key, read once: a miss in the store's own lookup
 /// scans the table, which thousands of attachments can't afford.
 struct Known {
@@ -131,13 +158,14 @@ impl Known {
         self.exact.insert(key.0, id);
     }
 
-    /// Like `Store::media_by_url`: exact key, else an unambiguous case-insensitive match.
-    fn get(&self, url: &str) -> Option<ItemId> {
+    fn exact(&self, url: &str) -> Option<ItemId> {
+        self.exact.get(&normalise_url(url, None)?.0).copied()
+    }
+
+    /// An unambiguous case-insensitive match, like `Store::media_by_url`'s fallback.
+    fn folded(&self, url: &str) -> Option<ItemId> {
         let key = normalise_url(url, None)?.0;
-        self.exact
-            .get(&key)
-            .copied()
-            .or_else(|| self.folded.get(&key.to_lowercase()).copied().flatten())
+        self.folded.get(&key.to_lowercase()).copied().flatten()
     }
 }
 
@@ -153,6 +181,11 @@ pub(crate) fn attachments(
     let store = ctx.project.store();
     let mut out = HashMap::new();
     let mut known = Known::load(store)?;
+    let mut listings = HashMap::new();
+    let mut case_miss: HashMap<u64, String> = HashMap::new();
+    // Media item -> the attachments that resolved to it, with their own alt, title and folder.
+    type Own = (u64, Option<String>, String, Option<String>);
+    let mut shared: BTreeMap<ItemId, Vec<Own>> = BTreeMap::new();
     for p in posts.values().filter(|p| p.post_type == "attachment") {
         if ctx.cancel.is_cancelled() {
             break;
@@ -177,13 +210,17 @@ pub(crate) fn attachments(
                 })
             })
             .collect();
-        let mut found = p.link.iter().chain(&urls).find_map(|u| known.get(u));
+        let mut found = p.link.iter().chain(&urls).find_map(|u| known.exact(u));
         if found.is_none()
             && safe_rel(&file)
             && let Some(root) = &site.uploads
         {
             let path = root.join(&file);
-            if let Ok(bytes) = std::fs::read(&path) {
+            let exact = exact_case(root, &file, &mut listings);
+            if let Err(Some(other)) = &exact {
+                case_miss.insert(p.id, other.clone());
+            }
+            if let (Ok(()), Ok(bytes)) = (exact, std::fs::read(&path)) {
                 let url = p.link.clone().or_else(|| urls.first().cloned());
                 let name = file.rsplit('/').next().unwrap_or(&file);
                 found = Some(
@@ -193,17 +230,28 @@ pub(crate) fn attachments(
                 );
             }
         }
+        // A URL that differs only by case, unless the uploads show that's another file.
+        if found.is_none() && !case_miss.contains_key(&p.id) {
+            found = p.link.iter().chain(&urls).find_map(|u| known.folded(u));
+        }
         let (canon_id, _) = canon(ItemKind::Document, &format!("post:{}", p.id), None);
         let Some(id) = found else {
-            ctx.issue(
-                IssueKind::MissingMedia,
-                Severity::Warning,
-                Some(canon_id),
-                format!(
+            let message = match case_miss.get(&p.id) {
+                Some(other) => format!(
+                    "attachment {}: file {file} not found with exact case (found {other})",
+                    p.id
+                ),
+                None => format!(
                     "attachment {} ({}) has no file: not downloaded and not in uploads",
                     p.id,
                     p.link.as_deref().unwrap_or(&file)
                 ),
+            };
+            ctx.issue(
+                IssueKind::MissingMedia,
+                Severity::Warning,
+                Some(canon_id),
+                message,
                 json!({ "attachment": p.id, "file": file, "url": p.link }),
             )?;
             ctx.item_status(
@@ -223,6 +271,10 @@ pub(crate) fn attachments(
             continue;
         };
         let nz = |s: &Option<String>| s.clone().filter(|x| !x.trim().is_empty());
+        shared
+            .entry(id)
+            .or_default()
+            .push((p.id, nz(&p.alt), p.title.clone(), dir.clone()));
         m.alt = nz(&p.alt).or(m.alt);
         m.caption = nz(&p.caption).or(m.caption);
         m.title = Some(p.title.clone()).filter(|t| !t.is_empty()).or(m.title);
@@ -262,6 +314,27 @@ pub(crate) fn attachments(
         }
         out.insert(p.id, id);
     }
+    // Attachments sharing one file share one item, which keeps one alt, title and folder.
+    for (id, owners) in shared {
+        let first = (&owners[0].1, &owners[0].2, &owners[0].3);
+        if owners.iter().all(|o| (&o.1, &o.2, &o.3) == first) {
+            continue;
+        }
+        let Some(m) = store.get_item::<Media>(id)? else {
+            continue;
+        };
+        let ids: Vec<u64> = owners.iter().map(|o| o.0).collect();
+        ctx.issue(
+            IssueKind::MissingMedia,
+            Severity::Info,
+            Some(id),
+            format!(
+                "attachments {ids:?} are the same file and share one media item; kept alt {:?}, title {:?}, folder {:?}",
+                m.alt, m.title, m.folder
+            ),
+            json!({ "attachments": ids, "alt": m.alt, "title": m.title, "folder": m.folder }),
+        )?;
+    }
     Ok(out)
 }
 
@@ -290,5 +363,25 @@ mod tests {
         assert!(!safe_rel("../etc/passwd"));
         assert!(!safe_rel("/etc/passwd"));
         assert!(safe_rel("2024/01/a.jpg"));
+    }
+
+    #[test]
+    fn exact_case_rejects_case_siblings() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("2024/03")).unwrap();
+        std::fs::write(d.path().join("2024/03/Photo.jpg"), b"x").unwrap();
+        let mut cache = HashMap::new();
+        assert_eq!(
+            exact_case(d.path(), "2024/03/Photo.jpg", &mut cache),
+            Ok(())
+        );
+        assert_eq!(
+            exact_case(d.path(), "2024/03/photo.jpg", &mut cache),
+            Err(Some("Photo.jpg".into()))
+        );
+        assert_eq!(
+            exact_case(d.path(), "2024/03/none.jpg", &mut cache),
+            Err(None)
+        );
     }
 }

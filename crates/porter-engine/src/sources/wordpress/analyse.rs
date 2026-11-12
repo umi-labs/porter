@@ -115,7 +115,8 @@ pub fn merge(ctx: &StageCtx) -> Result<MergeReport> {
     // Posts from the content connectors, one per WordPress id.
     let mut posts: BTreeMap<String, Post> = BTreeMap::new();
     let mut have_content = false;
-    for (_, src, row) in store.items::<RawItem>(ItemKind::Document)? {
+    // Normalised Documents share the table; only connector rows are read here.
+    for (_, src, row) in store.items_decodable::<RawItem>(ItemKind::Document)? {
         if src.connector == "crawl" || NON_PUBLIC.contains(&row.label.as_str()) {
             continue;
         }

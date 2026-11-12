@@ -4,7 +4,8 @@
 //!
 //! A `file://` url reads a saved snapshot instead of the network: a folder holding a copy of
 //! a project's `raw/crawl` (as `crawl/`) and `media/`. Pages come from `crawl/pages/*.json`
-//! (their HTML from `crawl/html/`, keyed by `UrlKey`), media from `crawl/media.ndjson`.
+//! (their HTML from `crawl/html/`, keyed by `UrlKey`), media from `crawl/media.ndjson` and
+//! redirect hops from `crawl/redirects.ndjson`, which extract writes for that purpose.
 
 use crate::config::ConnectorConfig;
 use crate::connectors::fetch::{
@@ -701,6 +702,9 @@ async fn visit(sh: Arc<Shared>, url: Url) -> Result<Option<Outcome>> {
         .as_deref()
         .map(|h| parse_page(h, &f.last, &f.headers, &sh.css_url, &sh.opts.keep_query));
     record(ctx, &url, &f, parsed.as_ref())?;
+    if sh.extract && (!f.hops.is_empty() || f.error.is_some()) {
+        log_hops(ctx, &url, &f)?;
+    }
     if let Some(p) = &parsed {
         let mut head = p.head.clone();
         head.url = f.last.to_string();
@@ -873,17 +877,81 @@ async fn download_media(sh: &Shared, route: ItemId, urls: &[String]) -> Result<(
     Ok(())
 }
 
-/// `raw/crawl/media.ndjson`: URL -> content hash, so a snapshot keeps which file each URL was.
-fn index_media(ctx: &StageCtx, url: &str, hash: &str) -> Result<()> {
+/// One fetch that redirected, as `raw/crawl/redirects.ndjson` keeps it for a snapshot.
+#[derive(Serialize, Deserialize)]
+struct LoggedFetch {
+    url: String,
+    first_status: u16,
+    last: String,
+    status: u16,
+    /// `(from, to, code)` per hop.
+    hops: Vec<(String, String, u16)>,
+    error: Option<String>,
+    off_host: bool,
+}
+
+fn append_line(ctx: &StageCtx, file: &str, line: &serde_json::Value) -> Result<()> {
     use std::io::Write;
     let raw = ctx.project.raw_dir(NAME);
     std::fs::create_dir_all(&raw)?;
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(raw.join("media.ndjson"))?;
-    writeln!(f, "{}", serde_json::json!({ "url": url, "hash": hash }))?;
+        .open(raw.join(file))?;
+    writeln!(f, "{line}")?;
     Ok(())
+}
+
+fn log_hops(ctx: &StageCtx, url: &Url, f: &Fetched) -> Result<()> {
+    let logged = LoggedFetch {
+        url: url.to_string(),
+        first_status: f.first_status,
+        last: f.last.to_string(),
+        status: f.status,
+        hops: f
+            .hops
+            .iter()
+            .map(|h| (h.from.to_string(), h.to.to_string(), h.code))
+            .collect(),
+        error: f.error.clone(),
+        off_host: f.off_host,
+    };
+    append_line(ctx, "redirects.ndjson", &serde_json::to_value(&logged)?)
+}
+
+/// A logged fetch back as the `Fetched` it was (no body: pages replay from their own files).
+fn replayed(l: LoggedFetch) -> Option<(Url, Fetched)> {
+    let hops = l
+        .hops
+        .into_iter()
+        .map(|(from, to, code)| {
+            Some(Hop {
+                from: Url::parse(&from).ok()?,
+                to: Url::parse(&to).ok()?,
+                code,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let f = Fetched {
+        hops,
+        first_status: l.first_status,
+        last: Url::parse(&l.last).ok()?,
+        status: l.status,
+        headers: HeaderMap::new(),
+        html: None,
+        error: l.error,
+        off_host: l.off_host,
+    };
+    Some((Url::parse(&l.url).ok()?, f))
+}
+
+/// `raw/crawl/media.ndjson`: URL -> content hash, so a snapshot keeps which file each URL was.
+fn index_media(ctx: &StageCtx, url: &str, hash: &str) -> Result<()> {
+    append_line(
+        ctx,
+        "media.ndjson",
+        &serde_json::json!({ "url": url, "hash": hash }),
+    )
 }
 
 /// Sitemap URLs from robots.txt and `/sitemap.xml`; indexes are followed 3 levels deep.
@@ -1067,6 +1135,23 @@ fn snapshot(ctx: &StageCtx, opts: &Opts, extract: bool) -> Result<()> {
     let raw = ctx.project.raw_dir(NAME);
     let css_url = Regex::new(r#"url\(\s*['"]?([^'")]+)"#)?;
     let store = ctx.project.store();
+    // Redirect hops first, as the live crawl recorded them; pages then add their titles.
+    if let Ok(text) = std::fs::read_to_string(snap.join("redirects.ndjson")) {
+        for l in text.lines() {
+            let Some((url, f)) = serde_json::from_str::<LoggedFetch>(l)
+                .ok()
+                .and_then(replayed)
+            else {
+                continue;
+            };
+            if opts.allows(&url) {
+                record(ctx, &url, &f, None)?;
+                if extract {
+                    log_hops(ctx, &url, &f)?;
+                }
+            }
+        }
+    }
     let mut paths: Vec<_> = pages.filter_map(|e| e.ok().map(|e| e.path())).collect();
     paths.sort();
     let mut platforms: BTreeMap<String, usize> = BTreeMap::new();

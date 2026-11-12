@@ -187,3 +187,28 @@ async fn elementor_detected_raises_converter_missing() {
     assert_eq!(c.platform.as_deref(), Some("wordpress"));
     assert_eq!(c.builders, vec!["elementor"]);
 }
+
+/// Analyse re-run after normalise: the normalised Documents in the same table are not
+/// connector rows and must not stop it.
+#[tokio::test]
+async fn analyse_after_normalise_skips_documents() {
+    let f = fx();
+    f.post(7, "page", "publish", "https://example.com/a/");
+    let src = SourceRef {
+        connector: "wordpress".into(),
+        source_id: "post:7".into(),
+        url: None,
+    };
+    let doc = serde_json::json!({ "id": "x", "type": "page", "fields": {} });
+    f.p.store()
+        .put_item(
+            ItemKind::Document,
+            ItemId::new(ItemKind::Document, &src),
+            &src,
+            &doc,
+        )
+        .unwrap();
+    f.route("https://example.com/a/", 200);
+    let r = f.merge(cfg()).await;
+    assert_eq!(r.matched, 1, "{r:?}");
+}

@@ -292,7 +292,7 @@ impl Default for MediaMap {
 #[serde(default)]
 pub struct RedirectsMap {
     pub collection: String,
-    /// Fields that hold a document's earlier URL (e.g. `acf.old_site_url`): each value
+    /// Fields that hold a document's earlier URL (e.g. `acf.legacy_url`): each value
     /// becomes a redirect from that URL to the document.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub from_fields: Vec<String>,
