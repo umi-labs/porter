@@ -282,6 +282,59 @@ async fn wpdb_container_removed_on_error() {
     }
 }
 
+fn keys(v: &Value) -> Vec<String> {
+    let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+    k.sort();
+    k
+}
+
+#[tokio::test]
+async fn wpdb_fallback_matches_exporter_shape() {
+    if !docker_tests() {
+        return;
+    }
+    let dump = fixture_dir().join("dump.sql.gz");
+    let (_d1, full, r) = extract("wpdb shape full", &dump, Some(wp_root())).await;
+    r.unwrap();
+    let (_d2, fall, r) = extract("wpdb shape fallback", &dump, None).await;
+    r.unwrap();
+    let (a, b) = (export_json(&full), export_json(&fall));
+    assert_eq!(keys(&a), keys(&b), "top-level keys");
+    assert_eq!(keys(&a["site"]), keys(&b["site"]), "site keys");
+    assert_eq!(a["site"]["active_plugins"], b["site"]["active_plugins"]);
+    let first = |v: &Value| {
+        posts_of(v, "post")
+            .into_iter()
+            .find(|p| p["title"] == "First Post")
+            .unwrap()
+            .clone()
+    };
+    let (pa, pb) = (first(&a), first(&b));
+    assert_eq!(keys(&pa), keys(&pb), "post keys");
+    assert_eq!(pa["terms"], pb["terms"], "terms grouped by taxonomy");
+    assert!(pb["terms"]["category"].is_array());
+    assert_eq!(pa["link"], pb["link"]);
+    assert_eq!(
+        pa["meta"]["_yoast_wpseo_title"],
+        pb["meta"]["_yoast_wpseo_title"]
+    );
+    let ta = a["terms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["slug"] == "news")
+        .unwrap();
+    let tb = b["terms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["slug"] == "news")
+        .unwrap();
+    assert_eq!(keys(ta), keys(tb), "term keys");
+    assert_eq!(keys(&a["users"][0]), keys(&b["users"][0]), "user keys");
+    assert_eq!(a["users"][0]["roles"], b["users"][0]["roles"]);
+}
+
 #[tokio::test]
 async fn wpdb_cancel_cleans_up() {
     if !docker_tests() {

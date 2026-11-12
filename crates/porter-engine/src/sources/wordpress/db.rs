@@ -9,6 +9,11 @@
 //! and the dump are mounted read-only; only a fresh temp dir is writable. The MariaDB root
 //! password is random per run and reaches containers only through the docker CLI's environment
 //! (`-e NAME` with no value), so it never appears in argv, logs, events, issues or raw files.
+//! Every container runs with no-new-privileges, a pids limit and 4 GB of memory; the exporter
+//! drops all capabilities, MariaDB keeps only SETUID/SETGID/DAC_READ_SEARCH, and the dump is
+//! imported with the client's `--sandbox`. Files read back from the exporter's output dir must
+//! be regular files (never symlinks). Resources carry `porter.managed`/`porter.run` labels, and
+//! a run first removes managed leftovers older than three hours.
 //! Containers and the network are removed on every exit: explicitly on success, error and
 //! cancel, and by a `Drop` guard if the future is dropped.
 use crate::config::ConnectorConfig;
@@ -52,6 +57,15 @@ $table_prefix = getenv('PORTER_TABLE_PREFIX') ?: 'wp_';
 require_once ABSPATH . 'wp-settings.php';
 "#;
 /// Post types never exported as documents (same list as export.php).
+/// Resources labelled `porter.managed=1` older than this are leftovers of a crashed run (no run
+/// lives this long: import and export each time out at 30 minutes).
+const STALE_AFTER_SECS: u64 = 3 * 60 * 60;
+/// Applied to every container: untrusted dumps and site PHP run inside.
+const LIMITS: [&str; 3] = [
+    "--security-opt=no-new-privileges",
+    "--pids-limit=512",
+    "--memory=4g",
+];
 const SKIP_TYPES: &str = "'revision','nav_menu_item','nf_sub'";
 
 pub struct WpDbConnector {
@@ -148,7 +162,10 @@ async fn run(
 
 /// Last 50 lines of stderr with the secret scrubbed.
 fn tail(out: &Output, secret: &str) -> String {
-    let text = String::from_utf8_lossy(&out.stderr).replace(secret, "[redacted]");
+    let mut text = String::from_utf8_lossy(&out.stderr).into_owned();
+    if !secret.is_empty() {
+        text = text.replace(secret, "[redacted]");
+    }
     let lines: Vec<&str> = text.lines().collect();
     lines[lines.len().saturating_sub(50)..].join("\n")
 }
@@ -195,6 +212,8 @@ fn sanitise(name: &str) -> String {
 struct Sandbox {
     /// Name of both the network and the database container.
     db: String,
+    /// `--label` args for every container and the network.
+    labels: Vec<String>,
     cli: String,
     password: String,
     clean: bool,
@@ -204,7 +223,19 @@ impl Sandbox {
     fn new(project: &str) -> Sandbox {
         let short = &uuid::Uuid::new_v4().simple().to_string()[..8];
         let base = format!("porter-{}-{short}", sanitise(project));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let labels = [
+            "porter.managed=1".to_string(),
+            format!("porter.run={base}"),
+            format!("porter.started={now}"),
+        ]
+        .into_iter()
+        .flat_map(|l| ["--label".to_string(), l])
+        .collect();
         Sandbox {
+            labels,
             db: format!("{base}-db"),
             cli: format!("{base}-wp"),
             password: uuid::Uuid::new_v4().simple().to_string(),
@@ -223,6 +254,41 @@ impl Sandbox {
             ],
             vec!["network".into(), "rm".into(), self.db.clone()],
         ]
+    }
+
+    /// Removes containers and networks of earlier runs that never cleaned up (crash, kill -9).
+    async fn sweep_stale(cancel: &CancellationToken) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let fmt = "{{.Names}}\t{{.Label \"porter.started\"}}";
+        let nfmt = "{{.Name}}\t{{.Label \"porter.started\"}}";
+        let filter = "label=porter.managed=1";
+        let list = [
+            (
+                vec!["ps", "-a", "--filter", filter, "--format", fmt],
+                vec!["rm", "-f", "-v"],
+            ),
+            (
+                vec!["network", "ls", "--filter", filter, "--format", nfmt],
+                vec!["network", "rm"],
+            ),
+        ];
+        for (ls, rm) in list {
+            let Some(out) = run(docker().args(&ls), Duration::from_secs(60), cancel).await? else {
+                return Ok(());
+            };
+            let stale = stale_names(&String::from_utf8_lossy(&out.stdout), now);
+            if !stale.is_empty() {
+                run(
+                    docker().args(&rm).args(&stale),
+                    Duration::from_secs(120),
+                    cancel,
+                )
+                .await?;
+            }
+        }
+        Ok(())
     }
 
     async fn cleanup(&mut self) {
@@ -254,7 +320,10 @@ impl Sandbox {
 
     async fn start(&self, dump: &Path, gz: bool, cancel: &CancellationToken) -> Result<bool> {
         let out = run(
-            docker().args(["network", "create", "--internal", &self.db]),
+            docker()
+                .args(["network", "create", "--internal"])
+                .args(&self.labels)
+                .arg(&self.db),
             Duration::from_secs(60),
             cancel,
         )
@@ -271,7 +340,17 @@ impl Sandbox {
             "/dump/dump.sql"
         };
         let mut cmd = docker();
+        // The entrypoint switches to the mysql user (SETUID/SETGID); `docker exec` reads the
+        // mounted dump as root, which may need DAC_READ_SEARCH for a 0600 file.
         cmd.args(["run", "-d", "--name", &self.db, "--network", &self.db])
+            .args(&self.labels)
+            .args(LIMITS)
+            .args([
+                "--cap-drop=ALL",
+                "--cap-add=SETUID",
+                "--cap-add=SETGID",
+                "--cap-add=DAC_READ_SEARCH",
+            ])
             .args(["-e", "MARIADB_ROOT_PASSWORD", "-e"])
             .arg(format!("MARIADB_DATABASE={DB_NAME}"))
             .arg("--mount")
@@ -319,7 +398,7 @@ impl Sandbox {
 
     async fn import(&self, gz: bool, cancel: &CancellationToken) -> Result<bool> {
         let load = format!(
-            "mariadb -uroot --max-allowed-packet=1G --default-character-set=utf8mb4 {DB_NAME}"
+            "mariadb -uroot --sandbox --max-allowed-packet=1G --default-character-set=utf8mb4 {DB_NAME}"
         );
         let script = if gz {
             format!("gzip -dc /dump/dump.sql.gz | {load}")
@@ -440,6 +519,9 @@ impl Sandbox {
         };
         let mut cmd = docker();
         cmd.args(["run", "--rm", "--name", &self.cli, "--network", &self.db])
+            .args(&self.labels)
+            .args(LIMITS)
+            .arg("--cap-drop=ALL")
             .args(["-e", "PORTER_DB_PASSWORD", "-e", "HOME=/tmp"])
             .arg("-e")
             .arg(format!("PORTER_DB_HOST={}", self.db))
@@ -487,12 +569,24 @@ impl Sandbox {
         );
         let file = out.join("export.json");
         anyhow::ensure!(
-            file.exists(),
+            file.symlink_metadata().is_ok(),
             "export.php wrote no export.json:\n{}",
             tail(&o, &self.password)
         );
+        regular_file(&file)?;
         Ok(Some(file))
     }
+}
+
+/// Files the exporter leaves in `/out` are untrusted: a symlink there could point at any host
+/// file. Only a regular file (checked without following links) is read back.
+fn regular_file(p: &Path) -> Result<()> {
+    let ok = std::fs::symlink_metadata(p)
+        .with_context(|| format!("reading {}", p.display()))?
+        .file_type()
+        .is_file();
+    anyhow::ensure!(ok, "exporter produced a non-regular file: {}", p.display());
+    Ok(())
 }
 
 impl Drop for Sandbox {
@@ -508,6 +602,18 @@ impl Drop for Sandbox {
                 .status();
         }
     }
+}
+
+/// Names from `name\tstarted` lines whose start is over `STALE_AFTER_SECS` ago.
+fn stale_names(listing: &str, now: u64) -> Vec<String> {
+    listing
+        .lines()
+        .filter_map(|l| {
+            let (name, started) = l.split_once('\t')?;
+            let started: u64 = started.trim().parse().ok()?;
+            (now.saturating_sub(started) > STALE_AFTER_SECS).then(|| name.to_string())
+        })
+        .collect()
 }
 
 // ---------- records ----------
@@ -713,12 +819,19 @@ pub fn permalink(
 }
 
 impl WpDbConnector {
-    async fn sql_export(&self, sb: &Sandbox, cancel: &CancellationToken) -> Result<Option<Value>> {
+    /// The same shape export.php writes, from tables alone. Sets `objects` if a serialized
+    /// PHP object was left undecoded.
+    async fn sql_export(
+        &self,
+        sb: &Sandbox,
+        cancel: &CancellationToken,
+        objects: &mut bool,
+    ) -> Result<Option<Value>> {
         let p = &self.prefix;
-        let Some(site) = sb
+        let Some(opts) = sb
             .one(
                 &format!(
-                    "SELECT JSON_OBJECTAGG(option_name, option_value) FROM {p}options WHERE option_name IN \
+                    "SELECT JSON_ARRAYAGG(JSON_ARRAY(option_name, option_value)) FROM {p}options WHERE option_name IN \
                      ('home','siteurl','blogname','blogdescription','show_on_front','page_on_front',\
                      'page_for_posts','permalink_structure','wpseo_titles','active_plugins')"
                 ),
@@ -728,6 +841,31 @@ impl WpDbConnector {
         else {
             return Ok(None);
         };
+        let opts = fold_meta(&opts, objects);
+        let opt = |k: &str| opts.get(k).cloned().unwrap_or(Value::Null);
+        let id_or_null = |v: Value| match v.as_str().and_then(|x| x.parse::<u64>().ok()) {
+            Some(n) if n > 0 => json!(n),
+            _ => Value::Null,
+        };
+        let site = json!({
+            "home": opt("home"),
+            "siteurl": opt("siteurl"),
+            "blogname": opt("blogname"),
+            "blogdescription": opt("blogdescription"),
+            "show_on_front": opt("show_on_front"),
+            "page_on_front": id_or_null(opt("page_on_front")),
+            "page_for_posts": id_or_null(opt("page_for_posts")),
+            "permalink_structure": opt("permalink_structure"),
+            "wpseo_titles": match opt("wpseo_titles") { Value::String(x) if x.is_empty() => Value::Null, v => v },
+            "active_plugins": match opt("active_plugins") {
+                Value::Object(o) => Value::Array(o.into_iter().map(|(_, v)| v).collect()),
+                v @ Value::Array(_) => v,
+                _ => json!([]),
+            },
+            "acf_active": null,
+            "acf_options": null,
+        });
+
         let mut posts = vec![];
         let select = format!(
             "SELECT JSON_OBJECT('id', p.ID, 'type', p.post_type, 'status', p.post_status, \
@@ -735,8 +873,8 @@ impl WpDbConnector {
              'menu_order', p.menu_order, 'author', NULLIF(p.post_author, 0), 'date', p.post_date, \
              'date_gmt', p.post_date_gmt, 'modified_gmt', p.post_modified_gmt, \
              'mime', NULLIF(p.post_mime_type, ''), 'content', p.post_content, 'excerpt', p.post_excerpt, \
-             'meta', (SELECT JSON_OBJECTAGG(m.meta_key, m.meta_value) FROM {p}postmeta m \
-                      WHERE m.post_id = p.ID AND m.meta_key IS NOT NULL), \
+             'meta', (SELECT JSON_ARRAYAGG(JSON_ARRAY(m.meta_key, m.meta_value) ORDER BY m.meta_id) \
+                      FROM {p}postmeta m WHERE m.post_id = p.ID AND m.meta_key IS NOT NULL), \
              'term_ids', (SELECT JSON_ARRAYAGG(tt.term_id) FROM {p}term_relationships tr \
                           JOIN {p}term_taxonomy tt ON tt.term_taxonomy_id = tr.term_taxonomy_id \
                           WHERE tr.object_id = p.ID)) \
@@ -754,7 +892,9 @@ impl WpDbConnector {
         let mut terms = vec![];
         let select = format!(
             "SELECT JSON_OBJECT('id', t.term_id, 'taxonomy', tt.taxonomy, 'slug', t.slug, 'name', t.name, \
-             'description', tt.description, 'parent', NULLIF(tt.parent, 0), 'count', tt.count) \
+             'description', tt.description, 'parent', NULLIF(tt.parent, 0), 'count', tt.count, \
+             'meta', (SELECT JSON_ARRAYAGG(JSON_ARRAY(m.meta_key, m.meta_value) ORDER BY m.meta_id) \
+                      FROM {p}termmeta m WHERE m.term_id = t.term_id AND m.meta_key IS NOT NULL)) \
              FROM {p}terms t JOIN {p}term_taxonomy tt ON tt.term_id = t.term_id WHERE tt.taxonomy <> 'nav_menu'"
         );
         if !sb
@@ -768,11 +908,13 @@ impl WpDbConnector {
         }
         let mut users = vec![];
         let select = format!(
-            "SELECT JSON_OBJECT('id', ID, 'login', user_login, 'nicename', user_nicename, \
-             'display_name', display_name, 'email', user_email) FROM {p}users"
+            "SELECT JSON_OBJECT('id', u.ID, 'login', u.user_login, 'nicename', u.user_nicename, \
+             'display_name', u.display_name, 'email', u.user_email, \
+             'caps', (SELECT meta_value FROM {p}usermeta WHERE user_id = u.ID AND meta_key = '{p}capabilities' LIMIT 1)) \
+             FROM {p}users u"
         );
         if !sb
-            .paged(&select, "ID", cancel, |rows| {
+            .paged(&select, "u.ID", cancel, |rows| {
                 users.extend(rows);
                 Ok(())
             })
@@ -818,15 +960,63 @@ impl WpDbConnector {
                 ))
             })
             .collect();
+        let mut types: Map<String, Value> = Map::new();
         for p in &mut posts {
-            let category = p["term_ids"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|t| term_slug.get(&t.as_u64()?))
-                .find(|(tax, _)| tax == "category")
-                .map(|(_, slug)| slug.clone());
-            let author = p["author"].as_u64().and_then(|a| nicename.get(&a)).cloned();
+            let Some(o) = p.as_object_mut() else { continue };
+            let meta = fold_meta(&o.remove("meta").unwrap_or(Value::Null), objects);
+            // {taxonomy: [term ids]}, as export.php writes it.
+            let mut by_tax: Map<String, Value> = Map::new();
+            let mut category = None;
+            for t in o
+                .remove("term_ids")
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default()
+            {
+                let Some((tax, slug)) = t.as_u64().and_then(|t| term_slug.get(&t)) else {
+                    continue;
+                };
+                if tax == "category" && category.is_none() {
+                    category = Some(slug.clone());
+                }
+                if let Value::Array(a) = by_tax.entry(tax.clone()).or_insert_with(|| json!([])) {
+                    a.push(t.clone());
+                }
+            }
+            let ty = o
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            types.insert(ty.clone(), Value::Null);
+            o.insert(
+                "template".into(),
+                match meta.get("_wp_page_template") {
+                    Some(Value::String(t)) if !t.is_empty() && t != "default" => json!(t),
+                    _ => Value::Null,
+                },
+            );
+            o.insert(
+                "featured_image".into(),
+                meta.get("_thumbnail_id")
+                    .and_then(Value::as_str)
+                    .and_then(|x| x.parse::<u64>().ok())
+                    .filter(|n| *n > 0)
+                    .map_or(Value::Null, |n| json!(n)),
+            );
+            if ty == "attachment" {
+                o.insert("attachment".into(), json!({
+                    "file": meta.get("_wp_attached_file").cloned().unwrap_or(Value::Null),
+                    "metadata": meta.get("_wp_attachment_metadata").cloned().unwrap_or(Value::Null),
+                }));
+            }
+            o.insert("meta".into(), Value::Object(meta));
+            o.insert("acf".into(), Value::Null);
+            o.insert("terms".into(), Value::Object(by_tax));
+            let author = o
+                .get("author")
+                .and_then(Value::as_u64)
+                .and_then(|a| nicename.get(&a))
+                .cloned();
             let link = permalink(
                 &home,
                 &structure,
@@ -837,24 +1027,49 @@ impl WpDbConnector {
             );
             if let Some(o) = p.as_object_mut() {
                 o.insert("link".into(), link.map_or(Value::Null, Value::String));
-                o.insert("acf".into(), Value::Null);
             }
         }
-        let mut site = match site {
-            Value::Object(o) => o,
-            _ => Map::new(),
-        };
-        site.insert("acf_active".into(), Value::Null);
+        let mut taxonomies: Map<String, Value> = Map::new();
+        for t in &mut terms {
+            let Some(o) = t.as_object_mut() else { continue };
+            if let Some(tax) = o.get("taxonomy").and_then(Value::as_str) {
+                taxonomies.insert(tax.to_string(), Value::Null);
+            }
+            let meta = fold_meta(&o.remove("meta").unwrap_or(Value::Null), objects);
+            o.insert("meta".into(), Value::Object(meta));
+            o.insert("link".into(), Value::Null);
+            o.insert("acf".into(), Value::Null);
+        }
+        for u in &mut users {
+            let Some(o) = u.as_object_mut() else { continue };
+            let caps = match o.remove("caps").and_then(|c| c.as_str().map(php_decode)) {
+                Some(Php::Value(Value::Object(m))) => m
+                    .into_iter()
+                    .filter(|(_, v)| v != &json!(false))
+                    .map(|(k, _)| json!(k))
+                    .collect(),
+                Some(Php::Object) => {
+                    *objects = true;
+                    vec![]
+                }
+                _ => vec![],
+            };
+            o.insert("roles".into(), Value::Array(caps));
+        }
+        // Registration details only exist inside WordPress: null, like export.php's
+        // entry for a type whose plugin is gone.
         Ok(Some(json!({
             "site": site,
+            "post_types": types,
             "posts": posts,
+            "taxonomies": taxonomies,
             "terms": terms,
             "users": users,
             "menus": [],
+            "menu_locations": {},
             "acf_field_groups": [],
             "forms": { "gf": [], "nf": [] },
             "translations": null,
-            "source": "sql-fallback",
         })))
     }
 
@@ -870,10 +1085,15 @@ impl WpDbConnector {
         order: &str,
         kind: ItemKind,
         sid: impl Fn(&Value, &str) -> String,
+        objects: &mut bool,
     ) -> Result<bool> {
         let mut seen = 0u64;
         sb.paged(select, order, &ctx.cancel, |rows| {
-            for v in rows {
+            for mut v in rows {
+                // Submission answers arrive as [key, value] pairs; fold like post meta.
+                if let Some(f) = v.get_mut("fields").filter(|f| f.is_array()) {
+                    *f = Value::Object(fold_meta(f, objects));
+                }
                 serde_json::to_writer(&mut *out, &v)?;
                 out.write_all(b"\n")?;
                 seen += 1;
@@ -901,7 +1121,7 @@ impl WpDbConnector {
         .await
     }
 
-    async fn sql_extras(&self, ctx: &StageCtx, sb: &Sandbox) -> Result<bool> {
+    async fn sql_extras(&self, ctx: &StageCtx, sb: &Sandbox, objects: &mut bool) -> Result<bool> {
         let p = &self.prefix;
         let dir = ctx.project.raw_dir(NAME);
         let open = |f: &str| -> Result<BufWriter<std::fs::File>> {
@@ -933,6 +1153,7 @@ impl WpDbConnector {
                     "id",
                     ItemKind::Redirect,
                     sid,
+                    objects,
                 )
                 .await?
             {
@@ -952,8 +1173,8 @@ impl WpDbConnector {
             let select = format!(
                 "SELECT JSON_OBJECT('source', 'gf', 'id', e.id, 'form_id', e.form_id, \
                  'date', e.date_created, 'status', e.status, 'source_url', e.source_url, \
-                 'fields', (SELECT JSON_OBJECTAGG(m.meta_key, m.meta_value) FROM {p}gf_entry_meta m \
-                            WHERE m.entry_id = e.id AND m.meta_key IS NOT NULL)) \
+                 'fields', (SELECT JSON_ARRAYAGG(JSON_ARRAY(m.meta_key, m.meta_value) ORDER BY m.id) \
+                            FROM {p}gf_entry_meta m WHERE m.entry_id = e.id AND m.meta_key IS NOT NULL)) \
                  FROM {p}gf_entry e"
             );
             let sid = |_: &Value, id: &str| format!("submission:gf:{id}");
@@ -967,6 +1188,7 @@ impl WpDbConnector {
                     "e.id",
                     ItemKind::Submission,
                     sid,
+                    objects,
                 )
                 .await?
             {
@@ -977,8 +1199,8 @@ impl WpDbConnector {
         let select = format!(
             "SELECT JSON_OBJECT('source', 'nf', 'id', p.ID, 'date', p.post_date_gmt, 'status', p.post_status, \
              'form_id', (SELECT meta_value FROM {p}postmeta WHERE post_id = p.ID AND meta_key = '_form_id' LIMIT 1), \
-             'fields', (SELECT JSON_OBJECTAGG(m.meta_key, m.meta_value) FROM {p}postmeta m \
-                        WHERE m.post_id = p.ID AND m.meta_key LIKE '\\\\_field\\\\_%')) \
+             'fields', (SELECT JSON_ARRAYAGG(JSON_ARRAY(m.meta_key, m.meta_value) ORDER BY m.meta_id) \
+                        FROM {p}postmeta m WHERE m.post_id = p.ID AND m.meta_key LIKE '\\\\_field\\\\_%')) \
              FROM {p}posts p WHERE p.post_type = 'nf_sub'"
         );
         let sid = |_: &Value, id: &str| format!("submission:nf:{id}");
@@ -992,6 +1214,7 @@ impl WpDbConnector {
                 "p.ID",
                 ItemKind::Submission,
                 sid,
+                objects,
             )
             .await?
         {
@@ -1016,6 +1239,7 @@ impl WpDbConnector {
         if !sb.import(gz, cancel).await? {
             return Ok(());
         }
+        let mut objects = false;
         let export = match &root {
             Some(root) => {
                 ctx.progress(0, None, "running export.php");
@@ -1032,6 +1256,7 @@ impl WpDbConnector {
                 else {
                     return Ok(());
                 };
+                regular_file(&file)?;
                 std::fs::copy(&file, dir.join("export.json"))?;
                 let f = std::fs::File::open(dir.join("export.json"))?;
                 serde_json::from_reader(std::io::BufReader::new(f))
@@ -1039,7 +1264,7 @@ impl WpDbConnector {
             }
             None => {
                 ctx.progress(0, None, "reading tables");
-                let Some(v) = self.sql_export(sb, cancel).await? else {
+                let Some(v) = self.sql_export(sb, cancel, &mut objects).await? else {
                     return Ok(());
                 };
                 std::fs::write(dir.join("export.json"), serde_json::to_vec(&v)?)?;
@@ -1055,9 +1280,151 @@ impl WpDbConnector {
         };
         record_export(ctx, &export)?;
         drop(export);
-        self.sql_extras(ctx, sb).await?;
+        let finished = self.sql_extras(ctx, sb, &mut objects).await?;
+        if objects && finished {
+            ctx.issue(
+                IssueKind::AccessGap,
+                Severity::Info,
+                None,
+                "serialized PHP objects left undecoded",
+                json!({ "connector": NAME, "hint": "values starting O: or C: are kept as raw strings" }),
+            )?;
+        }
         Ok(())
     }
+}
+
+/// A PHP `serialize()` string decoded the way `maybe_unserialize` would.
+#[derive(Debug, PartialEq)]
+pub enum Php {
+    Value(Value),
+    /// Holds an object (`O:`, `C:`) or reference; kept as the raw string.
+    Object,
+    /// Not serialized data.
+    Plain,
+}
+
+/// Decodes `s`, `i`, `d`, `b`, `N` and `a` (lists become arrays, other arrays objects).
+pub fn php_decode(raw: &str) -> Php {
+    let b = raw.trim_end().as_bytes();
+    let mut pos = 0;
+    match php_value(b, &mut pos) {
+        Ok(v) if pos == b.len() => Php::Value(v),
+        Err(true) => Php::Object,
+        _ => Php::Plain,
+    }
+}
+
+/// `Err(true)`: an object or reference was found; `Err(false)`: not serialized.
+fn php_value(b: &[u8], pos: &mut usize) -> std::result::Result<Value, bool> {
+    let tag = *b.get(*pos).ok_or(false)?;
+    if matches!(tag, b'O' | b'C' | b'r' | b'R' | b'E') && b.get(*pos + 1) == Some(&b':') {
+        return Err(true);
+    }
+    if tag == b'N' {
+        expect(b, pos, b"N;")?;
+        return Ok(Value::Null);
+    }
+    expect(b, pos, &[tag, b':'])?;
+    match tag {
+        b'b' => match until(b, pos, b';')? {
+            "0" => Ok(json!(false)),
+            "1" => Ok(json!(true)),
+            _ => Err(false),
+        },
+        b'i' => until(b, pos, b';')?
+            .parse::<i64>()
+            .map(|n| json!(n))
+            .map_err(|_| false),
+        b'd' => {
+            let t = until(b, pos, b';')?;
+            let f: f64 = t.parse().map_err(|_| false)?;
+            Ok(serde_json::Number::from_f64(f).map_or_else(|| json!(t), Value::Number))
+        }
+        b's' => {
+            let len: usize = until(b, pos, b':')?.parse().map_err(|_| false)?;
+            expect(b, pos, b"\"")?;
+            let bytes = b.get(*pos..*pos + len).ok_or(false)?;
+            *pos += len;
+            expect(b, pos, b"\";")?;
+            Ok(Value::String(String::from_utf8_lossy(bytes).into_owned()))
+        }
+        b'a' => {
+            let n: usize = until(b, pos, b':')?.parse().map_err(|_| false)?;
+            expect(b, pos, b"{")?;
+            let mut pairs = Vec::with_capacity(n.min(1024));
+            for _ in 0..n {
+                let k = match php_value(b, pos)? {
+                    Value::String(s) => s,
+                    Value::Number(n) => n.to_string(),
+                    _ => return Err(false),
+                };
+                pairs.push((k, php_value(b, pos)?));
+            }
+            expect(b, pos, b"}")?;
+            let is_list = pairs
+                .iter()
+                .enumerate()
+                .all(|(i, (k, _))| *k == i.to_string());
+            Ok(if is_list {
+                Value::Array(pairs.into_iter().map(|(_, v)| v).collect())
+            } else {
+                Value::Object(pairs.into_iter().collect())
+            })
+        }
+        _ => Err(false),
+    }
+}
+
+fn expect(b: &[u8], pos: &mut usize, lit: &[u8]) -> std::result::Result<(), bool> {
+    if b.get(*pos..*pos + lit.len()) == Some(lit) {
+        *pos += lit.len();
+        Ok(())
+    } else {
+        Err(false)
+    }
+}
+
+fn until<'a>(b: &'a [u8], pos: &mut usize, end: u8) -> std::result::Result<&'a str, bool> {
+    let rest = b.get(*pos..).ok_or(false)?;
+    let n = rest.iter().position(|c| *c == end).ok_or(false)?;
+    *pos += n + 1;
+    std::str::from_utf8(&rest[..n]).map_err(|_| false)
+}
+
+/// `[[key, value], …]` rows folded into `{key: value | [value, …]}` with PHP-serialized values
+/// decoded, exactly like export.php's `$meta_of`. Undecodable objects stay raw and set `objects`.
+fn fold_meta(pairs: &Value, objects: &mut bool) -> Map<String, Value> {
+    let mut grouped: Map<String, Value> = Map::new();
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for pair in pairs.as_array().into_iter().flatten() {
+        let Some(k) = pair.get(0).and_then(Value::as_str) else {
+            continue;
+        };
+        let v = match pair.get(1) {
+            Some(Value::String(raw)) => match php_decode(raw) {
+                Php::Value(v) => v,
+                Php::Object => {
+                    *objects = true;
+                    json!(raw)
+                }
+                Php::Plain => json!(raw),
+            },
+            Some(v) => v.clone(),
+            None => Value::Null,
+        };
+        let n = counts.entry(k.to_string()).or_default();
+        *n += 1;
+        match (*n, grouped.get_mut(k)) {
+            (1, _) | (_, None) => {
+                grouped.insert(k.to_string(), v);
+            }
+            (2, Some(first)) => *first = json!([first.take(), v]),
+            (_, Some(Value::Array(a))) => a.push(v),
+            (_, Some(_)) => {}
+        }
+    }
+    grouped
 }
 
 fn is_gzip(p: &Path) -> Result<bool> {
@@ -1114,6 +1481,7 @@ impl Connector for WpDbConnector {
     async fn extract(&self, ctx: &StageCtx) -> Result<()> {
         self.check_prefix()?;
         require_docker(&ctx.cancel).await?;
+        Sandbox::sweep_stale(&ctx.cancel).await?;
         let mut sb = Sandbox::new(&ctx.project.config().project.name);
         let r = self.extract_in(ctx, &sb).await;
         sb.cleanup().await;
@@ -1124,6 +1492,99 @@ impl Connector for WpDbConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn tail_without_secret_is_untouched() {
+        use std::os::unix::process::ExitStatusExt;
+        let out = Output {
+            status: std::process::ExitStatus::from_raw(256),
+            stdout: vec![],
+            stderr: b"daemon not running\nsecret-pw here".to_vec(),
+        };
+        assert_eq!(tail(&out, ""), "daemon not running\nsecret-pw here");
+        assert_eq!(
+            tail(&out, "secret-pw"),
+            "daemon not running\n[redacted] here"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn regular_file_rejects_symlinks() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("credentials");
+        std::fs::write(&target, "secret").unwrap();
+        let link = d.path().join("export.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let err = regular_file(&link).unwrap_err().to_string();
+        assert!(
+            err.contains("exporter produced a non-regular file"),
+            "{err}"
+        );
+        std::fs::create_dir(d.path().join("dir")).unwrap();
+        assert!(regular_file(&d.path().join("dir")).is_err());
+        assert!(regular_file(&target).is_ok());
+    }
+
+    #[test]
+    fn php_decoder() {
+        let ok = |s: &str| match php_decode(s) {
+            Php::Value(v) => v,
+            other => panic!("{s}: {other:?}"),
+        };
+        assert_eq!(ok("i:42;"), json!(42));
+        assert_eq!(ok("b:1;"), json!(true));
+        assert_eq!(ok("N;"), Value::Null);
+        assert_eq!(ok("d:1.5;"), json!(1.5));
+        // Lengths are bytes: é is two.
+        assert_eq!(ok("s:6:\"caf\u{e9};\";"), json!("caf\u{e9};"));
+        assert_eq!(
+            ok("a:2:{i:0;s:30:\"advanced-custom-fields/acf.php\";i:1;s:3:\"x;y\";}"),
+            json!(["advanced-custom-fields/acf.php", "x;y"])
+        );
+        assert_eq!(
+            ok(
+                "a:2:{s:5:\"width\";i:800;s:5:\"sizes\";a:1:{s:5:\"thumb\";a:1:{s:4:\"file\";s:5:\"a.jpg\";}}}"
+            ),
+            json!({"width": 800, "sizes": {"thumb": {"file": "a.jpg"}}})
+        );
+        assert_eq!(php_decode("O:8:\"stdClass\":0:{}"), Php::Object);
+        assert_eq!(php_decode("a:1:{i:0;O:8:\"stdClass\":0:{}}"), Php::Object);
+        assert_eq!(php_decode("hello"), Php::Plain);
+        assert_eq!(php_decode("s:5:\"abc\";"), Php::Plain);
+        assert_eq!(php_decode("i:1;junk"), Php::Plain);
+    }
+
+    #[test]
+    fn fold_keeps_repeated_keys() {
+        let mut objects = false;
+        let pairs = json!([
+            ["_wp_old_slug", "first"],
+            ["_wp_old_slug", "second"],
+            ["_wp_old_slug", "third"],
+            ["_edit_lock", "1"],
+            ["sizes", "a:1:{i:0;i:7;}"],
+            ["obj", "O:8:\"stdClass\":0:{}"],
+        ]);
+        let m = fold_meta(&pairs, &mut objects);
+        assert_eq!(m["_wp_old_slug"], json!(["first", "second", "third"]));
+        assert_eq!(m["_edit_lock"], json!("1"));
+        assert_eq!(m["sizes"], json!([7]));
+        assert_eq!(m["obj"], json!("O:8:\"stdClass\":0:{}"));
+        assert!(objects);
+    }
+
+    #[test]
+    fn stale_after_three_hours() {
+        let now = 100_000;
+        let listing = format!(
+            "old-db\t{}\nnew-db\t{}\nno-label\t\n",
+            now - STALE_AFTER_SECS - 1,
+            now - 60
+        );
+        assert_eq!(stale_names(&listing, now), vec!["old-db".to_string()]);
+    }
 
     #[test]
     fn sanitise_names() {
