@@ -567,6 +567,45 @@ async fn apply_without_confirm_host_is_refused() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn apply_refusals_from_the_hub_are_printed() {
+    for msg in [
+        "Apply load on its own after a dry run",
+        "v3 has 2 open errors; fix them and push before applying",
+    ] {
+        let hub = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(api("runs")))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({"error": msg})))
+            .expect(1)
+            .mount(&hub)
+            .await;
+        let d = tempfile::tempdir().unwrap();
+        let args = [
+            "hub",
+            "run",
+            "all",
+            "--apply",
+            "--confirm-host",
+            "cms.example.com",
+        ];
+        let (code, out, err) = run(d.path(), &hub, &args).await;
+        assert_eq!(code, 1, "{err}");
+        assert_eq!(out, "");
+        assert!(
+            err.contains(&format!("hub returned 400 Bad Request: {msg}")),
+            "{err}"
+        );
+        let post: Value = hub.received_requests().await.unwrap()[0]
+            .body_json()
+            .unwrap();
+        assert_eq!(
+            (post["stages"].clone(), post["apply"].clone()),
+            (json!("all"), json!(true))
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn token_never_printed() {
     let (hub, s3) = (MockServer::start().await, MockServer::start().await);
     Mock::given(method("GET"))

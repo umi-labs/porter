@@ -219,6 +219,9 @@ pub struct Overview {
     /// porter.toml as it is now, to compare with what each run recorded. None: not
     /// checked (no config rule applies); `Err`: could not be read, so every result is stale.
     pub config: Option<std::result::Result<Arc<ProjectConfig>, String>>,
+    /// Some finished load that was not a dry run is on record: the site has been written
+    /// to, whatever the last load was.
+    pub ever_written: bool,
 }
 
 /// What a stage's last run honestly amounts to. `Running` and `CouldNotRun` are live
@@ -370,6 +373,39 @@ fn apply_guard(env: &Env) -> Option<String> {
     }
 }
 
+/// The project's overview, read now: what `Session::overview` returns, for callers
+/// without a session (`porter status`).
+pub fn overview_of(p: &Project) -> Result<Overview> {
+    let store = p.store();
+    let mut o = Overview {
+        config: Some(
+            ProjectConfig::load(&p.dir().join("porter.toml"))
+                .map(Arc::new)
+                .map_err(|e| format!("{e:#}")),
+        ),
+        ever_written: store.ever_written()?,
+        ..Default::default()
+    };
+    for stage in STAGES {
+        if let Some(r) = store.runs(stage)?.pop() {
+            o.last_runs.push((stage, r));
+        }
+    }
+    // ponytail: loads every open issue to count them; a GROUP BY when projects get huge.
+    let open = store.issues(&IssueQuery {
+        resolution: Some(Resolution::Open),
+        ..Default::default()
+    })?;
+    for i in open {
+        match i.severity {
+            Severity::Error => o.open_errors += 1,
+            Severity::Warning => o.open_warnings += 1,
+            Severity::Info => o.open_infos += 1,
+        }
+    }
+    Ok(o)
+}
+
 type Running = Arc<Mutex<Option<RunInfo>>>;
 
 pub struct Session {
@@ -487,36 +523,7 @@ impl Session {
 
     pub async fn overview(&self) -> Result<Overview> {
         let p = self.project.clone();
-        blocking(move || {
-            let store = p.store();
-            let mut o = Overview {
-                config: Some(
-                    ProjectConfig::load(&p.dir().join("porter.toml"))
-                        .map(Arc::new)
-                        .map_err(|e| format!("{e:#}")),
-                ),
-                ..Default::default()
-            };
-            for stage in STAGES {
-                if let Some(r) = store.runs(stage)?.pop() {
-                    o.last_runs.push((stage, r));
-                }
-            }
-            // ponytail: loads every open issue to count them; a GROUP BY when projects get huge.
-            let open = store.issues(&IssueQuery {
-                resolution: Some(Resolution::Open),
-                ..Default::default()
-            })?;
-            for i in open {
-                match i.severity {
-                    Severity::Error => o.open_errors += 1,
-                    Severity::Warning => o.open_warnings += 1,
-                    Severity::Info => o.open_infos += 1,
-                }
-            }
-            Ok(o)
-        })
-        .await
+        blocking(move || overview_of(&p)).await
     }
 
     pub async fn issues(&self, f: IssueQuery, page: Page) -> Result<Paged<Issue>> {

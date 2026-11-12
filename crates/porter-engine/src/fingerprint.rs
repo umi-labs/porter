@@ -27,8 +27,13 @@ fn canonical(v: Value) -> Value {
     }
 }
 
-/// The sections `stage` reads, in a fixed order. Where each is read is listed in the D2
-/// report (task-D2-report.md, fix round 2); keep it in step with the code.
+/// The sections `stage` reads, in a fixed order. This match is the stage→section table;
+/// keep it in step with where each stage reads porter.toml:
+/// - analyse, extract: `[source]`, connectors
+/// - normalise: those, plus `[[redirects]]` and `mapping.redirects.from_fields`
+/// - schema: `[mapping]`, `[destination]`
+/// - load: `[source]`, `[mapping]`, `[destination]`
+/// - verify: load's, plus `[verify]`
 fn sections(cfg: &ProjectConfig, stage: Stage) -> Vec<(&'static str, String)> {
     fn h(v: &impl Serialize) -> String {
         // ponytail: an unserialisable section hashes as null; every section is plain data.

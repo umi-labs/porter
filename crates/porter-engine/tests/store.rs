@@ -330,3 +330,25 @@ fn itemless_issue_resolves_only_when_complete() {
     st.end_run(run3, &Summary::default()).unwrap();
     assert_eq!(resolution_of(st, g.id), Resolution::FixedByRerun);
 }
+
+#[test]
+fn ever_written_needs_a_finished_load_that_was_not_a_dry_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = Project::init(dir.path(), "demo", "example-src").unwrap();
+    let st = p.store();
+    assert!(!st.ever_written().unwrap());
+    let dry = st.begin_run(Stage::Load).unwrap();
+    st.mark_dry_run(dry).unwrap();
+    st.end_run(dry, &Summary::default()).unwrap();
+    let unfinished = st.begin_run(Stage::Load).unwrap();
+    assert!(
+        !st.ever_written().unwrap(),
+        "dry runs and unended loads wrote nothing on record"
+    );
+    st.end_run(unfinished, &Summary::default()).unwrap();
+    // A later dry run does not undo it.
+    let again = st.begin_run(Stage::Load).unwrap();
+    st.mark_dry_run(again).unwrap();
+    st.end_run(again, &Summary::default()).unwrap();
+    assert!(st.ever_written().unwrap());
+}

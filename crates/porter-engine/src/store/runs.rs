@@ -6,6 +6,8 @@ use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
 impl Store {
+    /// Test helper: records no fingerprint, so the run reads as stale forever. Production
+    /// runs go through `begin_run_with`.
     pub fn begin_run(&self, stage: Stage) -> Result<RunId> {
         self.begin_run_with(stage, None)
     }
@@ -205,6 +207,22 @@ impl Store {
             );
         }
         Ok(json!({"stages": stages, "open_issues": open, "last_runs": last}))
+    }
+}
+
+impl Store {
+    /// A load that was not a dry run finished at some point (`Overview::ever_written`).
+    pub fn ever_written(&self) -> Result<bool> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT 1 FROM runs WHERE stage = ?1 AND dry_run = 0 AND summary IS NOT NULL
+                 AND deleted_at IS NULL LIMIT 1",
+                [wire(&Stage::Load)?],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
     }
 }
 

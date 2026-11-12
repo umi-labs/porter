@@ -241,7 +241,7 @@ fn normalise_wordpress_wxr_end_to_end() {
         "\n[[connectors]]\nkind = \"wxr\"\npath = {:?}\n",
         wxr.display().to_string()
     ));
-    std::fs::write(&toml, text).unwrap();
+    std::fs::write(&toml, &text).unwrap();
     for stage in ["analyse", "extract"] {
         porter(d.path()).arg(stage).assert().success();
     }
@@ -260,6 +260,46 @@ fn normalise_wordpress_wxr_end_to_end() {
     let status: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     let n = &status["stages"]["normalise"];
     assert!(n["done"].as_u64().unwrap_or(0) >= 2, "{status}");
+    // The stage views the desktop and TUI show, from the engine's `stage_view`.
+    let views = &status["stage_views"];
+    assert!(
+        matches!(
+            views["normalise"]["state"].as_str(),
+            Some("clean" | "warnings" | "errors")
+        ),
+        "{status}"
+    );
+    assert_eq!(views["normalise"]["stale"], serde_json::Value::Null);
+    assert_eq!(views["load"]["state"], "not-run");
+    assert_eq!(status["ever_written"], false);
+    // A porter.toml section a stage read changes: that stage reads stale, with why.
+    std::fs::write(
+        &toml,
+        format!("{text}\n[[redirects]]\nfrom = \"/a\"\nto = \"/b\"\n"),
+    )
+    .unwrap();
+    let out = porter(d.path())
+        .args(["--json", "status"])
+        .assert()
+        .success();
+    let status: serde_json::Value =
+        serde_json::from_slice(out.get_output().stdout.trim_ascii()).unwrap();
+    assert_eq!(
+        status["stage_views"]["normalise"]["stale"], "redirects changed since",
+        "{status}"
+    );
+    assert_eq!(
+        status["stage_views"]["extract"]["stale"],
+        serde_json::Value::Null
+    );
+    let out = porter(d.path()).arg("status").assert().success();
+    let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(text.contains("state"), "{text}");
+    assert!(
+        text.contains("(stale)") && text.contains("↻ redirects changed since"),
+        "{text}"
+    );
+    assert!(text.contains("not run"), "{text}");
 }
 
 #[test]

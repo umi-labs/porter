@@ -165,17 +165,14 @@ fn stale(v: &Value, retry: bool, forced: bool) -> Result<Option<u64>> {
     }
 }
 
-/// The same shape as `porter --json status` (what the hub's worker stores).
+/// What `porter --json status` reports (`status::report`), as the hub's worker stores it.
 fn summary(dir: &Path) -> Value {
     if !dir.join(DB_FILE).exists() {
         return json!({});
     }
-    match super::super::open(dir).and_then(|p| p.store().overview()) {
-        Ok(o) => json!({
-            "stages": o["stages"], "open_issues": o["open_issues"], "last_runs": o["last_runs"],
-        }),
-        Err(_) => json!({}),
-    }
+    super::super::open(dir)
+        .and_then(|p| super::super::status::report(&p))
+        .unwrap_or_else(|_| json!({}))
 }
 
 struct Snapshot {
