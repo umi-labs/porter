@@ -3,6 +3,7 @@ use anyhow::{Result, bail};
 use clap::ValueEnum;
 use porter_engine::config::ProjectConfig;
 use porter_engine::events::{EventSink, Summary, exit_code};
+use porter_engine::mapping::{MappingConfig, write_seed_if_empty};
 use porter_engine::project::Project;
 use porter_engine::registry;
 use porter_engine::stage::{SchemaMode, run_stage};
@@ -262,6 +263,18 @@ where
     worst
 }
 
+/// After a successful analyse, writes a `[mapping]` starting point if the user has none.
+fn seed_mapping(env: &Env) -> bool {
+    let seed = MappingConfig::seed_from(env.project.store());
+    match write_seed_if_empty(env.project.dir(), &seed) {
+        Ok(wrote) => wrote,
+        Err(e) => {
+            eprintln!("warning: could not seed mapping: {e:#}");
+            false
+        }
+    }
+}
+
 async fn drive(
     dir: &Path,
     json: bool,
@@ -284,8 +297,18 @@ async fn drive(
     })
     .await;
     let rows = rows.into_inner();
+    let seeded = matches!(worst, 0 | 2)
+        && cmds.iter().any(|c| matches!(c, StageCmd::Analyse))
+        && seed_mapping(&env);
     drop(env);
     printer.finish().await;
+    if seeded {
+        if json {
+            crate::output::print_json(&serde_json::json!({"v": 1, "event": "mapping-seeded"}));
+        } else {
+            eprintln!("mapping seeded in porter.toml");
+        }
+    }
     if !json && !rows.is_empty() {
         table(&rows);
     }

@@ -176,6 +176,55 @@ fn analyse_wordpress_wxr_end_to_end() {
         .assert()
         .success();
     assert!(d.path().join("raw/analysis/coverage.json").exists());
+    let seeded = std::fs::read_to_string(&toml).unwrap();
+    assert!(seeded.contains("[mapping"), "{seeded}");
     porter(d.path()).arg("report").assert().success();
     assert!(d.path().join("reports/analysis.html").exists());
+}
+
+#[test]
+fn analyse_seeds_mapping_once_and_reports_it() {
+    let d = tempfile::tempdir().unwrap();
+    init(d.path());
+    let wxr = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-engine/tests/fixtures/wxr/basic.xml");
+    let toml = d.path().join("porter.toml");
+    let mut text = std::fs::read_to_string(&toml).unwrap();
+    text.push_str(&format!(
+        "\n[[connectors]]\nkind = \"wxr\"\npath = {:?}\n",
+        wxr.display().to_string()
+    ));
+    std::fs::write(&toml, text).unwrap();
+    porter(d.path())
+        .arg("analyse")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("mapping seeded in porter.toml"));
+    let after = std::fs::read_to_string(&toml).unwrap();
+    assert!(after.contains("[mapping.types."), "{after}");
+    // Second run never overwrites.
+    porter(d.path())
+        .arg("analyse")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("mapping seeded").not());
+    assert_eq!(std::fs::read_to_string(&toml).unwrap(), after);
+    // The seeded file still loads.
+    porter(d.path()).arg("status").assert().success();
+    // Under --json the notice is an NDJSON event, on a fresh project.
+    let d2 = tempfile::tempdir().unwrap();
+    init(d2.path());
+    let toml2 = d2.path().join("porter.toml");
+    let mut t2 = std::fs::read_to_string(&toml2).unwrap();
+    t2.push_str(&format!(
+        "\n[[connectors]]\nkind = \"wxr\"\npath = {:?}\n",
+        wxr.display().to_string()
+    ));
+    std::fs::write(&toml2, t2).unwrap();
+    let out = porter(d2.path())
+        .args(["--json", "analyse"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(stdout.lines().any(|l| l.contains("\"mapping-seeded\"")));
 }
