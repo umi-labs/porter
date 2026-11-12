@@ -1,6 +1,7 @@
 use crate::keymap::{self, Action};
 use crate::lists::{Filter, ISSUES_PAGE, IssueList, IssuesState, ItemsState, Window, kind_name};
 use crate::msg::{Cmd, DataMsg, Msg, PreviewInfo, RefreshScope};
+use crate::setup::{Failure, Setup};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use porter_engine::events::{Event, Summary};
 use porter_engine::session::{
@@ -126,6 +127,8 @@ pub struct LogLine(pub String);
 pub struct App {
     /// None when the folder has no porter.toml.
     pub session: Option<Arc<Session>>,
+    /// The setup form, while there is no project to show.
+    pub setup: Option<Setup>,
     pub focus: Panel,
     pub panels: Panels,
     pub modal: Option<Modal>,
@@ -152,6 +155,7 @@ impl App {
     pub fn new(session: Option<Arc<Session>>, size: (u16, u16)) -> App {
         App {
             session,
+            setup: None,
             focus: Panel::Project,
             panels: Panels::default(),
             modal: None,
@@ -524,6 +528,14 @@ fn perform(app: &mut App, a: Action, k: KeyEvent) -> Vec<Cmd> {
             }
         }
         Action::ResolveConfirm => return resolve_confirm(app),
+        Action::SetupNext
+        | Action::SetupPrev
+        | Action::SetupEnter
+        | Action::SetupCycleNext
+        | Action::SetupCyclePrev
+        | Action::SetupDone
+        | Action::SetupBackspace
+        | Action::SetupSave => return setup_action(app, a),
         Action::FilterCancel => return clear_filter(app),
         Action::FilterCommit => return commit_filter(app),
         Action::FilterBackspace => {
@@ -536,12 +548,47 @@ fn perform(app: &mut App, a: Action, k: KeyEvent) -> Vec<Cmd> {
     vec![]
 }
 
+/// The setup form's keys. Saving checks the required fields here (pure) and leaves the
+/// file work, which blocks, to the runtime.
+fn setup_action(app: &mut App, a: Action) -> Vec<Cmd> {
+    let Some(st) = &mut app.setup else {
+        return vec![];
+    };
+    match a {
+        Action::SetupNext => st.step(1),
+        Action::SetupPrev => st.step(-1),
+        Action::SetupEnter => st.enter(),
+        Action::SetupCycleNext => st.cycle(1),
+        Action::SetupCyclePrev => st.cycle(-1),
+        Action::SetupDone => st.editing = false,
+        Action::SetupBackspace => st.pop(),
+        Action::SetupSave if st.saving => {}
+        Action::SetupSave => {
+            st.editing = false;
+            let missing: Failure = st.missing();
+            if !missing.fields.is_empty() {
+                st.failure = missing;
+                return vec![];
+            }
+            st.failure = Failure::default();
+            st.saving = true;
+            return vec![Cmd::SaveSetup(st.values.clone())];
+        }
+        _ => {}
+    }
+    vec![]
+}
+
 /// Keys the table does not bind: text typed into the `/` filter or the resolve note.
 fn typed(app: &mut App, k: KeyEvent) -> Vec<Cmd> {
     let KeyCode::Char(c) = k.code else {
         return vec![];
     };
     if k.modifiers.contains(KeyModifiers::CONTROL) {
+        return vec![];
+    }
+    if let Some(st) = &mut app.setup {
+        st.push(c);
         return vec![];
     }
     if let Some(Modal::Resolve(m)) = &mut app.modal {
@@ -625,6 +672,19 @@ fn on_data(app: &mut App, d: DataMsg) -> Vec<Cmd> {
                 .map(|s| s.config().destination.url.clone())
                 .unwrap_or_default();
             app.modal = Some(Modal::ConfirmApply(ApplyModal { url, preview }));
+        }
+        DataMsg::SetupSaved(Ok(session)) => {
+            app.session = Some(session);
+            app.setup = None;
+            app.focus = Panel::Project;
+            app.push_log("wrote porter.toml".into());
+            return app.refresh_cmds();
+        }
+        DataMsg::SetupSaved(Err(failure)) => {
+            if let Some(st) = &mut app.setup {
+                st.saving = false;
+                st.failure = failure;
+            }
         }
         DataMsg::ApplyRechecked(info) => {
             // Only while the prompt is still open; a fresh read of "no dry run" refuses too.
@@ -913,6 +973,124 @@ mod tests {
 
     fn press(app: &mut App, c: KeyCode) -> Vec<Cmd> {
         update(app, Msg::Key(KeyEvent::new(c, KeyModifiers::NONE)))
+    }
+
+    fn setup_app() -> App {
+        let mut app = App::new(None, (80, 24));
+        app.setup = Some(Setup::new("demo"));
+        app
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for c in text.chars() {
+            press(app, KeyCode::Char(c));
+        }
+    }
+
+    fn focus_on(app: &mut App, id: &str) {
+        app.setup.as_mut().unwrap().focus = crate::setup::field_index(id).unwrap();
+    }
+
+    #[test]
+    fn setup_typing_goes_into_the_field_not_actions() {
+        let mut app = setup_app();
+        focus_on(&mut app, "project.name");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.setup.as_ref().unwrap().editing);
+        // `q`, `j` and `l` are actions outside a field; inside they are text.
+        assert!(press(&mut app, KeyCode::Char('q')).is_empty());
+        type_text(&mut app, "jl");
+        assert!(!app.quit);
+        assert_eq!(app.setup.as_ref().unwrap().get("project.name"), "demoqjl");
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(app.setup.as_ref().unwrap().get("project.name"), "demoqj");
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.setup.as_ref().unwrap().editing);
+        assert_eq!(press(&mut app, KeyCode::Char('q')), [Cmd::Quit]);
+    }
+
+    #[test]
+    fn setup_choice_cycles_and_expands_its_connector() {
+        let mut app = setup_app();
+        focus_on(&mut app, "crawl.use");
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(app.setup.as_ref().unwrap().get("crawl.use"), "yes");
+        press(&mut app, KeyCode::Down);
+        assert_eq!(
+            crate::setup::FIELDS[app.setup.as_ref().unwrap().focus].id,
+            "crawl.url"
+        );
+        focus_on(&mut app, "crawl.use");
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.setup.as_ref().unwrap().get("crawl.use"), "no");
+    }
+
+    #[test]
+    fn setup_save_asks_for_required_fields_first() {
+        let mut app = setup_app();
+        focus_on(&mut app, "destination.url");
+        let save = |app: &mut App| {
+            update(
+                app,
+                Msg::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+            )
+        };
+        assert!(save(&mut app).is_empty());
+        let st = app.setup.as_ref().unwrap();
+        assert!(!st.saving);
+        assert!(
+            st.failure
+                .fields
+                .iter()
+                .any(|(i, _)| crate::setup::FIELDS[*i].id == "destination.url")
+        );
+        let mut app = setup_app();
+        app.setup
+            .as_mut()
+            .unwrap()
+            .set("destination.url", "https://cms.example.com");
+        let cmds = save(&mut app);
+        assert!(
+            matches!(cmds.as_slice(), [Cmd::SaveSetup(v)] if v.len() == crate::setup::FIELDS.len())
+        );
+        assert!(app.setup.as_ref().unwrap().saving);
+        assert!(
+            save(&mut app).is_empty(),
+            "no second save while one is running"
+        );
+    }
+
+    #[test]
+    fn setup_saved_opens_the_main_screen_with_a_session() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = Setup::new("demo");
+        s.set("destination.url", "https://cms.example.com");
+        crate::setup::save(d.path(), &s.values).unwrap();
+        let session = Arc::new(Session::open(d.path()).unwrap());
+        let mut app = setup_app();
+        app.setup.as_mut().unwrap().saving = true;
+        let cmds = update(&mut app, Msg::Data(DataMsg::SetupSaved(Ok(session))));
+        assert!(app.session.is_some() && app.setup.is_none());
+        assert!(matches!(cmds.first(), Some(Cmd::Refresh(_))), "{cmds:?}");
+        // Main-screen keys work now: no restart needed.
+        assert!(!press(&mut app, KeyCode::Char('R')).is_empty());
+    }
+
+    #[test]
+    fn setup_failure_keeps_the_form() {
+        let mut app = setup_app();
+        app.setup.as_mut().unwrap().saving = true;
+        let failure = crate::setup::Failure {
+            fields: vec![(0, "project.name is missing".into())],
+            general: vec!["boom".into()],
+        };
+        update(
+            &mut app,
+            Msg::Data(DataMsg::SetupSaved(Err(failure.clone()))),
+        );
+        let st = app.setup.as_ref().unwrap();
+        assert!(app.session.is_none() && !st.saving);
+        assert_eq!(st.failure, failure);
     }
 
     #[test]

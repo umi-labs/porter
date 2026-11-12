@@ -2,6 +2,7 @@ use crate::actions;
 use crate::app::{App, update};
 use crate::lists::{ALL_KINDS, Group, Mode, issue_filter};
 use crate::msg::{Cmd, DataMsg, Msg, RefreshScope};
+use crate::setup::{self, Setup};
 use crate::{term, ui};
 use anyhow::Result;
 use crossterm::event::{Event as TermEvent, EventStream};
@@ -34,6 +35,13 @@ pub async fn run_tui(dir: &Path) -> Result<i32> {
         let size = crossterm::terminal::size().unwrap_or((80, 24));
 
         let mut app = App::new(session.clone(), size);
+        if session.is_none() {
+            let name = std::fs::canonicalize(dir)
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .unwrap_or_default();
+            app.setup = Some(Setup::new(&name));
+        }
         let mut engine = session.as_ref().map(|s| s.subscribe());
         let (tx, mut rx) = mpsc::unbounded_channel::<Msg>();
         let mut events = EventStream::new();
@@ -56,7 +64,7 @@ pub async fn run_tui(dir: &Path) -> Result<i32> {
                     }
                     app.dirty = true;
                 } else {
-                    exec(c, &app, &tx, &mut run);
+                    exec(c, &app, &tx, &mut run, dir);
                 }
             }
             if quit {
@@ -89,6 +97,10 @@ pub async fn run_tui(dir: &Path) -> Result<i32> {
                 Some(m) = rx.recv() => m,
                 _ = tick.tick() => Msg::Tick,
             };
+            // The project now exists: follow its events.
+            if let Msg::Data(DataMsg::SetupSaved(Ok(s))) = &msg {
+                engine = Some(s.subscribe());
+            }
             if matches!(msg, Msg::RunDone(_)) {
                 run = RunSlot::default();
             }
@@ -154,7 +166,22 @@ async fn finish_run(
     })
 }
 
-fn exec(cmd: Cmd, app: &App, tx: &mpsc::UnboundedSender<Msg>, run: &mut RunSlot) {
+fn exec(cmd: Cmd, app: &App, tx: &mpsc::UnboundedSender<Msg>, run: &mut RunSlot, dir: &Path) {
+    if let Cmd::SaveSetup(values) = cmd {
+        let (tx, dir) = (tx.clone(), dir.to_path_buf());
+        tokio::spawn(async move {
+            let r = tokio::task::spawn_blocking(move || {
+                setup::save(&dir, &values)?;
+                Session::open(&dir)
+                    .map(Arc::new)
+                    .map_err(|e| setup::Failure::general(format!("{e:#}")))
+            })
+            .await
+            .unwrap_or_else(|e| Err(setup::Failure::general(e.to_string())));
+            let _ = tx.send(Msg::Data(DataMsg::SetupSaved(r)));
+        });
+        return;
+    }
     let Some(session) = app.session.clone() else {
         return;
     };
@@ -278,7 +305,7 @@ fn exec(cmd: Cmd, app: &App, tx: &mpsc::UnboundedSender<Msg>, run: &mut RunSlot)
             let _ = out.flush();
         }
         // Handled in the loop, which owns the terminal.
-        Cmd::OpenEditor | Cmd::Quit => {}
+        Cmd::OpenEditor | Cmd::Quit | Cmd::SaveSetup(_) => {}
     }
 }
 

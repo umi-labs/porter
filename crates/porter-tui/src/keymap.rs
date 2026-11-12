@@ -19,6 +19,8 @@ pub enum Scope {
     ConfirmApply,
     Resolve,
     Help,
+    Setup,
+    SetupEdit,
 }
 
 impl Scope {
@@ -34,6 +36,8 @@ impl Scope {
             Scope::ConfirmApply => "apply prompt",
             Scope::Resolve => "resolve box",
             Scope::Help => "help",
+            Scope::Setup => "setup",
+            Scope::SetupEdit => "setup field",
         }
     }
 }
@@ -77,6 +81,14 @@ pub enum Action {
     FilterCancel,
     FilterBackspace,
     CloseHelp,
+    SetupNext,
+    SetupPrev,
+    SetupEnter,
+    SetupCycleNext,
+    SetupCyclePrev,
+    SetupDone,
+    SetupBackspace,
+    SetupSave,
 }
 
 #[derive(Clone, Copy)]
@@ -519,6 +531,96 @@ pub const BINDINGS: &[Binding] = &[
         "quit (asks first if a stage runs)",
         "q quit",
     ),
+    // Setup form (no porter.toml yet). Typing goes into the field being edited.
+    b(
+        S::Setup,
+        &[ch('j'), kc(KeyCode::Down), kc(KeyCode::Tab)],
+        "j/↓/tab",
+        A::SetupNext,
+        "next field",
+        "j/k move",
+    ),
+    b(
+        S::Setup,
+        &[ch('k'), kc(KeyCode::Up), kc(KeyCode::BackTab)],
+        "k/↑/S-tab",
+        A::SetupPrev,
+        "previous field",
+        "",
+    ),
+    b(
+        S::Setup,
+        &[kc(KeyCode::Enter)],
+        "enter",
+        A::SetupEnter,
+        "type into the field, or pick the next choice",
+        "enter edit",
+    ),
+    b(
+        S::Setup,
+        &[ch(' '), kc(KeyCode::Right)],
+        "space/→",
+        A::SetupCycleNext,
+        "next choice",
+        "space choose",
+    ),
+    b(
+        S::Setup,
+        &[kc(KeyCode::Left)],
+        "←",
+        A::SetupCyclePrev,
+        "previous choice",
+        "",
+    ),
+    b(
+        S::Setup,
+        &[Key(KeyCode::Char('s'), true)],
+        "ctrl-s",
+        A::SetupSave,
+        "write porter.toml and open the project",
+        "ctrl-s save",
+    ),
+    b(
+        S::Setup,
+        &[Key(KeyCode::Char('c'), true)],
+        "ctrl-c",
+        A::CtrlC,
+        "quit",
+        "",
+    ),
+    b(S::Setup, &[ch('q')], "q", A::Quit, "quit", "q quit"),
+    b(
+        S::SetupEdit,
+        &[kc(KeyCode::Enter), kc(KeyCode::Esc), kc(KeyCode::Tab)],
+        "enter/esc",
+        A::SetupDone,
+        "finish typing in the field",
+        "enter done",
+    ),
+    b(
+        S::SetupEdit,
+        &[kc(KeyCode::Backspace)],
+        "backspace",
+        A::SetupBackspace,
+        "delete a character",
+        "",
+    ),
+    b(
+        S::SetupEdit,
+        &[Key(KeyCode::Char('s'), true)],
+        "ctrl-s",
+        A::SetupSave,
+        "write porter.toml and open the project",
+        "ctrl-s save",
+    ),
+    b(
+        S::SetupEdit,
+        &[Key(KeyCode::Char('c'), true)],
+        "ctrl-c",
+        A::CtrlC,
+        "quit",
+        "",
+    ),
 ];
 
 /// The scopes whose bindings apply right now, innermost first.
@@ -528,6 +630,9 @@ pub fn active(app: &App) -> Vec<Scope> {
         Some(Modal::ConfirmApply(_)) => return vec![S::ConfirmApply],
         Some(Modal::Resolve(_)) => return vec![S::Resolve],
         None => {}
+    }
+    if let Some(st) = &app.setup {
+        return vec![if st.editing { S::SetupEdit } else { S::Setup }];
     }
     if app.help {
         return vec![S::Help];

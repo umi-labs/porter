@@ -9,6 +9,7 @@ mod lists;
 mod lists_tests;
 mod msg;
 mod runtime;
+mod setup;
 mod term;
 mod ui;
 

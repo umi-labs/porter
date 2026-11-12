@@ -1,0 +1,28 @@
+---
+source: crates/porter-tui/src/ui/mod.rs
+expression: out
+---
+"┌Setup: no porter.toml here (credentials are never typed here)─────────────────┐"
+"│Project                                                                       │"
+"│  name*          demo                                                         │"
+"│Source                                                                        │"
+"│  adapter*       ‹wordpress›                                                  │"
+"│Connector: crawl a live site                                                  │"
+"│  use            ‹no›                                                         │"
+"│Connector: WordPress export (WXR)                                             │"
+"│  use            ‹no›                                                         │"
+"│Connector: WordPress REST API                                                 │"
+"│  use            ‹no›                                                         │"
+"│Connector: WordPress database dump                                            │"
+"│  use            ‹no›                                                         │"
+"│Connector: Umbraco JSON export                                                │"
+"│  use            ‹yes›                                                        │"
+"│  export files*  a.json, b.json                                               │"
+"│Destination                                                                   │"
+"│  adapter*       ‹payload›                                                    │"
+"│▸ url*           h_                                                           │"
+"│  env var NAME*  PORTER_PAYLOAD_API_KEY                                       │"
+"│  config_dir     path to the CMS project                                      │"
+"│    reads PORTER_PAYLOAD_API_KEY — not set ✗                                  │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+"enter done · ctrl-s save                                                        "

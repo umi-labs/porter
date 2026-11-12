@@ -10,6 +10,7 @@ mod confirm;
 mod detail;
 mod filter;
 mod footer;
+mod form;
 mod help;
 mod issues;
 mod items;
@@ -48,10 +49,11 @@ pub fn view(app: &App, f: &mut Frame) {
         return;
     };
     if app.session.is_none() {
-        f.render_widget(
-            Paragraph::new("no porter project here — setup coming in Task 7\n\nq quit"),
-            area,
-        );
+        if app.setup.is_some() {
+            self::form::render(app, f, area);
+        } else {
+            f.render_widget(Paragraph::new("no porter project here\n\nq quit"), area);
+        }
         return;
     }
     if let Some([project, stages, issues, items]) = l.panels {
@@ -148,7 +150,49 @@ mod tests {
     #[test]
     fn no_project_placeholder() {
         let app = App::new(None, (80, 24));
-        assert!(render(&app, 80, 24).contains("setup coming in Task 7"));
+        assert!(render(&app, 80, 24).contains("no porter project here"));
+    }
+
+    fn setup_app(w: u16, h: u16) -> App {
+        let mut app = App::new(None, (w, h));
+        app.setup = Some(crate::setup::Setup::new("demo"));
+        app
+    }
+
+    #[test]
+    fn setup_form_80x24() {
+        insta::assert_snapshot!(render(&setup_app(80, 24), 80, 24));
+    }
+
+    #[test]
+    fn setup_form_expanded_with_secrets_and_errors_120x40() {
+        let mut app = setup_app(120, 40);
+        let st = app.setup.as_mut().unwrap();
+        st.set("crawl.use", "yes");
+        st.set("wp-rest.use", "yes");
+        st.set("wp-rest.url", "https://example.com");
+        st.set("wp-rest.auth", "basic");
+        st.set("destination.api_key_env", "PORTER_TEST_NOT_SET_ANYWHERE");
+        st.failure.fields = vec![(
+            crate::setup::field_index("crawl.url").unwrap(),
+            "crawl.url is missing".into(),
+        )];
+        st.failure.general = vec!["mapping: something general".into()];
+        insta::assert_snapshot!(render(&app, 120, 40));
+    }
+
+    #[test]
+    fn setup_form_scrolls_to_the_focused_field_and_shows_typing() {
+        let mut app = setup_app(80, 24);
+        let st = app.setup.as_mut().unwrap();
+        st.set("umbraco-json.use", "yes");
+        st.focus = crate::setup::field_index("destination.url").unwrap();
+        st.editing = true;
+        st.push('h');
+        let out = render(&app, 80, 24);
+        assert!(out.contains("▸ url*"), "{out}");
+        assert!(out.contains("h_"), "{out}");
+        insta::assert_snapshot!(out);
     }
 
     fn stages_panel(app: &App) -> String {

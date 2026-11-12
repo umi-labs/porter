@@ -1,8 +1,9 @@
 use crate::lists::Group;
+use crate::setup::Failure;
 use crossterm::event::KeyEvent;
 use porter_engine::events::Event;
 use porter_engine::session::{
-    IssueQuery, ItemDetail, ItemQuery, ItemRow, Overview, Page, Paged, RunOutcome, RunPlan,
+    IssueQuery, ItemDetail, ItemQuery, ItemRow, Overview, Page, Paged, RunOutcome, RunPlan, Session,
 };
 use porter_model::{Issue, ItemId, Resolution};
 use std::collections::BTreeMap;
@@ -53,6 +54,8 @@ pub enum DataMsg {
     Resolved(Result<(Uuid, Resolution), String>),
     /// Items per collection in the last dry-run preview; None when there was none.
     Preview(Option<PreviewInfo>),
+    /// The setup form was saved: a freshly opened session, or what is wrong.
+    SetupSaved(Result<std::sync::Arc<Session>, Failure>),
     /// The dry run's staleness re-read when `y` was pressed in the apply prompt.
     ApplyRechecked(Option<PreviewInfo>),
     /// What reloading porter.toml after an edit found ("config OK" when nothing).
@@ -90,6 +93,8 @@ pub enum Cmd {
     Resolve(Uuid, Resolution),
     /// Read the dry-run preview counts the apply confirmation shows.
     PreviewCounts,
+    /// Write porter.toml from the setup form's values, then open the project.
+    SaveSetup(Vec<String>),
     /// Re-read the dry run's staleness (the apply prompt's `y`).
     RecheckApply,
     OpenEditor,
