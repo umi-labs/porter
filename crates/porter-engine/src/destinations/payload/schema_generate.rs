@@ -253,7 +253,7 @@ pub fn generate(
                 continue;
             }
             let fs = stats
-                .and_then(|s| s.fields.get(src))
+                .and_then(|s| s.field(src))
                 .cloned()
                 .unwrap_or_default();
             insert(

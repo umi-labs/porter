@@ -656,6 +656,14 @@ impl Reader {
                 }
             }
             Expr::Call(c) => self.call(m, env, c),
+            // `seo ? [seoTab] : []`: only a test we can evaluate picks a branch.
+            Expr::Cond(c) => match self.eval(m, env, &c.test) {
+                v if v.get(UNRESOLVED).is_some() => unresolved("condition"),
+                Value::Null | Value::Bool(false) => self.eval(m, env, &c.alt),
+                Value::Number(n) if n.as_f64() == Some(0.0) => self.eval(m, env, &c.alt),
+                Value::String(t) if t.is_empty() => self.eval(m, env, &c.alt),
+                _ => self.eval(m, env, &c.cons),
+            },
             Expr::Arrow(_) | Expr::Fn(_) => Value::Null,
             _ => unresolved("expression"),
         }
@@ -978,7 +986,17 @@ impl Reader {
                             _ => vec![],
                         };
                     let polymorphic = f["relationTo"].is_array();
-                    let required = flag(&f["required"]);
+                    // Payload fills a missing value from `defaultValue` on create, which
+                    // satisfies `required` (an empty default doesn't).
+                    let default = &f["defaultValue"];
+                    let has_default = !matches!(default, Value::Null)
+                        && default.get(UNRESOLVED).is_none()
+                        && *default != json!("")
+                        && *default != json!([]);
+                    let required = match has_default {
+                        true => Some(false),
+                        false => flag(&f["required"]),
+                    };
                     let many = flag(&f["hasMany"]);
                     if many.is_none() {
                         self.warn_at(format!("could not determine if {path} has many values (`hasMany` is an expression)"));

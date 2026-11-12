@@ -16,8 +16,12 @@ pub fn compatible(variant: &str, f: &DestField) -> bool {
     let k = f.kind.as_str();
     k == "json"
         || match variant {
-            "Text" => matches!(k, "text" | "textarea" | "email" | "select" | "code"),
-            "RichText" => k == "richText",
+            "Text" => matches!(
+                k,
+                "text" | "textarea" | "email" | "select" | "radio" | "code"
+            ),
+            // Into blocks it goes as one rich-text block.
+            "RichText" => k == "richText" || k == "blocks",
             "Layout" => k == "blocks",
             "Media" => k == "upload",
             "Doc" => k == "relationship",
@@ -33,7 +37,7 @@ pub fn compatible(variant: &str, f: &DestField) -> bool {
 /// The Payload kind a variant needs, for messages.
 pub fn needs(variant: &str) -> &'static str {
     match variant {
-        "Text" => "text/textarea/email/select/code",
+        "Text" => "text/textarea/email/select/radio/code",
         "RichText" => "richText",
         "Layout" => "blocks",
         "Media" => "upload",
@@ -148,7 +152,7 @@ pub fn check(
         }
         for (src, fm) in tm.fields.iter().filter(|(_, fm)| !fm.drop) {
             if let Some(s) = stats
-                && !s.fields.contains_key(src)
+                && s.field(src).is_none()
             {
                 out.push(warning(
                     format!(
@@ -168,7 +172,7 @@ pub fn check(
                 ));
                 continue;
             };
-            let Some(fs) = stats.and_then(|s| s.fields.get(src)) else {
+            let Some(fs) = stats.and_then(|s| s.field(src)) else {
                 continue;
             };
             for v in effective(&fs.variants, &fm.transform) {

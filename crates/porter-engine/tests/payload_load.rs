@@ -447,6 +447,81 @@ async fn dropped_type_skipped_with_reason() {
     );
 }
 
+#[tokio::test]
+async fn status_mapped_to_skip_is_not_loaded() {
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let mut f = fx(&s.uri());
+    let tm = f.cfg.mapping.types.get_mut("page").unwrap();
+    tm.status.insert("draft".into(), "skip".into());
+    tm.status.insert("private".into(), "draft".into());
+    let mut draft = doc("page", "post:1", "a", None);
+    draft.status = DocStatus::Draft;
+    let mut private = doc("page", "post:2", "b", None);
+    private.status = DocStatus::Private;
+    f.put(&draft);
+    f.put(&private);
+    f.load(true, CancellationToken::new()).await;
+    assert_eq!(
+        f.status(did("post:1")),
+        Some(ItemStatus::Skipped {
+            reason: "status `draft` skipped in the mapping".into()
+        })
+    );
+    assert_eq!(f.status(did("post:2")), Some(ItemStatus::Done));
+    let writes = fake.writes();
+    assert!(
+        writes
+            .iter()
+            .all(|(.., b)| b["legacyId"] != key(did("post:1")))
+    );
+    assert!(
+        writes
+            .iter()
+            .any(|(.., b)| b["legacyId"] == key(did("post:2")))
+    );
+}
+
+/// A page without a builder layout holds rich text; into a blocks field it goes as one
+/// rich-text block, mapped like any other.
+#[tokio::test]
+async fn rich_text_into_blocks_field_becomes_one_block() {
+    use porter_engine::mapping::{BlockMap, BlockMatch};
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let mut f = fx(&s.uri());
+    let dir = site("{ name: 'layout', type: 'blocks', blocks: [Content] }", "");
+    let cfg = std::fs::read_to_string(dir.path().join("payload.config.ts")).unwrap();
+    std::fs::write(
+        dir.path().join("payload.config.ts"),
+        format!("const Content = {{ slug: 'content', fields: [{{ name: 'richText', type: 'richText' }}] }}\n{cfg}"),
+    )
+    .unwrap();
+    f.cfg.destination.config_dir = Some(dir.path().to_path_buf());
+    f.cfg.mapping.types.get_mut("page").unwrap().fields.clear();
+    map_field(&mut f, "page", "content", "layout");
+    f.cfg.mapping.blocks = vec![BlockMap {
+        r#match: BlockMatch {
+            kind: Some("rich-text".into()),
+            module: None,
+        },
+        to: "content".into(),
+        fields: [("text".to_string(), "richText".to_string())]
+            .into_iter()
+            .collect(),
+    }];
+    f.put(&doc("page", "post:1", "a", None));
+    f.load(true, CancellationToken::new()).await;
+    assert_eq!(f.status(did("post:1")), Some(ItemStatus::Done));
+    let layout = fake
+        .writes()
+        .into_iter()
+        .find_map(|(.., b)| b.get("layout").cloned())
+        .expect("layout written");
+    assert_eq!(layout[0]["blockType"], "content", "{layout}");
+    assert!(layout[0]["richText"]["root"].is_object(), "{layout}");
+}
+
 /// Schema-aware writes: a required field left empty fails the item without a write, a
 /// polymorphic relation is `{relationTo, value}`, and a cleared array goes as `[]`.
 #[tokio::test]
@@ -1040,6 +1115,7 @@ async fn live_load_roundtrip() {
         Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/payload-app/src"));
     f.cfg.mapping.redirects = RedirectsMap {
         collection: "redirects".into(),
+        ..Default::default()
     };
     f.cfg.mapping.menus = MenusMap {
         global: Some("navigation".into()),

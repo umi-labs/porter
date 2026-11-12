@@ -152,7 +152,7 @@ fn plan(
             if c.rows.iter().any(|r| r.field == fm.to) {
                 continue;
             }
-            let fs = stats.and_then(|s| s.fields.get(src));
+            let fs = stats.and_then(|s| s.field(src));
             let kind = describe(
                 &fs.cloned().unwrap_or_default(),
                 &fm.transform,

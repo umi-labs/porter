@@ -26,6 +26,17 @@ pub struct TypeStats {
     pub count: usize,
     /// `Document.fields` key -> stats.
     pub fields: IndexMap<String, FieldStats>,
+    /// The document's own fields a mapping can name (`seo.*`, `created`, `updated`; see
+    /// `mapping::DOC_PATHS`), where no custom field shadows them. Never reported unmapped.
+    #[serde(skip_serializing_if = "IndexMap::is_empty")]
+    pub doc_fields: IndexMap<String, FieldStats>,
+}
+
+impl TypeStats {
+    /// A mappable path's stats: a custom field, else the document's own.
+    pub fn field(&self, path: &str) -> Option<&FieldStats> {
+        self.fields.get(path).or_else(|| self.doc_fields.get(path))
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
@@ -150,6 +161,13 @@ impl TypeSummary {
         for (_, _, d) in &docs {
             let t = s.types.entry(d.doc_type.clone()).or_default();
             t.count += 1;
+            for p in super::DOC_PATHS
+                .iter()
+                .filter(|p| !d.fields.contains_key(**p))
+            {
+                let st = t.doc_fields.entry(p.to_string()).or_default();
+                st.observe(&super::lookup(d, p), &types);
+            }
             for (k, v) in &d.fields {
                 t.fields.entry(k.clone()).or_default().observe(v, &types);
                 if let FieldValue::Layout(bs) = v {
@@ -175,7 +193,7 @@ impl TypeSummary {
             }
         }
         for t in s.types.values_mut() {
-            for f in t.fields.values_mut() {
+            for f in t.fields.values_mut().chain(t.doc_fields.values_mut()) {
                 f.fill_rate = f.filled as f64 / t.count as f64;
             }
         }

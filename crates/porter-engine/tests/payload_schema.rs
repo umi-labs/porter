@@ -45,6 +45,7 @@ fn summary(ty: &str, fields: &[(&str, FieldStats)]) -> TypeSummary {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.clone()))
                 .collect(),
+            ..Default::default()
         },
     );
     s
@@ -134,6 +135,80 @@ fn reads_fixture_collections_and_warns_on_unresolved() {
         "{:?}",
         s.warnings
     );
+}
+
+/// A required field with a default is filled by Payload: not a gap. An empty default is.
+#[test]
+fn required_with_default_is_not_a_gap() {
+    let d = tempfile::tempdir().unwrap();
+    write(
+        d.path(),
+        "Pages.ts",
+        r#"
+import type { CollectionConfig } from 'payload'
+export const Pages: CollectionConfig = {
+  slug: 'pages',
+  fields: [
+    { name: 'title', type: 'text', required: true },
+    { name: 'legacyId', type: 'text', index: true, unique: true },
+    { name: 'ratio', type: 'select', required: true, defaultValue: 'default', options: ['default'] },
+    { name: 'label', type: 'text', required: true, defaultValue: '' },
+  ],
+}
+"#,
+    );
+    let dest = read_payload_config(d.path()).unwrap();
+    let pages = &dest.collections["pages"];
+    assert!(!field(&pages.fields, "ratio").required);
+    assert!(field(&pages.fields, "label").required);
+    let errs = errors(&schema_check::check(
+        &summary("post", &[]),
+        &mapping("post", "pages", &[]),
+        &dest,
+    ));
+    assert!(!errs.iter().any(|e| e.contains("ratio")), "{errs:?}");
+    assert!(errs.iter().any(|e| e.contains("label")), "{errs:?}");
+}
+
+/// A collection factory whose tabs depend on an option: `...(seo ? [seoTab] : [])`.
+#[test]
+fn conditional_spread_follows_known_test() {
+    let d = tempfile::tempdir().unwrap();
+    write(
+        d.path(),
+        "src/factory.ts",
+        r#"
+const seoTab = { name: 'meta', fields: [{ name: 'title', type: 'text' }] }
+export const make = ({ slug, seo = true, extra = '' }) => ({
+  slug,
+  fields: [
+    { type: 'tabs', tabs: [{ label: 'Details', fields: [{ name: 'body', type: 'text' }] }, ...(seo ? [seoTab] : [])] },
+    ...(extra ? [{ name: extra, type: 'text' }] : []),
+  ],
+})
+"#,
+    );
+    write(
+        d.path(),
+        "src/collections.ts",
+        r#"
+import type { CollectionConfig } from 'payload'
+import { make } from './factory'
+export const Rooms: CollectionConfig = make({ slug: 'rooms' })
+export const Slides: CollectionConfig = make({ slug: 'slides', seo: false, extra: 'caption' })
+"#,
+    );
+    let s = read_payload_config(d.path()).unwrap();
+    let names = |c: &str| -> Vec<String> {
+        s.collections[c]
+            .fields
+            .iter()
+            .map(|f| f.name.clone())
+            .collect()
+    };
+    assert_eq!(names("rooms"), ["body", "meta"]);
+    assert_eq!(names("slides"), ["body", "caption"]);
+    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
 }
 
 #[test]
@@ -418,6 +493,90 @@ fn prompt_contains_check_command_and_samples() {
     assert!(!html.contains("someone@example.test"));
 }
 
+/// `seo.*`, `created` and `updated` live on the document, not in `fields`: mapping them is
+/// not "mapped but appears in none", they're typed, and never reported unmapped. A radio
+/// takes text like a select does.
+#[test]
+fn doc_level_paths_and_radio_checked() {
+    let d = tempfile::tempdir().unwrap();
+    write(
+        d.path(),
+        "Pages.ts",
+        r#"
+import type { CollectionConfig } from 'payload'
+export const Pages: CollectionConfig = {
+  slug: 'pages',
+  fields: [
+    { name: 'title', type: 'text', required: true },
+    { name: 'legacyId', type: 'text', index: true, unique: true },
+    { name: 'publishedAt', type: 'date' },
+    { name: 'metaTitle', type: 'text' },
+    { name: 'kind', type: 'radio', options: ['a', 'b'] },
+  ],
+}
+"#,
+    );
+    let dest = read_payload_config(d.path()).unwrap();
+    let p = Project::init(d.path().join("p").as_path(), "t", "wordpress").unwrap();
+    let src = SourceRef {
+        connector: "wxr".into(),
+        source_id: "1".into(),
+        url: None,
+    };
+    let id = ItemId::new(ItemKind::Document, &src);
+    let mut fields = indexmap::IndexMap::new();
+    fields.insert("acf.kind".to_string(), FieldValue::Text("a".into()));
+    let doc = Document {
+        id,
+        doc_type: "post".into(),
+        status: DocStatus::Published,
+        locale: None,
+        translations: vec![],
+        slug: "one".into(),
+        path: "/one/".into(),
+        parent: None,
+        title: "One".into(),
+        fields,
+        seo: Seo {
+            title: Some("T".into()),
+            ..Seo::default()
+        },
+        created: Some(chrono::Utc::now()),
+        updated: None,
+        author: None,
+        original: serde_json::Value::Null,
+        source: src.clone(),
+    };
+    p.store()
+        .put_item(ItemKind::Document, id, &src, &doc)
+        .unwrap();
+    let sum = TypeSummary::from_store(p.store()).unwrap();
+    assert!(!sum.types["post"].fields.contains_key("seo.title"));
+    assert_eq!(sum.types["post"].field("seo.title").unwrap().filled, 1);
+    let map = mapping(
+        "post",
+        "pages",
+        &[
+            ("seo.title", "metaTitle"),
+            ("created", "publishedAt"),
+            ("acf.kind", "kind"),
+        ],
+    );
+    let issues = schema_check::check(&sum, &map, &dest);
+    assert!(errors(&issues).is_empty(), "{issues:?}");
+    assert!(
+        !issues.iter().any(|i| i.message.contains("appears in none")
+            || i.message.contains("seo.")
+            || i.message.contains("`post.created`")
+            || i.message.contains("`post.updated`")),
+        "{issues:?}"
+    );
+    // A doc-level value of the wrong kind is still caught.
+    let bad = mapping("post", "pages", &[("created", "metaTitle")]);
+    let errs = errors(&schema_check::check(&sum, &bad, &dest));
+    assert!(errs.iter().any(|e| e.contains("holds Date")), "{errs:?}");
+}
+
 #[test]
 fn summary_from_store_counts_variants_fill_and_samples() {
     let d = tempfile::tempdir().unwrap();
@@ -521,7 +680,7 @@ export const Things: CollectionConfig = { ...base, slug: 'things' }
         )
     };
     // (a) type / name unresolved
-    has(&["pages.a", "expression"]);
+    has(&["pages.a", "condition"]);
     has(&["pages[1]"]);
     has(&["SOME_TYPE", "pages.b"]);
     // (b) required / hasMany behind an expression

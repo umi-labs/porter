@@ -34,6 +34,10 @@ pub(super) async fn load(l: &mut Loader<'_>) -> Result<()> {
     for d in &docs {
         match mapping.types.get(&d.doc_type) {
             Some(tm) => match &tm.to {
+                Some(_) if tm.status.get(&wire_status(d)).is_some_and(|s| s == "skip") => {
+                    let why = format!("status `{}` skipped in the mapping", wire_status(d));
+                    l.skip(d.id, KIND, &why)?
+                }
                 Some(to) => todo.push((d, tm, to)),
                 None => l.skip(
                     d.id,
@@ -239,11 +243,17 @@ fn is_draft(d: &Document, tm: &TypeMap) -> bool {
     if d.status == DocStatus::Published {
         return false;
     }
-    let wire = serde_json::to_value(d.status)
+    tm.status
+        .get(&wire_status(d))
+        .is_none_or(|s| s != "published")
+}
+
+/// The status as `[mapping.types.*.status]` keys name it (`draft`, `private`, ...).
+fn wire_status(d: &Document) -> String {
+    serde_json::to_value(d.status)
         .ok()
         .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_default();
-    tm.status.get(&wire).is_none_or(|s| s != "published")
+        .unwrap_or_default()
 }
 
 /// The upsert key: the item id, or for `key_type = "number"` the source id's trailing number.
@@ -350,6 +360,17 @@ fn value(l: &Loader, v: &FieldValue, f: Option<&DestField>, out: &mut Vec<Pendin
         FieldValue::Number(n) => json!(n),
         FieldValue::Bool(b) => json!(b),
         FieldValue::Date(d) => json!(d.to_rfc3339()),
+        // Rich text into a blocks field (a page without a builder layout): one rich-text
+        // block, which `[[mapping.blocks]]` maps like any other.
+        FieldValue::RichText(_) if f.is_some_and(|f| f.kind == "blocks") => {
+            let block = porter_model::Block {
+                kind: porter_model::BlockKind::RichText,
+                props: [("text".to_string(), v.clone())].into_iter().collect(),
+                children: vec![],
+                original: None,
+            };
+            value(l, &FieldValue::Layout(vec![block]), f, out)
+        }
         FieldValue::RichText(rt) => {
             let (j, issues) = to_lexical(rt, &l.ids, raw);
             out.extend(issues);
