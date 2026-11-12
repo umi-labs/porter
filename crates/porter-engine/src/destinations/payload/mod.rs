@@ -1,5 +1,7 @@
 //! Payload CMS destination, written through Payload's REST API.
+pub mod blocks;
 pub mod client;
+pub mod lexical;
 
 use crate::config::DestinationConfig;
 use crate::stage::{Capabilities, Destination, Feature, SchemaMode, StageCtx};

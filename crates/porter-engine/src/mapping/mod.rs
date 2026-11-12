@@ -20,6 +20,10 @@ pub struct MappingConfig {
     /// Source type -> how it maps. A type with no entry here is unmapped.
     pub types: IndexMap<String, TypeMap>,
     pub blocks: Vec<BlockMap>,
+    /// Destination block slug for content that has no native shape (raw HTML, embeds,
+    /// tables, code, unmatched builder blocks); its `html` field gets the markup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_block: Option<String>,
     pub locales: LocaleMode,
     pub forms: FormsMap,
     pub media: MediaMap,
