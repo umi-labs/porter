@@ -51,3 +51,11 @@ porter-model = { path = "crates/porter-model" }
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# Keep target/ small: dependencies without debug info, our crates with line tables only
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[profile.dev.package."*"]
+debug = false
