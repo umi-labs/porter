@@ -49,20 +49,20 @@ impl StageCmd {
     }
 }
 
-fn table(rows: &[(Stage, Summary)]) {
+/// `dry_load`: load ran without `--apply`, so its row must not read as a real write.
+fn table(rows: &[(Stage, Summary)], dry_load: bool) {
     println!(
         "{:<10} {:>6} {:>8} {:>8} {:>7} {:>7}",
         "stage", "done", "partial", "skipped", "failed", "errors"
     );
     for (s, m) in rows {
+        let name = match s {
+            Stage::Load if dry_load => "load (dry run)".to_string(),
+            _ => wire(s),
+        };
         println!(
             "{:<10} {:>6} {:>8} {:>8} {:>7} {:>7}",
-            wire(s),
-            m.done,
-            m.partial,
-            m.skipped,
-            m.failed,
-            m.errors
+            name, m.done, m.partial, m.skipped, m.failed, m.errors
         );
     }
 }
@@ -71,6 +71,10 @@ fn table(rows: &[(Stage, Summary)]) {
 async fn drive(dir: &Path, json: bool, plan: RunPlan) -> Result<i32> {
     tracing::debug!(dir = %dir.display(), "opening project");
     let session = Session::open(dir)?;
+    let dry_load = match &plan {
+        RunPlan::Stage(_, o) => !o.apply,
+        RunPlan::All { apply, .. } => !apply,
+    };
     let printer = Printer::start(json, session.subscribe());
     let handle = match session.run(plan) {
         Ok(h) => h,
@@ -115,7 +119,7 @@ async fn drive(dir: &Path, json: bool, plan: RunPlan) -> Result<i32> {
         }
     }
     if !json && !out.summaries.is_empty() {
-        table(&out.summaries);
+        table(&out.summaries, dry_load);
     }
     Ok(out.code)
 }

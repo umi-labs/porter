@@ -18,6 +18,8 @@ pub struct RunSummaryView {
     pub started_at: String,
     pub ended_at: Option<String>,
     pub porter_version: String,
+    /// A load that wrote nothing.
+    pub dry_run: bool,
 }
 
 impl From<&RunRow> for RunSummaryView {
@@ -27,6 +29,7 @@ impl From<&RunRow> for RunSummaryView {
             started_at: r.started_at.clone(),
             ended_at: r.ended_at.clone(),
             porter_version: r.porter_version.clone(),
+            dry_run: r.dry_run,
         }
     }
 }
@@ -75,6 +78,7 @@ pub fn rows(app: &App) -> Vec<StageRow> {
                         started_at: "this session".into(),
                         ended_at: Some("just now".into()),
                         porter_version: env!("CARGO_PKG_VERSION").into(),
+                        dry_run: stage == Stage::Load && st.dry_load,
                     }),
                     None => stored,
                 },
@@ -141,6 +145,9 @@ pub fn render(app: &App, f: &mut Frame, area: Rect) {
                 (None, StageState::Running) => "starting…".into(),
                 (None, StageState::CouldNotRun(e)) => {
                     format!("could not run: {}", e.lines().next().unwrap_or(""))
+                }
+                (None, s) if r.last_run.as_ref().is_some_and(|l| l.dry_run) => {
+                    format!("{} (dry run)", state_text(s))
                 }
                 (None, s) => state_text(s).into(),
             };

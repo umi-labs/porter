@@ -204,6 +204,9 @@ fn stage_text(app: &App) -> String {
             (Some(e), _) => out += &format!("  ended   {e}\n"),
             (None, _) => out += "  never ended (interrupted before it could record a summary)\n",
         }
+        if run.dry_run {
+            out += "  dry run: nothing was written to the destination\n";
+        }
         if let Some(s) = &run.summary {
             out += &format!(
                 "  done {} · partial {} · skipped {} · failed {}\n  issues: {} errors, {} warnings, {} info{}\n",

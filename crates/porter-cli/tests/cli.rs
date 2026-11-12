@@ -378,3 +378,18 @@ fn dry_run_run_skips_verify() {
     let stderr = String::from_utf8_lossy(&o.stderr);
     assert!(!stderr.contains("PORTER_TEST_UNSET_KEY"), "{stderr}");
 }
+
+#[test]
+fn dry_run_load_says_so_in_the_summary() {
+    let d = tempfile::tempdir().unwrap();
+    init(d.path());
+    let toml = d.path().join("porter.toml");
+    let text = std::fs::read_to_string(&toml).unwrap().replace(
+        "[destination]\n",
+        "[destination]\nadapter = \"payload\"\nurl = \"http://127.0.0.1:9\"\napi_key_env = \"PORTER_TEST_UNSET_KEY\"\n",
+    );
+    std::fs::write(&toml, text).unwrap();
+    let out = porter(d.path()).arg("load").assert();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("load (dry run)"), "{stdout}");
+}

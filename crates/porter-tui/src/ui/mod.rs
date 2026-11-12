@@ -230,6 +230,7 @@ mod tests {
                     started_at: "2026-11-12T10:00:00Z".into(),
                     ended_at: summary.as_ref().map(|_| "2026-11-12T10:01:00Z".into()),
                     summary,
+                    dry_run: false,
                 },
             ));
         }
@@ -394,6 +395,64 @@ mod tests {
         );
         let out = stages_panel(&app);
         assert!(!out.contains('✓') && out.contains('✗'), "{out}");
+    }
+
+    fn load_finished(app: &mut App) {
+        update(
+            app,
+            Msg::Engine(Event::StageFinished {
+                stage: Stage::Load,
+                run: RunId(uuid::Uuid::nil()),
+                summary: Summary {
+                    done: 3,
+                    ..Default::default()
+                },
+            }),
+        );
+    }
+
+    #[test]
+    fn dry_run_load_never_looks_like_a_write() {
+        // Stored: the last load was a dry run.
+        let (mut app, _d) = app_with(None, false);
+        app.panels.overview = Some(Overview {
+            last_runs: vec![(
+                Stage::Load,
+                RunRow {
+                    id: "r".into(),
+                    porter_version: "2.0.0".into(),
+                    started_at: "2026-11-12T10:00:00Z".into(),
+                    ended_at: Some("2026-11-12T10:01:00Z".into()),
+                    summary: sum(|_| {}),
+                    dry_run: true,
+                },
+            )],
+            ..Default::default()
+        });
+        app.panels.stages.sel = 4;
+        assert!(stages_panel(&app).contains("✓ load       clean (dry run)"));
+        let detail = render(&app, 120, 40);
+        assert!(detail.contains("dry run: nothing was written"), "{detail}");
+        // Live: `l` then the stage ends, before the overview re-query lands.
+        let (mut app, _d) = app_with(None, false);
+        press_key(&mut app, KeyCode::Char('l'));
+        load_finished(&mut app);
+        assert!(stages_panel(&app).contains("clean (dry run)"));
+        // A real apply says nothing of the sort.
+        let (mut app, _d) = app_with(None, false);
+        press_key(&mut app, KeyCode::Char('L'));
+        let fresh = crate::msg::PreviewInfo {
+            counts: [("posts".to_string(), 3u64)].into(),
+            at: std::time::SystemTime::now(),
+            stale: None,
+        };
+        update(&mut app, Msg::Data(DataMsg::Preview(Some(fresh.clone()))));
+        press_key(&mut app, KeyCode::Char('y'));
+        let c = update(&mut app, Msg::Data(DataMsg::ApplyRechecked(Some(fresh))));
+        assert_eq!(c.len(), 1, "apply started");
+        load_finished(&mut app);
+        let out = stages_panel(&app);
+        assert!(out.contains("✓ load") && !out.contains("dry run"), "{out}");
     }
 
     #[test]

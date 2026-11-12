@@ -15,6 +15,15 @@ impl Store {
         Ok(id)
     }
 
+    /// Marks a load run as a dry run: it wrote nothing to the destination.
+    pub fn mark_dry_run(&self, run: RunId) -> Result<()> {
+        self.conn().execute(
+            &format!("UPDATE runs SET dry_run = 1, updated_at = {NOW} WHERE id = ?1"),
+            [run.0.to_string()],
+        )?;
+        Ok(())
+    }
+
     /// Records the summary and resolves issues this run proved gone. An `Open`
     /// issue of the run's stage, not reopened by this run, becomes `FixedByRerun`
     /// only if the run was not interrupted AND this run wrote a status for the
@@ -157,6 +166,8 @@ pub struct RunRow {
     pub started_at: String,
     pub ended_at: Option<String>,
     pub summary: Option<Summary>,
+    /// A load that wrote nothing to the destination.
+    pub dry_run: bool,
 }
 
 impl Store {
@@ -164,7 +175,7 @@ impl Store {
     pub fn runs(&self, stage: Stage) -> Result<Vec<RunRow>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, porter_version, started_at, ended_at, summary FROM runs
+            "SELECT id, porter_version, started_at, ended_at, summary, dry_run FROM runs
              WHERE stage = ?1 AND deleted_at IS NULL ORDER BY id",
         )?;
         let rows = stmt.query_map([wire(&stage)?], |r| {
@@ -174,19 +185,55 @@ impl Store {
                 r.get(2)?,
                 r.get(3)?,
                 r.get::<_, Option<String>>(4)?,
+                r.get(5)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, porter_version, started_at, ended_at, summary) = row?;
+            let (id, porter_version, started_at, ended_at, summary, dry_run) = row?;
             out.push(RunRow {
                 id,
                 porter_version,
                 started_at,
                 ended_at,
                 summary: summary.map(|s| serde_json::from_str(&s)).transpose()?,
+                dry_run,
             });
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{SCHEMA, SCHEMA_V2, SCHEMA_V3, Store};
+    use porter_model::Stage;
+
+    #[test]
+    fn runs_record_dry_run_and_v3_databases_migrate() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("project.db");
+        // A v3 database with one run in it, as an earlier porter left it.
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(&format!("BEGIN; {SCHEMA} {SCHEMA_V2} {SCHEMA_V3} COMMIT;"))
+            .unwrap();
+        c.execute(
+            "INSERT INTO runs (id, stage, porter_version) VALUES ('0', 'load', '2.0.0')",
+            [],
+        )
+        .unwrap();
+        drop(c);
+        let s = Store::open(&path, d.path().join("media")).unwrap();
+        assert!(
+            !s.runs(Stage::Load).unwrap()[0].dry_run,
+            "old rows read as real runs"
+        );
+        let dry = s.begin_run(Stage::Load).unwrap();
+        s.mark_dry_run(dry).unwrap();
+        let real = s.begin_run(Stage::Load).unwrap();
+        let rows = s.runs(Stage::Load).unwrap();
+        let get = |id: super::RunId| rows.iter().find(|r| r.id == id.0.to_string()).unwrap();
+        assert!(get(dry).dry_run);
+        assert!(!get(real).dry_run);
     }
 }

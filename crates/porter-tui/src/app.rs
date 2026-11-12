@@ -55,6 +55,8 @@ pub struct StagesState {
     /// may show the previous run's state for a stage whose new run is already over.
     finished: [Option<Summary>; 6],
     pub live: Live,
+    /// The run in flight (or just ended) loads without apply: its load is a dry run.
+    pub dry_load: bool,
 }
 
 fn idx(s: Stage) -> usize {
@@ -295,6 +297,12 @@ impl App {
         for m in o.messages {
             self.push_log(m);
         }
+        if o.seeded {
+            self.push_log("mapping seeded in porter.toml".into());
+        }
+        if let Some((stage, why)) = o.skipped {
+            self.push_log(format!("{} skipped: {why}", crate::ui::stages::name(stage)));
+        }
     }
 
     fn start(&mut self, plan: RunPlan) -> Vec<Cmd> {
@@ -306,6 +314,10 @@ impl App {
             return vec![];
         }
         self.panels.stages.live = Live::default();
+        self.panels.stages.dry_load = match &plan {
+            RunPlan::Stage(_, o) => !o.apply,
+            RunPlan::All { apply, .. } => !apply,
+        };
         if let RunPlan::Stage(s, _) = &plan {
             self.panels.stages.running = Some(*s);
             self.panels.stages.could_not_run[idx(*s)] = None;
@@ -1311,6 +1323,23 @@ mod tests {
         assert!(matches!(cmds[2], Cmd::Items { .. }));
         let cmds = update(&mut app, Msg::RunDone(Default::default()));
         assert_eq!(cmds, [Cmd::Refresh(RefreshScope::All)]);
+    }
+
+    #[test]
+    fn run_done_says_mapping_seeded_and_verify_skipped() {
+        let (mut app, _d) = live_app();
+        press(&mut app, KeyCode::Char('R'));
+        update(
+            &mut app,
+            Msg::RunDone(RunOutcome {
+                seeded: true,
+                skipped: Some((porter_model::Stage::Verify, "dry run".into())),
+                ..Default::default()
+            }),
+        );
+        let log: Vec<_> = app.log.iter().map(|l| l.0.as_str()).collect();
+        assert!(log.contains(&"mapping seeded in porter.toml"), "{log:?}");
+        assert!(log.contains(&"verify skipped: dry run"), "{log:?}");
     }
 
     #[test]

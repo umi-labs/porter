@@ -138,10 +138,19 @@ pub(super) async fn run(
     extras::settings(&mut l).await?;
     extras::authors(&l)?;
     if !apply {
-        // Marks the previews complete and says when they were made.
-        std::fs::create_dir_all(&preview_dir)?;
-        std::fs::write(preview_dir.join(PREVIEW_DONE), "")?;
+        mark_preview_done(ctx, &preview_dir)?;
     }
+    Ok(())
+}
+
+/// Marks a dry run's previews complete and says when they were made, unless it was
+/// cancelled (in settings or authors, say): a partial preview must never back an apply.
+fn mark_preview_done(ctx: &StageCtx, preview_dir: &std::path::Path) -> Result<()> {
+    if ctx.cancel.is_cancelled() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(preview_dir)?;
+    std::fs::write(preview_dir.join(PREVIEW_DONE), "")?;
     Ok(())
 }
 
@@ -486,6 +495,35 @@ fn set_path(data: &mut Map<String, Value>, path: &str, v: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_dry_run_never_marks_its_preview_done() {
+        let d = tempfile::tempdir().unwrap();
+        crate::project::Project::init(d.path(), "demo", "wordpress").unwrap();
+        let project = std::sync::Arc::new(crate::project::Project::open(d.path()).unwrap());
+        let ctx = StageCtx {
+            config: std::sync::Arc::new(project.config().clone()),
+            events: crate::events::EventSink::new(16),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            run: project
+                .store()
+                .begin_run(porter_model::Stage::Load)
+                .unwrap(),
+            stage: porter_model::Stage::Load,
+            refresh: false,
+            project,
+        };
+        let dir = d.path().join("raw/load-preview");
+        ctx.cancel.cancel();
+        mark_preview_done(&ctx, &dir).unwrap();
+        assert!(!dir.join(PREVIEW_DONE).exists(), "cancelled: no marker");
+        let ctx = StageCtx {
+            cancel: tokio_util::sync::CancellationToken::new(),
+            ..ctx
+        };
+        mark_preview_done(&ctx, &dir).unwrap();
+        assert!(dir.join(PREVIEW_DONE).exists());
+    }
 
     fn field(name: &str, kind: &str) -> DestField {
         DestField {

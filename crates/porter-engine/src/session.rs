@@ -297,20 +297,27 @@ impl Session {
         lock(&self.running).clone()
     }
 
-    /// Starts `plan` on a background task. Only one run at a time per session.
+    /// Starts `plan` on a background task. Only one run at a time per session. Each run
+    /// re-reads `porter.toml`, as every CLI command does; a file that does not parse fails
+    /// the run with that error (validation stays per stage).
     pub fn run(&self, plan: RunPlan) -> Result<RunHandle> {
-        {
+        let config = {
             let mut slot = lock(&self.running);
             if slot.is_some() {
                 bail!("a stage is already running");
             }
+            let c = Arc::new(ProjectConfig::load(
+                &self.project.dir().join("porter.toml"),
+            )?);
+            *self.config.write().unwrap_or_else(|e| e.into_inner()) = c.clone();
             *slot = Some(RunInfo { plan: plan.clone() });
-        }
+            c
+        };
         let release = Release(self.running.clone());
         let cancel = CancellationToken::new();
         let env = Env {
             project: self.project.clone(),
-            config: self.config(),
+            config,
             events: self.events.clone(),
             cancel: cancel.clone(),
         };
@@ -570,14 +577,13 @@ async fn exec(env: &Env, step: Step, refresh: bool) -> Result<Summary> {
             .await
         }
         Step::Load(apply) => {
-            run_stage(
-                p,
-                c,
-                e,
-                k,
-                s,
-                |ctx| async move { dest.load(&ctx, apply).await },
-            )
+            run_stage(p, c, e, k, s, |ctx| async move {
+                // Recorded first, so even an interrupted dry run never reads as a write.
+                if !apply {
+                    ctx.project.store().mark_dry_run(ctx.run)?;
+                }
+                dest.load(&ctx, apply).await
+            })
             .await
         }
         Step::Verify => {
@@ -705,6 +711,7 @@ mod tests {
                     started_at: "t".into(),
                     ended_at: None,
                     summary,
+                    dry_run: false,
                 },
             )],
             ..Default::default()
@@ -812,6 +819,73 @@ mod tests {
             s.preview_stale(&p).is_some(),
             "unreadable history reads as stale"
         );
+    }
+
+    /// The CLI re-reads porter.toml for every command; a session must too, or a run after
+    /// analyse seeded `[mapping]` (or after any edit) would use the config it opened with.
+    #[tokio::test]
+    async fn each_run_reloads_porter_toml() {
+        let d = tempfile::tempdir().unwrap();
+        Project::init(d.path(), "demo", "wordpress").unwrap();
+        let s = Session::open(d.path()).unwrap();
+        let toml = d.path().join("porter.toml");
+        let text = std::fs::read_to_string(&toml).unwrap();
+        std::fs::write(&toml, text.replace("name = \"demo\"", "name = \"renamed\"")).unwrap();
+        let plan = RunPlan::Stage(
+            Stage::Analyse,
+            StageOpts {
+                refresh: false,
+                apply: false,
+                schema_mode: SchemaMode::Check,
+            },
+        );
+        s.run(plan.clone()).unwrap().wait().await;
+        assert_eq!(s.config().project.name, "renamed");
+        // A parse error fails the run with the error as the CLI prints it, and frees the slot.
+        std::fs::write(&toml, "not [toml").unwrap();
+        let e = format!(
+            "{:#}",
+            s.run(plan.clone()).err().expect("bad toml must fail")
+        );
+        assert!(e.contains("parsing") && e.contains("porter.toml"), "{e}");
+        assert!(s.running().is_none());
+    }
+
+    /// A dry-run load is stored as one, so no front end can show it as a real write.
+    #[tokio::test]
+    async fn dry_run_load_is_recorded_as_dry_run() {
+        let d = tempfile::tempdir().unwrap();
+        Project::init(d.path(), "demo", "wordpress").unwrap();
+        let toml = d.path().join("porter.toml");
+        let text = std::fs::read_to_string(&toml).unwrap();
+        std::fs::write(
+            &toml,
+            text.replace(
+                "[destination]\n",
+                "[destination]\nadapter = \"payload\"\nurl = \"https://cms.example.com\"\napi_key_env = \"K\"\n",
+            ),
+        )
+        .unwrap();
+        let s = Session::open(d.path()).unwrap();
+        let load = |apply| {
+            RunPlan::Stage(
+                Stage::Load,
+                StageOpts {
+                    refresh: false,
+                    apply,
+                    schema_mode: SchemaMode::Check,
+                },
+            )
+        };
+        let out = s.run(load(false)).unwrap().wait().await;
+        assert_ne!(out.code, 1, "{out:?}");
+        let ov = s.overview().await.unwrap();
+        let (_, run) = ov
+            .last_runs
+            .iter()
+            .find(|(st, _)| *st == Stage::Load)
+            .unwrap();
+        assert!(run.dry_run, "a dry-run load must be stored as one");
     }
 
     #[test]
