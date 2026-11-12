@@ -32,6 +32,10 @@ pub(crate) const MAX_DEPTH: usize = 64;
 pub struct UmbracoSource;
 
 impl Source for UmbracoSource {
+    fn canonical(&self) -> &'static str {
+        CANON
+    }
+
     fn connectors(&self, cfg: &crate::config::ProjectConfig) -> Result<Vec<Box<dyn Connector>>> {
         let mut paths = vec![];
         for c in &cfg.connectors {
@@ -64,6 +68,8 @@ pub(crate) struct Entry {
     pub node: Result<Map<String, Value>, String>,
     /// The id was seen before; this entry's `sid` carries a `~n` suffix.
     pub dup: bool,
+    /// An object without an id: `sid` is its position, which may change between runs.
+    pub positional: bool,
 }
 
 /// The nodes in an export: the items of any well-known content array, else the root array,
@@ -121,14 +127,15 @@ pub(crate) fn entries(files: Vec<Vec<Value>>) -> Vec<Entry> {
     for (file, nodes) in files.into_iter().enumerate() {
         for v in nodes {
             let ordinal = out.len() + 1;
-            let (sid, node) = match v {
-                Value::Object(m) => (
-                    sid_of(&m).unwrap_or_else(|| format!("item-{ordinal}")),
-                    Ok(m),
-                ),
+            let (sid, node, positional) = match v {
+                Value::Object(m) => match sid_of(&m) {
+                    Some(sid) => (sid, Ok(m), false),
+                    None => (format!("item-{ordinal}"), Ok(m), true),
+                },
                 _ => (
                     format!("item-{ordinal}"),
                     Err(format!("item {ordinal} is not an object")),
+                    false,
                 ),
             };
             let dup = !seen.insert(sid.clone());
@@ -138,6 +145,7 @@ pub(crate) fn entries(files: Vec<Vec<Value>>) -> Vec<Entry> {
                 file,
                 node,
                 dup,
+                positional,
             });
         }
     }
@@ -400,6 +408,21 @@ fn record(ctx: &StageCtx, e: &Entry, raw_path: Option<String>) -> Result<(ItemId
                 json!({ "item": e.sid }),
             )?;
             ItemStatus::Failed { error: msg.clone() }
+        }
+        Ok(_) if e.positional => {
+            ctx.issue(
+                IssueKind::UnmappedField,
+                Severity::Warning,
+                Some(id),
+                format!(
+                    "node without id; id is positional ({}) and may change between runs",
+                    e.sid
+                ),
+                json!({ "item": e.sid }),
+            )?;
+            ItemStatus::Partial {
+                reason: "node without id; positional id".into(),
+            }
         }
         Ok(_) if e.dup => {
             ctx.issue(

@@ -30,8 +30,9 @@ struct Job {
 pub(super) async fn load(l: &mut Loader<'_>) -> Result<()> {
     let store = l.ctx.project.store();
     // Media rows are hash-keyed (connector "media"), not the adapter's: load them all.
-    let items: Vec<Media> = store
-        .items_decodable::<Media>(KIND)?
+    let items: Vec<Media> = l
+        .ctx
+        .canonical_items::<Media>(KIND, "media")?
         .into_iter()
         .map(|(.., m)| m)
         .collect();

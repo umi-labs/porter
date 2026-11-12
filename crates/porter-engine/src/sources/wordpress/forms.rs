@@ -416,7 +416,7 @@ pub(crate) fn ninja(f: &Value, html: &mut HtmlCtx) -> Mapped {
 pub(crate) fn submission(v: &Value, form: ItemId, inputs: &HashMap<String, String>) -> Submission {
     let created = NaiveDateTime::parse_from_str(&s(v, "date"), "%Y-%m-%d %H:%M:%S")
         .map(|d| d.and_utc())
-        .unwrap_or_default();
+        .ok();
     let mut values: IndexMap<String, String> = IndexMap::new();
     if let Value::Object(fields) = &v["fields"] {
         for (k, x) in fields {
@@ -501,11 +501,18 @@ pub(crate) fn write(out: &mut Out, raw: &Raw) -> Result<bool> {
         );
         let form = canon(ItemKind::Form, &format!("form:{kind}:{fid}"), None).0;
         let known = inputs.get(&format!("{kind}:{fid}"));
-        out.put(
-            ItemKind::Submission,
-            &c,
-            &submission(v, form, known.unwrap_or(&none)),
-        )?;
+        let sub = submission(v, form, known.unwrap_or(&none));
+        if sub.created.is_none() {
+            let date = s(v, "date");
+            out.issue(
+                IssueKind::SchemaMismatch,
+                Severity::Info,
+                c.0,
+                format!("entry {sid}: date `{date}` doesn't parse; loaded without one"),
+                json!({ "date": date }),
+            )?;
+        }
+        out.put(ItemKind::Submission, &c, &sub)?;
         let st = if known.is_some() {
             ItemStatus::Done
         } else {

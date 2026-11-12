@@ -92,6 +92,43 @@ impl StageCtx {
         Ok(())
     }
 
+    /// Items of `kind` written by `connector` (the source adapter's canonical rows, or
+    /// `media`). A row that doesn't decode as `T` gets Failed `undecodable row` and an
+    /// error issue rather than being left out.
+    pub fn canonical_items<T: serde::de::DeserializeOwned>(
+        &self,
+        kind: ItemKind,
+        connector: &str,
+    ) -> Result<Vec<(ItemId, porter_model::SourceRef, T)>> {
+        let (ok, bad) = self
+            .project
+            .store()
+            .items_decodable_with_failures::<T>(kind)?;
+        for (id, _, e) in bad.into_iter().filter(|(_, s, _)| s.connector == connector) {
+            self.issue(
+                IssueKind::SchemaMismatch,
+                Severity::Error,
+                Some(id),
+                format!(
+                    "stored {} row can't be read: {e} (re-run normalise)",
+                    kind.as_str()
+                ),
+                serde_json::json!({"kind": kind}),
+            )?;
+            self.item_status(
+                id,
+                kind,
+                ItemStatus::Failed {
+                    error: "undecodable row".into(),
+                },
+            )?;
+        }
+        Ok(ok
+            .into_iter()
+            .filter(|(_, s, _)| s.connector == connector)
+            .collect())
+    }
+
     pub fn progress(&self, done: u64, total: Option<u64>, label: impl Into<String>) {
         self.events.emit(Event::Progress {
             stage: self.stage,
@@ -151,6 +188,9 @@ pub trait Connector: Send + Sync {
 }
 
 pub trait Source: Send + Sync {
+    /// The connector name normalise writes canonical items under. Load and verify read
+    /// canonical items by `source.adapter`, so this must equal the registry name.
+    fn canonical(&self) -> &'static str;
     fn connectors(&self, cfg: &ProjectConfig) -> Result<Vec<Box<dyn Connector>>>;
     fn normalise(&self, ctx: &StageCtx) -> Result<()>;
 }

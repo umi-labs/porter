@@ -479,15 +479,44 @@ impl Out<'_> {
     }
 
     /// Soft-deletes canonical items of `kinds` an earlier run made and this one didn't, so
-    /// they stop answering lookups, with `Skipped { "no longer in the source" }`.
+    /// they stop answering lookups, with `Skipped { "no longer in the source" }`. When a
+    /// connector row that made it last run is still there but failed extract, the item
+    /// wasn't removed, only not read: it says so instead.
     fn drop_stale(&mut self, kinds: &[ItemKind]) -> Result<()> {
-        for (id, kind, connector) in self.store.item_rows()? {
+        // Last run's provenance (row -> item); this run's is written at the end.
+        let prev: BTreeMap<ItemId, ItemId> = std::fs::read(
+            self.ctx
+                .project
+                .raw_dir("normalise")
+                .join("provenance.json"),
+        )
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+        let rows = self.store.item_rows()?;
+        let live: HashSet<ItemId> = rows.iter().map(|(id, ..)| *id).collect();
+        for (id, kind, connector) in rows {
             let kind: ItemKind = serde_json::from_value(json!(kind))?;
             if connector != CONNECTOR || !kinds.contains(&kind) || self.written.contains(&id) {
                 continue;
             }
+            let failed_extract = prev
+                .iter()
+                .filter(|(_, item)| **item == id)
+                .any(|(row, _)| {
+                    live.contains(row)
+                        && matches!(
+                            self.store.status(porter_model::Stage::Extract, *row),
+                            Ok(Some(ItemStatus::Failed { .. }))
+                        )
+                });
             self.store.soft_delete(id)?;
-            let reason = "no longer in the source".to_string();
+            let reason = if failed_extract {
+                crate::verify::NOT_PRODUCED
+            } else {
+                "no longer in the source"
+            }
+            .to_string();
             self.status(kind, id, ItemStatus::Skipped { reason }, [])?;
         }
         Ok(())

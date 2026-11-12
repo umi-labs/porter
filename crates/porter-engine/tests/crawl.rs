@@ -528,3 +528,69 @@ fn live_uri(p: &Project) -> String {
     let u = url::Url::parse(&routes(p)[0].url).unwrap();
     u.origin().ascii_serialization()
 }
+
+#[tokio::test]
+async fn page_over_cap_raises_access_gap() {
+    let s = MockServer::start().await;
+    sitemap(&s, &["/", "/big"]).await;
+    page(&s, "/", "<title>Home</title>").await;
+    let big = format!("<title>Big</title>{}", "x".repeat(20 * 1024 * 1024 + 1));
+    page(&s, "/big", &big).await;
+    let (_d, p) = run(cfg(&s.uri(), &[]), Stage::Analyse, false).await;
+    let issues = p
+        .store()
+        .issues(&porter_engine::store::IssueFilter::default())
+        .unwrap();
+    let gaps: Vec<_> = issues
+        .iter()
+        .filter(|i| {
+            i.kind == porter_model::IssueKind::AccessGap && i.message.contains("over 20 MB")
+        })
+        .collect();
+    assert_eq!(gaps.len(), 1, "{issues:#?}");
+    assert!(gaps[0].message.ends_with("/big"), "{}", gaps[0].message);
+    assert_eq!(gaps[0].severity, porter_model::Severity::Warning);
+}
+
+/// A snapshot's media index names files by content hash; anything else (an absolute or
+/// `..` path) is refused, never read.
+#[tokio::test]
+async fn snapshot_media_hash_must_be_a_hash() {
+    let s = MockServer::start().await;
+    page(&s, "/", r#"<title>Home</title><img src="/a.jpg">"#).await;
+    Mock::given(method("GET"))
+        .and(path("/a.jpg"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("img", "image/jpeg"))
+        .mount(&s)
+        .await;
+    let (_live_dir, live) = run(cfg(&format!("{}/", s.uri()), &[]), Stage::Extract, false).await;
+    let snap = tempfile::tempdir().unwrap();
+    copy_dir(&live.raw_dir("crawl"), &snap.path().join("crawl"));
+    copy_dir(&live.dir().join("media"), &snap.path().join("media"));
+    let outside = tempfile::tempdir().unwrap();
+    let secret = outside.path().join("secret.txt");
+    std::fs::write(&secret, "secret").unwrap();
+    let a = format!("{}/a.jpg", live_uri(&live));
+    std::fs::write(
+        snap.path().join("crawl/media.ndjson"),
+        serde_json::json!({"url": a, "hash": secret.display().to_string()}).to_string(),
+    )
+    .unwrap();
+    drop(s);
+    let url = url::Url::from_directory_path(snap.path())
+        .unwrap()
+        .to_string();
+    let (_d, p) = run(cfg(&url, &[]), Stage::Extract, false).await;
+    assert!(p.store().media_by_url(&a).unwrap().is_none());
+    let issues = p
+        .store()
+        .issues(&porter_engine::store::IssueFilter::default())
+        .unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == porter_model::Severity::Warning
+                && i.message.contains("invalid hash")),
+        "{issues:#?}"
+    );
+}

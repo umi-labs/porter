@@ -62,7 +62,9 @@ pub struct Form {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Submission {
     pub form: ItemId,
-    pub created: DateTime<Utc>,
+    /// None when the source's date is missing or doesn't parse.
+    #[serde(default)]
+    pub created: Option<DateTime<Utc>>,
     pub values: IndexMap<String, String>,
 }
 

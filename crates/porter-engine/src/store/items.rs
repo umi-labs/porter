@@ -97,6 +97,27 @@ impl Store {
             .collect())
     }
 
+    /// Like `items_decodable`, but also returns the rows that are not a `T`, with the
+    /// decode error, so a stage can give each one a status instead of losing it.
+    #[allow(clippy::type_complexity)]
+    pub fn items_decodable_with_failures<T: DeserializeOwned>(
+        &self,
+        kind: ItemKind,
+    ) -> Result<(
+        Vec<(ItemId, SourceRef, T)>,
+        Vec<(ItemId, SourceRef, String)>,
+    )> {
+        let mut ok = vec![];
+        let mut bad = vec![];
+        for (id, src, v) in self.items::<serde_json::Value>(kind)? {
+            match serde_json::from_value(v) {
+                Ok(t) => ok.push((id, src, t)),
+                Err(e) => bad.push((id, src, e.to_string())),
+            }
+        }
+        Ok((ok, bad))
+    }
+
     pub fn set_status(
         &self,
         run: RunId,

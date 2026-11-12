@@ -405,6 +405,8 @@ struct Fetched {
     error: Option<String>,
     /// A hop left the site: recorded as a redirect, never fetched.
     off_host: bool,
+    /// HTML over `PAGE_CAP`: not parsed.
+    oversize: bool,
 }
 
 /// Follows redirects by hand so every hop is recorded. `Err` is a network failure.
@@ -436,6 +438,7 @@ async fn fetch(client: &Client, start: &Url) -> Result<Fetched> {
             html,
             error: error.map(str::to_string),
             off_host: false,
+            oversize: false,
         };
         if let Some(next) = next {
             hops.push(Hop {
@@ -465,16 +468,18 @@ async fn fetch(client: &Client, start: &Url) -> Result<Fetched> {
             .get(CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .is_none_or(|t| t.contains("html"));
-        // ponytail: a page over the cap is treated as non-HTML (not parsed).
-        let html = if is_html {
-            read_capped(resp, PAGE_CAP)
-                .await?
-                .ok()
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
+        // A page over the cap is not parsed; the caller raises an access gap for it.
+        let (html, oversize) = if is_html {
+            match read_capped(resp, PAGE_CAP).await? {
+                Ok(b) => (Some(String::from_utf8_lossy(&b).into_owned()), false),
+                Err(_) => (None, true),
+            }
         } else {
-            None
+            (None, false)
         };
-        return Ok(done(cur, html, None, hops));
+        let mut f = done(cur, html, None, hops);
+        f.oversize = oversize;
+        return Ok(f);
     }
 }
 
@@ -702,6 +707,15 @@ async fn visit(sh: Arc<Shared>, url: Url) -> Result<Option<Outcome>> {
         .as_deref()
         .map(|h| parse_page(h, &f.last, &f.headers, &sh.css_url, &sh.opts.keep_query));
     record(ctx, &url, &f, parsed.as_ref())?;
+    if f.oversize {
+        ctx.issue(
+            IssueKind::AccessGap,
+            Severity::Warning,
+            Some(route_id(&f.last).0),
+            format!("page over 20 MB not parsed: {}", f.last),
+            serde_json::json!({"url": f.last.to_string(), "cap": PAGE_CAP}),
+        )?;
+    }
     if sh.extract && (!f.hops.is_empty() || f.error.is_some()) {
         log_hops(ctx, &url, &f)?;
     }
@@ -941,6 +955,7 @@ fn replayed(l: LoggedFetch) -> Option<(Url, Fetched)> {
         html: None,
         error: l.error,
         off_host: l.off_host,
+        oversize: false,
     };
     Some((Url::parse(&l.url).ok()?, f))
 }
@@ -1110,6 +1125,11 @@ fn write_detect(
     Ok(())
 }
 
+/// 64 lowercase hex characters: a content hash as the media store names files.
+fn is_sha256_hex(h: &str) -> bool {
+    h.len() == 64 && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// The crawl replayed from a saved snapshot (see the module docs); no network. Each saved page
 /// becomes its route with the status it had; in extract its HTML is saved and the media it
 /// references are copied from the snapshot's `media/`.
@@ -1205,10 +1225,20 @@ fn snapshot(ctx: &StageCtx, opts: &Opts, extract: bool) -> Result<()> {
                 if !ctx.refresh && store.media_by_url(m)?.is_some() {
                     continue;
                 }
-                let file = index
-                    .get(m)
-                    .filter(|h| h.len() > 4 && h.is_ascii())
-                    .map(|h| root.join("media").join(&h[..2]).join(&h[2..4]).join(h));
+                // Only a SHA-256 hex name is joined into a path: anything else in the
+                // index could point outside the snapshot.
+                let hash = index.get(m);
+                if let Some(h) = hash.filter(|h| !is_sha256_hex(h)) {
+                    ctx.issue(
+                        IssueKind::MissingMedia,
+                        Severity::Warning,
+                        Some(id),
+                        format!("{m}: snapshot media index has an invalid hash, skipped"),
+                        serde_json::json!({ "url": m, "hash": h }),
+                    )?;
+                    continue;
+                }
+                let file = hash.map(|h| root.join("media").join(&h[..2]).join(&h[2..4]).join(h));
                 match file.and_then(|f| std::fs::read(f).ok()) {
                     Some(bytes) => {
                         let name = m

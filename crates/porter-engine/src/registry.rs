@@ -27,3 +27,16 @@ pub fn destination(name: &str, cfg: &ProjectConfig) -> Option<Box<dyn Destinatio
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// Load and verify find canonical items by `source.adapter`: a source whose normalise
+    /// wrote them under another connector name would load nothing, silently.
+    #[test]
+    fn canonical_connector_is_the_adapter_name() {
+        for name in super::source_names() {
+            let src = super::source(name).unwrap_or_else(|| panic!("{name} not registered"));
+            assert_eq!(src.canonical(), *name);
+        }
+    }
+}

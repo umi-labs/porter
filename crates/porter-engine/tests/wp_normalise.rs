@@ -773,3 +773,144 @@ async fn internal_types_are_skipped() {
     let json = serde_json::to_string(&doc(&fx, 27).fields["content"]).unwrap();
     assert!(json.contains("Reusable text"), "{json}");
 }
+
+/// A symlink in the uploads folder is never followed: the attachment is missing media.
+#[tokio::test]
+async fn uploads_symlink_not_followed() {
+    let outside = tempfile::tempdir().unwrap();
+    let secret = outside.path().join("secret");
+    std::fs::write(&secret, b"secret-bytes").unwrap();
+    let fx = setup_full(
+        &[],
+        |_| {},
+        false,
+        |cfg| {
+            let Some(ConnectorConfig::WpDb {
+                wp_root: Some(root),
+                ..
+            }) = cfg.connectors.get(1)
+            else {
+                panic!("no wp-db connector")
+            };
+            let a = root.join("wp-content/uploads/2024/03/a.jpg");
+            std::fs::remove_file(&a).unwrap();
+            std::os::unix::fs::symlink(&secret, &a).unwrap();
+        },
+    )
+    .await;
+    let about = doc(&fx, 20);
+    let FieldValue::List(rows) = &about.fields["acf.slides"] else {
+        panic!("{:?}", about.fields["acf.slides"]);
+    };
+    let FieldValue::Object(row) = &rows[0] else {
+        panic!("{rows:?}");
+    };
+    assert!(
+        !matches!(row.get("image"), Some(FieldValue::Media(_))),
+        "{row:?}"
+    );
+    let missing = issues(&fx, IssueKind::MissingMedia);
+    assert!(
+        missing.iter().any(
+            |i| i.message.contains("2024/03/a.jpg") && i.message.contains("not a regular file")
+        ),
+        "{missing:#?}"
+    );
+}
+
+/// An entry whose date doesn't parse keeps no date (never 1970) and says so.
+#[tokio::test]
+async fn submission_bad_date_is_none_with_issue() {
+    let fx = setup_with(&[], |raw| {
+        std::fs::write(
+            raw.join("wp-db/submissions.ndjson"),
+            "{\"source\":\"gf\",\"id\":7,\"form_id\":3,\"date\":\"garbage\",\"fields\":{\"1\":\"x\"}}\n",
+        )
+        .unwrap();
+    })
+    .await;
+    let id = canon(ItemKind::Submission, "submission:gf:7");
+    let sub: Value =
+        fx.p.store()
+            .get_item(id)
+            .unwrap()
+            .expect("submission stored");
+    assert!(sub["created"].is_null(), "{sub}");
+    let all =
+        fx.p.store()
+            .issues(&IssueFilter {
+                stage: Some(Stage::Normalise),
+                ..Default::default()
+            })
+            .unwrap();
+    assert!(
+        all.iter().any(|i| i.item == Some(id)
+            && i.severity == Severity::Info
+            && i.message.contains("garbage")),
+        "{all:#?}"
+    );
+}
+
+/// A post whose row failed extract this run wasn't removed from the source: the stale
+/// canonical item says so instead of "no longer in the source".
+#[tokio::test]
+async fn failed_extract_is_not_removal() {
+    let fx = setup(&[]).await;
+    let five = canon(ItemKind::Document, "post:5");
+    let path = fx.p.raw_dir("wp-db").join("export.json");
+    let mut v = export();
+    v["posts"].as_array_mut().unwrap().retain(|p| p["id"] != 5);
+    write_json(&path, &v);
+    let row = ItemId::new(
+        ItemKind::Document,
+        &SourceRef {
+            connector: "wp-db".into(),
+            source_id: "post:5".into(),
+            url: None,
+        },
+    );
+    let s = fx.p.store();
+    let run = s.begin_run(Stage::Extract).unwrap();
+    s.set_status(
+        run,
+        Stage::Extract,
+        row,
+        &ItemStatus::Failed {
+            error: "unreadable".into(),
+        },
+    )
+    .unwrap();
+    normalise(&fx).await;
+    assert_eq!(
+        s.status(Stage::Normalise, five).unwrap(),
+        Some(ItemStatus::Skipped {
+            reason: "not produced this run (see extract issues)".into()
+        })
+    );
+}
+
+/// The media store's URL table says which file a URL is now; a media item's own variants
+/// list keeps every URL it ever had, so it must not decide.
+#[tokio::test]
+async fn media_index_follows_the_url_table() {
+    let fx = setup(&[]).await;
+    let s = fx.p.store();
+    let x = "https://example.com/wp-content/uploads/2024/05/big-scaled.jpg";
+    let a = s.media_by_url(x).unwrap().unwrap();
+    // The file at x changed (a later extract), then changed back.
+    let b = s
+        .put_media_bytes(b"big-bytes-v2", x, "big-scaled.jpg")
+        .unwrap()
+        .id;
+    normalise(&fx).await;
+    assert_eq!(
+        s.put_media_bytes(b"big-bytes", x, "big-scaled.jpg")
+            .unwrap()
+            .id,
+        a
+    );
+    assert_ne!(a, b);
+    normalise(&fx).await;
+    let big = "https://example.com/wp-content/uploads/2024/05/big.jpg";
+    assert_eq!(s.media_by_url(big).unwrap(), Some(a));
+}

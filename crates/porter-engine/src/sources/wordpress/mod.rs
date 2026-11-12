@@ -43,6 +43,10 @@ fn rank(c: &ConnectorConfig) -> Result<(u8, Box<dyn Connector>)> {
 }
 
 impl Source for WordPressSource {
+    fn canonical(&self) -> &'static str {
+        normalise::CONNECTOR
+    }
+
     fn connectors(&self, cfg: &ProjectConfig) -> Result<Vec<Box<dyn Connector>>> {
         let mut v = cfg
             .connectors

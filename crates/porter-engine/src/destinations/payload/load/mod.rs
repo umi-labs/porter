@@ -14,6 +14,7 @@ use super::lexical::{DestRef, IdMap};
 use super::ts::{CollectionSchema, DestField, DestSchema, read_payload_config};
 use crate::html::PendingIssue;
 use crate::stage::StageCtx;
+use crate::verify::{NOT_PRODUCED, REMOVED_FROM_SOURCE};
 use anyhow::Result;
 use porter_model::{IssueKind, ItemId, ItemKind, ItemStatus, Severity, SourceRef};
 use serde::de::DeserializeOwned;
@@ -140,16 +141,32 @@ fn removed(l: &Loader) -> Result<()> {
             Value::String(s) => format!("{collection}/{s}"),
             v => format!("{collection}/{v}"),
         };
+        // Normalise says whether it left the source or just wasn't read this run.
+        let not_read = matches!(
+            l.ctx.project.store().status(porter_model::Stage::Normalise, item)?,
+            Some(ItemStatus::Skipped { reason }) if reason == NOT_PRODUCED
+        );
+        let (message, reason) = if not_read {
+            (
+                format!("{NOT_PRODUCED}; still in destination at {at} as an earlier load wrote it"),
+                NOT_PRODUCED,
+            )
+        } else {
+            (
+                format!(
+                    "removed from source; still in destination at {at} — unpublish or delete by hand"
+                ),
+                REMOVED_FROM_SOURCE,
+            )
+        };
         l.ctx.issue(
             IssueKind::SchemaMismatch,
             Severity::Warning,
             Some(item),
-            format!(
-                "removed from source; still in destination at {at} — unpublish or delete by hand"
-            ),
+            message,
             json!({"collection": collection, "id": id}),
         )?;
-        l.skip(item, kind, crate::verify::REMOVED_FROM_SOURCE)?;
+        l.skip(item, kind, reason)?;
     }
     Ok(())
 }
@@ -179,15 +196,8 @@ impl Loader<'_> {
     /// Normalised items of `kind` from the source adapter (connector rows and other
     /// connectors' data are not loadable).
     fn items<T: DeserializeOwned>(&self, kind: ItemKind) -> Result<Vec<(ItemId, SourceRef, T)>> {
-        let adapter = &self.ctx.config.source.adapter;
-        Ok(self
-            .ctx
-            .project
-            .store()
-            .items_decodable::<T>(kind)?
-            .into_iter()
-            .filter(|(_, s, _)| &s.connector == adapter)
-            .collect())
+        self.ctx
+            .canonical_items(kind, &self.ctx.config.source.adapter)
     }
 
     fn coll(&self, name: &str) -> Option<&CollectionSchema> {

@@ -127,6 +127,20 @@ impl Store {
         Ok(replaced)
     }
 
+    /// Every live `(url, media item)` in the URL table: what each URL is now.
+    pub fn media_variant_rows(&self) -> Result<Vec<(String, ItemId)>> {
+        let conn = self.conn();
+        let mut stmt =
+            conn.prepare("SELECT url, media_id FROM media_variants WHERE deleted_at IS NULL")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (url, id) = row?;
+            out.push((url, id.parse()?));
+        }
+        Ok(out)
+    }
+
     pub fn media_by_url(&self, url: &str) -> Result<Option<ItemId>> {
         let Some(key) = normalise_url(url, None) else {
             return Ok(None);

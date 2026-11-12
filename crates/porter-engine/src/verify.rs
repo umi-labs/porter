@@ -31,6 +31,9 @@ use tokio::task::JoinSet;
 
 /// Load's Skipped reason for an item gone from the source but still in the destination.
 pub const REMOVED_FROM_SOURCE: &str = "removed from source";
+/// Normalise's (and then load's) Skipped reason for an item that is still in the source
+/// but wasn't read this run, so normalise didn't produce it.
+pub const NOT_PRODUCED: &str = "not produced this run (see extract issues)";
 
 const USER_AGENT: &str = "porter/2.0 (+https://github.com/umi-labs/porter)";
 const CONCURRENCY: usize = 8;
@@ -121,13 +124,10 @@ pub async fn run(ctx: &StageCtx, dest: &dyn Destination) -> Result<()> {
             .map(|(i, c, v)| (i, (c, v)))
             .collect(),
     );
-    // Gone from the source but left in the destination (load flagged each one).
+    // Gone from the source model but left in the destination (load flagged each one).
     let mut removed: HashMap<String, u64> = HashMap::new();
-    for (i, c, _) in store.dest_ids()? {
-        if matches!(load.get(&i), Some(ItemStatus::Skipped { reason }) if reason == REMOVED_FROM_SOURCE)
-        {
-            *removed.entry(c).or_default() += 1;
-        }
+    for (_, _, c, _) in store.removed_with_dest(&ctx.config.source.adapter)? {
+        *removed.entry(c).or_default() += 1;
     }
     let docs: Vec<Document> = canonical(ctx, ItemKind::Document)?;
     let mut checks = Checks::default();
@@ -154,26 +154,18 @@ pub async fn run(ctx: &StageCtx, dest: &dyn Destination) -> Result<()> {
 }
 
 /// Normalised items of `kind` from the source adapter, as load reads them.
+/// Undecodable rows get Failed (see `StageCtx::canonical_items`).
 fn canonical<T: DeserializeOwned>(ctx: &StageCtx, kind: ItemKind) -> Result<Vec<T>> {
-    let adapter = &ctx.config.source.adapter;
-    Ok(ctx
-        .project
-        .store()
-        .items_decodable::<T>(kind)?
+    Ok(canonical_ids(ctx, kind)?
         .into_iter()
-        .filter(|(_, s, _)| &s.connector == adapter)
-        .map(|(.., t)| t)
+        .map(|(_, t)| t)
         .collect())
 }
 
 fn canonical_ids<T: DeserializeOwned>(ctx: &StageCtx, kind: ItemKind) -> Result<Vec<(ItemId, T)>> {
-    let adapter = &ctx.config.source.adapter;
     Ok(ctx
-        .project
-        .store()
-        .items_decodable::<T>(kind)?
+        .canonical_items::<T>(kind, &ctx.config.source.adapter)?
         .into_iter()
-        .filter(|(_, s, _)| &s.connector == adapter)
         .map(|(id, _, t)| (id, t))
         .collect())
 }
@@ -204,9 +196,7 @@ async fn counts(
     }
     let media_coll = &ctx.config.mapping.media.collection;
     let media: Vec<Media> = ctx
-        .project
-        .store()
-        .items_decodable::<Media>(ItemKind::Media)?
+        .canonical_items::<Media>(ItemKind::Media, "media")?
         .into_iter()
         .map(|(.., m)| m)
         .collect();
@@ -234,7 +224,7 @@ async fn counts(
             let gone = removed.get(&collection).copied().unwrap_or(0);
             let why = if gone > 0 {
                 format!(
-                    "; {gone} removed from source and still in the destination (see load's \"removed from source\" warnings)"
+                    "; {gone} gone from the source model (removed from the source, or not read this run) and still in the destination: see load's warnings"
                 )
             } else {
                 String::new()

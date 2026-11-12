@@ -374,3 +374,25 @@ async fn umbraco_local_fixture() {
             .unwrap();
     assert!(!docs.is_empty(), "should have read at least one document");
 }
+
+#[tokio::test]
+async fn umbraco_idless_node_warns_positional_id() {
+    let fx = project(
+        &[(
+            "n.json",
+            json!([
+                { "id": 1, "name": "Home", "contentTypeAlias": "home" },
+                { "name": "No id", "contentTypeAlias": "page" },
+            ]),
+        )],
+        vec![],
+    );
+    stage(&fx, Stage::Extract).await.unwrap();
+    let warned: Vec<_> = issues(&fx, IssueKind::UnmappedField)
+        .into_iter()
+        .filter(|i| i.message.contains("node without id"))
+        .collect();
+    assert_eq!(warned.len(), 1, "{warned:#?}");
+    assert_eq!(warned[0].item, Some(raw("item-2")));
+    assert_eq!(warned[0].severity, porter_model::Severity::Warning);
+}

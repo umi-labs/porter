@@ -123,8 +123,10 @@ fn exact_case(
     Ok(())
 }
 
-/// Every stored file's variant URLs, by URL key, read once: a miss in the store's own lookup
-/// scans the table, which thousands of attachments can't afford.
+/// Every stored file's variant URLs, by URL key, read once from the store's URL table (the
+/// authority on which file a URL is now; an item's own `variants` keeps URLs it no longer
+/// owns): a miss in the store's own lookup scans the table, which thousands of attachments
+/// can't afford.
 struct Known {
     exact: HashMap<String, ItemId>,
     /// Lower-cased key → item, or `None` when two items share it (ambiguous).
@@ -137,12 +139,8 @@ impl Known {
             exact: HashMap::new(),
             folded: HashMap::new(),
         };
-        for (id, src, m) in store.items_decodable::<Media>(ItemKind::Media)? {
-            if src.connector == "media" {
-                for v in &m.variants {
-                    k.add(v, id);
-                }
-            }
+        for (url, id) in store.media_variant_rows()? {
+            k.add(&url, id);
         }
         Ok(k)
     }
@@ -182,6 +180,8 @@ pub(crate) fn attachments(
     let mut out = HashMap::new();
     let mut known = Known::load(store)?;
     let mut listings = HashMap::new();
+    // Attachment -> why its uploads file wasn't used: the file found under another case,
+    // or "" when it isn't a regular file inside uploads.
     let mut case_miss: HashMap<u64, String> = HashMap::new();
     // Media item -> the attachments that resolved to it, with their own alt, title and folder.
     type Own = (u64, Option<String>, String, Option<String>);
@@ -220,7 +220,13 @@ pub(crate) fn attachments(
             if let Err(Some(other)) = &exact {
                 case_miss.insert(p.id, other.clone());
             }
-            if let (Ok(()), Ok(bytes)) = (exact, std::fs::read(&path)) {
+            // Only a regular file inside the uploads folder is read: a symlink could
+            // point anywhere on this machine.
+            let regular = exact.is_err() || inside_regular(root, &path);
+            if !regular {
+                case_miss.insert(p.id, String::new());
+            }
+            if let (true, Ok(()), Ok(bytes)) = (regular, exact, std::fs::read(&path)) {
                 let url = p.link.clone().or_else(|| urls.first().cloned());
                 let name = file.rsplit('/').next().unwrap_or(&file);
                 found = Some(
@@ -237,6 +243,10 @@ pub(crate) fn attachments(
         let (canon_id, _) = canon(ItemKind::Document, &format!("post:{}", p.id), None);
         let Some(id) = found else {
             let message = match case_miss.get(&p.id) {
+                Some(other) if other.is_empty() => format!(
+                    "attachment {}: {file} in uploads is not a regular file (symlink?): not read",
+                    p.id
+                ),
                 Some(other) => format!(
                     "attachment {}: file {file} not found with exact case (found {other})",
                     p.id
@@ -336,6 +346,16 @@ pub(crate) fn attachments(
         )?;
     }
     Ok(out)
+}
+
+/// `path` is a regular file (not a symlink) and, with every link resolved, inside `root`.
+fn inside_regular(root: &Path, path: &Path) -> bool {
+    let file = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file());
+    let inside = match (std::fs::canonicalize(root), std::fs::canonicalize(path)) {
+        (Ok(r), Ok(p)) => p.starts_with(r),
+        _ => false,
+    };
+    file && inside
 }
 
 #[cfg(test)]

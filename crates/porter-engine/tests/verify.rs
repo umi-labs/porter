@@ -743,7 +743,7 @@ async fn count_mismatch_points_at_removed_items() {
     let counts = f.issues(IssueKind::SchemaMismatch);
     assert_eq!(counts.len(), 1, "{counts:#?}");
     assert!(
-        counts[0].message.contains("1 removed from source")
+        counts[0].message.contains("1 gone from the source model")
             && counts[0].message.contains("still in the destination"),
         "{}",
         counts[0].message
@@ -784,5 +784,23 @@ async fn every_document_gets_a_verify_status() {
     assert!(
         html.contains("1 not loaded") && html.contains("1 not mapped"),
         "{html}"
+    );
+}
+
+#[tokio::test]
+async fn undecodable_row_fails_verify() {
+    let fake = Fake::default();
+    let s = payload(&fake).await;
+    let f = fx(&s.uri());
+    f.p.store()
+        .put_item(ItemKind::Document, did("9"), &src("9"), &json!({"nope": 1}))
+        .unwrap();
+    let sum = f.verify().await;
+    assert_eq!(exit_code(&sum), 2, "{sum:?}");
+    assert_eq!(
+        f.status(did("9")),
+        Some(ItemStatus::Failed {
+            error: "undecodable row".into()
+        })
     );
 }

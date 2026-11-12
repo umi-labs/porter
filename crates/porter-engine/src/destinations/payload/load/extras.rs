@@ -343,8 +343,10 @@ pub(super) async fn submissions(l: &mut Loader<'_>) -> Result<()> {
             .iter()
             .map(|(field, value)| json!({"field": field, "value": value}))
             .collect();
-        let data = json!({"form": form.id, "submissionData": rows,
-            "createdAt": s.created.to_rfc3339()});
+        let mut data = json!({"form": form.id, "submissionData": rows});
+        if let Some(c) = s.created {
+            data["createdAt"] = json!(c.to_rfc3339());
+        }
         put(
             l,
             id,

@@ -1379,3 +1379,70 @@ async fn removed_from_source_is_flagged_not_deleted() {
         &fake.log()[before..]
     );
 }
+
+#[tokio::test]
+async fn undecodable_row_fails_not_vanishes() {
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let f = fx(&s.uri());
+    f.put(&doc("page", "post:1", "a", None));
+    // A canonical row that is not a Document (corrupt or from an older porter).
+    f.p.store()
+        .put_item(
+            ItemKind::Document,
+            did("post:2"),
+            &src("post:2"),
+            &json!({"nope": 1}),
+        )
+        .unwrap();
+    let sum = f.load(true, CancellationToken::new()).await;
+    assert_eq!(exit_code(&sum), 2, "{sum:?}");
+    assert_eq!(
+        f.status(did("post:2")),
+        Some(ItemStatus::Failed {
+            error: "undecodable row".into()
+        })
+    );
+    assert!(!issues_of(&f, did("post:2")).is_empty());
+    assert_eq!(f.status(did("post:1")), Some(ItemStatus::Done));
+}
+
+#[tokio::test]
+async fn not_read_this_run_is_not_called_removed() {
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let f = fx(&s.uri());
+    f.put(&doc("page", "post:1", "a", None));
+    f.load(true, CancellationToken::new()).await;
+    let st = f.p.store();
+    st.soft_delete(did("post:1")).unwrap();
+    let run = st.begin_run(Stage::Normalise).unwrap();
+    let reason = "not produced this run (see extract issues)".to_string();
+    st.set_status(
+        run,
+        Stage::Normalise,
+        did("post:1"),
+        &ItemStatus::Skipped {
+            reason: reason.clone(),
+        },
+    )
+    .unwrap();
+    f.load(true, CancellationToken::new()).await;
+    assert_eq!(
+        f.status(did("post:1")),
+        Some(ItemStatus::Skipped { reason })
+    );
+    let issues = issues_of(&f, did("post:1"));
+    assert!(
+        issues.iter().any(
+            |i| i.message.starts_with("not produced this run") && i.message.contains("pages/1")
+        ),
+        "{issues:#?}"
+    );
+    assert!(
+        !issues
+            .iter()
+            .any(|i| i.message.contains("removed from source")),
+        "{issues:#?}"
+    );
+}
