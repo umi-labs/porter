@@ -79,17 +79,26 @@ impl HtmlCtx<'_> {
     /// media; an internal link that matches nothing stays a URL with an `unresolved-link`
     /// warning.
     pub fn link_target(&mut self, href: &str) -> LinkTarget {
+        self.link(href).0
+    }
+
+    /// `link_target`, plus the `#fragment` when the link resolved to a document or media.
+    pub fn link(&mut self, href: &str) -> (LinkTarget, Option<String>) {
         let h = clean_href(href);
         if h.is_empty() || h.starts_with('#') || !self.is_internal(&h) {
-            return LinkTarget::Url(h);
+            return (LinkTarget::Url(h), None);
         }
+        let fragment = h
+            .split_once('#')
+            .map(|(_, f)| f.to_string())
+            .filter(|f| !f.is_empty());
         let found = match self.absolute(&h) {
             Some(abs) => self.store.lookup_url(&abs),
             None => Ok(None),
         };
         match found {
-            Ok(Some(RouteTarget::Document(id))) => LinkTarget::Doc(id),
-            Ok(Some(RouteTarget::Media(id))) => LinkTarget::Media(id),
+            Ok(Some(RouteTarget::Document(id))) => (LinkTarget::Doc(id), fragment),
+            Ok(Some(RouteTarget::Media(id))) => (LinkTarget::Media(id), fragment),
             other => {
                 let why = match other {
                     Err(e) => format!("lookup failed: {e:#}"),
@@ -102,7 +111,7 @@ impl HtmlCtx<'_> {
                     format!("internal link {h} does not resolve: {why}"),
                     json!({ "href": h }),
                 );
-                LinkTarget::Url(h)
+                (LinkTarget::Url(h), None)
             }
         }
     }
@@ -154,20 +163,71 @@ fn host_key(abs: &str) -> Option<String> {
 /// No spaces in URLs (destinations reject them); phone numbers lose theirs.
 fn clean_href(href: &str) -> String {
     let h = href.trim();
-    if h.len() >= 4 && h[..4].eq_ignore_ascii_case("tel:") {
+    if h.get(..4).is_some_and(|p| p.eq_ignore_ascii_case("tel:")) {
         h.chars().filter(|c| !c.is_whitespace()).collect()
     } else {
         h.replace(char::is_whitespace, "%20")
     }
 }
 
-/// Decodes HTML character references (`&amp;`, `&#8217;`, ...).
+static ENTITY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"&(?:#([0-9]{1,7})|#[xX]([0-9a-fA-F]{1,6})|([A-Za-z][A-Za-z0-9]{1,31}));")
+        .expect("valid regex")
+});
+
+/// Decodes well-formed character references (`&amp;`, `&#8217;`, `&#x2019;`). The
+/// semicolon is required, so a query string like `?a=1&region=uk` is left alone.
 pub fn decode_entities(s: &str) -> String {
     if !s.contains('&') {
         return s.to_string();
     }
-    let frag = Html::parse_fragment(&format!("<p>{}</p>", s.replace('<', "&lt;")));
-    frag.root_element().text().collect()
+    ENTITY
+        .replace_all(s, |c: &regex::Captures| {
+            let num = c.get(1).and_then(|d| d.as_str().parse().ok()).or_else(|| {
+                c.get(2)
+                    .and_then(|h| u32::from_str_radix(h.as_str(), 16).ok())
+            });
+            if let Some(n) = num {
+                return char::from_u32(n)
+                    .filter(|&ch| ch != '\0')
+                    .map_or_else(|| c[0].to_string(), String::from);
+            }
+            let name = &c[3];
+            match name {
+                "amp" => return "&".into(),
+                "lt" => return "<".into(),
+                "gt" => return ">".into(),
+                "quot" => return "\"".into(),
+                "apos" => return "'".into(),
+                "nbsp" => return "\u{a0}".into(),
+                _ => {}
+            }
+            // The parser knows every named reference; a full match consumes the ';', a
+            // legacy prefix match (`&notit;` -> `¬it;`) doesn't, so it is rejected.
+            let text: String = Html::parse_fragment(&format!("<p>{}</p>", &c[0]))
+                .root_element()
+                .text()
+                .collect();
+            if text != c[0] && (!text.ends_with(';') || name == "semi") {
+                text
+            } else {
+                c[0].to_string()
+            }
+        })
+        .into_owned()
+}
+
+/// Converters stop recursing here; anything deeper is kept as raw source.
+pub const MAX_DEPTH: usize = 256;
+
+/// The one warning for content nested deeper than `MAX_DEPTH`.
+pub fn too_deep_issue(ctx: &mut HtmlCtx) {
+    ctx.issue(
+        IssueKind::UnsupportedBlock,
+        Severity::Warning,
+        format!("nesting deeper than {MAX_DEPTH}; the rest is kept as raw source"),
+        json!({ "max_depth": MAX_DEPTH }),
+    );
 }
 
 static WS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").expect("valid regex"));
@@ -299,9 +359,23 @@ fn has_content(v: &[Inline]) -> bool {
 
 struct Conv<'c, 'a> {
     ctx: &'c mut HtmlCtx<'a>,
+    depth: usize,
+    flagged: bool,
 }
 
 impl Conv<'_, '_> {
+    /// True at the depth cap; warns once per conversion.
+    fn too_deep(&mut self) -> bool {
+        if self.depth < MAX_DEPTH {
+            return false;
+        }
+        if !self.flagged {
+            self.flagged = true;
+            too_deep_issue(self.ctx);
+        }
+        true
+    }
+
     fn image(&mut self, n: NodeRef<'_, Node>, e: &Element) -> RtBlock {
         let src = e.attr("src").unwrap_or("");
         match self.ctx.media_or_issue(src, e.attr("srcset")) {
@@ -310,6 +384,7 @@ impl Conv<'_, '_> {
                 caption: None,
                 align: img_align(e),
                 width: e.attr("width").and_then(|w| w.trim().parse().ok()),
+                link: None,
             },
             None => RtBlock::Raw {
                 html: outer_html(n),
@@ -335,6 +410,12 @@ impl Conv<'_, '_> {
             Node::Element(e) => e,
             _ => return vec![],
         };
+        if self.too_deep() {
+            lifted.push(RtBlock::Raw {
+                html: outer_html(n),
+            });
+            return vec![];
+        }
         let mut m = marks;
         match e.name() {
             "br" => return vec![Inline::Break],
@@ -358,21 +439,38 @@ impl Conv<'_, '_> {
             "sup" => m.sup = true,
             _ => {}
         }
+        let first_lifted = lifted.len();
+        self.depth += 1;
         let kids: Vec<Inline> = n
             .children()
             .flat_map(|k| self.inlines(k, m, lifted))
             .collect();
+        self.depth -= 1;
         if e.name() != "a" {
             return kids;
         }
         let href = e.attr("href").unwrap_or("").trim();
-        if href.is_empty() || !has_content(&kids) {
+        let image = lifted[first_lifted..]
+            .iter()
+            .any(|b| matches!(b, RtBlock::Media { link: None, .. }));
+        if href.is_empty() || !(has_content(&kids) || image) {
+            return kids;
+        }
+        let (target, fragment) = self.ctx.link(href);
+        // Images the link wraps keep it.
+        for b in &mut lifted[first_lifted..] {
+            if let RtBlock::Media { link: l @ None, .. } = b {
+                *l = Some(target.clone());
+            }
+        }
+        if !has_content(&kids) {
             return kids;
         }
         vec![Inline::Link {
-            target: self.ctx.link_target(href),
+            target,
             new_tab: e.attr("target") == Some("_blank"),
             inlines: kids,
+            fragment,
         }]
     }
 
@@ -414,6 +512,29 @@ impl Conv<'_, '_> {
     }
 
     fn block(&mut self, n: NodeRef<'_, Node>, inherited: Align, out: &mut Vec<RtBlock>) {
+        if element(n).is_none() {
+            return;
+        }
+        if self.too_deep() {
+            out.push(RtBlock::Raw {
+                html: outer_html(n),
+            });
+            return;
+        }
+        self.depth += 1;
+        match element(n) {
+            // Wrappers are the common deep path: kept out of `element_block`'s big frame.
+            Some(e) if WRAPPERS.contains(&e.name()) => {
+                let align = align_of(e).unwrap_or(inherited);
+                self.blocks(n.children(), align, out);
+            }
+            _ => self.element_block(n, inherited, out),
+        }
+        self.depth -= 1;
+    }
+
+    #[inline(never)]
+    fn element_block(&mut self, n: NodeRef<'_, Node>, inherited: Align, out: &mut Vec<RtBlock>) {
         let Some(e) = element(n) else {
             return;
         };
@@ -514,7 +635,12 @@ impl Conv<'_, '_> {
 pub fn html_to_richtext(html: &str, ctx: &mut HtmlCtx) -> RichText {
     let frag = Html::parse_fragment(html);
     let mut blocks = vec![];
-    Conv { ctx }.blocks(frag.root_element().children(), Align::None, &mut blocks);
+    Conv {
+        ctx,
+        depth: 0,
+        flagged: false,
+    }
+    .blocks(frag.root_element().children(), Align::None, &mut blocks);
     RichText { blocks }
 }
 
@@ -689,5 +815,60 @@ pub(crate) mod tests {
         assert!(rt.plain_text().contains("One two\nthree"));
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].kind, IssueKind::MissingMedia);
+    }
+
+    #[test]
+    fn non_ascii_href_no_panic() {
+        let f = fixture();
+        let mut issues = vec![];
+        let rt = html_to_richtext(
+            r#"<p><a href="/Русский/">Русский</a> <a href="Ελληνικά">Ελληνικά</a>
+               <a href="https://example.test/العربية/">العربية</a> <a href="😀">😀 emoji</a>
+               <a href="тел:1">x</a> <a href=" é ">é</a></p>"#,
+            &mut ctx(&f, &mut issues),
+        );
+        assert_eq!(links(&rt).len(), 6);
+        assert!(
+            rt.plain_text()
+                .contains("Русский Ελληνικά العربية 😀 emoji")
+        );
+    }
+
+    #[test]
+    fn linked_image_keeps_link() {
+        let f = fixture();
+        let mut issues = vec![];
+        let rt = html_to_richtext(
+            r#"<p><a href="/about/"><img src="/files/2020/01/lamp.jpg"></a></p>"#,
+            &mut ctx(&f, &mut issues),
+        );
+        assert_eq!(rt.blocks.len(), 1, "{rt:?}");
+        assert!(matches!(
+            &rt.blocks[0],
+            RtBlock::Media { link: Some(LinkTarget::Doc(id)), .. } if *id == f.about
+        ));
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn fragment_kept_on_doc_link() {
+        let f = fixture();
+        let mut issues = vec![];
+        let rt = html_to_richtext(
+            r##"<p><a href="/about/#team">a</a> <a href="#top">b</a></p>"##,
+            &mut ctx(&f, &mut issues),
+        );
+        let RtBlock::Paragraph { inlines, .. } = &rt.blocks[0] else {
+            panic!()
+        };
+        assert!(matches!(
+            &inlines[0],
+            Inline::Link { target: LinkTarget::Doc(id), fragment: Some(fr), .. }
+                if *id == f.about && fr == "team"
+        ));
+        assert!(matches!(
+            &inlines[2],
+            Inline::Link { target: LinkTarget::Url(u), fragment: None, .. } if u == "#top"
+        ));
     }
 }

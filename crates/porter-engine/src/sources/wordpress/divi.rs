@@ -1,10 +1,10 @@
 //! Divi builder content (post_content shortcodes) -> neutral layout blocks.
 
-use super::classic_to_richtext;
 use super::shortcodes::{ScNode, caption_html, default_known, parse_shortcodes, to_source};
-use crate::html::{HtmlCtx, decode_entities};
+use super::{classic_inner, flag_literal_shortcodes, layout_richtexts};
+use crate::html::{HtmlCtx, MAX_DEPTH, decode_entities, too_deep_issue};
 use indexmap::IndexMap;
-use porter_model::{Block, BlockKind, FieldValue, IssueKind, Original, Severity};
+use porter_model::{Block, BlockKind, FieldValue, IssueKind, ItemId, Original, Severity};
 use regex::Regex;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -106,7 +106,11 @@ fn find(nodes: Vec<ScNode>, tag: &str) -> Option<ScNode> {
 
 struct Divi<'g, 'c, 'a> {
     globals: &'g HashMap<u64, String>,
+    media_ids: &'g HashMap<u64, ItemId>,
     ctx: &'c mut HtmlCtx<'a>,
+    /// Nesting of `modules` calls, capped at `MAX_DEPTH`.
+    level: usize,
+    flagged_deep: bool,
 }
 
 impl Divi<'_, '_, '_> {
@@ -115,7 +119,11 @@ impl Divi<'_, '_, '_> {
     }
 
     /// Replaces global modules with their current copy from the Divi Library.
-    fn expand(&mut self, nodes: Vec<ScNode>, depth: usize) -> Vec<ScNode> {
+    fn expand(&mut self, nodes: Vec<ScNode>, depth: usize, level: usize) -> Vec<ScNode> {
+        // Past the converter's depth cap nothing is converted, so nothing to expand.
+        if level >= MAX_DEPTH {
+            return nodes;
+        }
         let mut out = Vec::with_capacity(nodes.len());
         for mut n in nodes {
             let id = n
@@ -137,7 +145,7 @@ impl Divi<'_, '_, '_> {
                 match self.globals.get(&id).and_then(|c| find(parse(c), &n.tag)) {
                     Some(mut found) => {
                         found.attrs.shift_remove("global_module");
-                        out.extend(self.expand(vec![found], depth + 1));
+                        out.extend(self.expand(vec![found], depth + 1, level));
                         continue;
                     }
                     None => self.issue(
@@ -150,7 +158,7 @@ impl Divi<'_, '_, '_> {
                 }
             }
             let kids = std::mem::take(&mut n.children);
-            n.children = self.expand(kids, depth);
+            n.children = self.expand(kids, depth, level + 1);
             out.push(n);
         }
         out
@@ -160,12 +168,12 @@ impl Divi<'_, '_, '_> {
         if html.trim().is_empty() {
             return None;
         }
-        let rt = classic_to_richtext(html, self.ctx);
+        let rt = classic_inner(html, self.media_ids, self.ctx);
         (!rt.blocks.is_empty()).then_some(rt)
     }
 
     /// Modules in order; hidden ones dropped; consecutive toggles become one accordion.
-    fn modules(&mut self, nodes: &[ScNode]) -> Vec<Block> {
+    fn modules<'n>(&mut self, nodes: impl IntoIterator<Item = &'n ScNode>) -> Vec<Block> {
         let toggle = |b: &Block| {
             b.kind == BlockKind::Accordion
                 && b.original
@@ -173,7 +181,11 @@ impl Divi<'_, '_, '_> {
                     .is_some_and(|o| o.module == "et_pb_toggle")
         };
         let mut out: Vec<Block> = vec![];
-        for n in nodes.iter().filter(|n| !hidden(n)) {
+        if self.level >= MAX_DEPTH {
+            return self.too_deep(nodes);
+        }
+        self.level += 1;
+        for n in nodes.into_iter().filter(|n| !hidden(n)) {
             for b in self.node(n) {
                 match out.last_mut() {
                     Some(prev) if toggle(prev) && toggle(&b) => prev.children.extend(b.children),
@@ -181,51 +193,148 @@ impl Divi<'_, '_, '_> {
                 }
             }
         }
+        self.level -= 1;
         out
     }
 
+    /// Past the depth cap: the rest stays as its shortcode source, with one warning.
+    #[inline(never)]
+    fn too_deep<'n>(&mut self, nodes: impl IntoIterator<Item = &'n ScNode>) -> Vec<Block> {
+        if !self.flagged_deep {
+            self.flagged_deep = true;
+            too_deep_issue(self.ctx);
+        }
+        nodes
+            .into_iter()
+            .filter(|n| !hidden(n))
+            .map(|n| {
+                let mut b = block(BlockKind::Raw, n);
+                b.props
+                    .insert("html".into(), FieldValue::Text(to_source(n)));
+                b
+            })
+            .collect()
+    }
+
+    /// Dispatch only, so the frames on the recursion path stay small (the cap is 256 deep).
     fn node(&mut self, n: &ScNode) -> Vec<Block> {
-        let mut b = match n.tag.as_str() {
-            "" => {
-                return match self.rich(&n.text) {
-                    Some(rt) => {
-                        let mut b = block(BlockKind::RichText, n);
-                        b.props.insert("text".into(), FieldValue::RichText(rt));
-                        vec![b]
-                    }
-                    None => vec![],
-                };
-            }
-            "et_pb_section" | "et_pb_fullwidth_section" => {
-                let mut b = block(BlockKind::Section, n);
-                let kids: Vec<ScNode> = n.children.iter().filter(|c| !hidden(c)).cloned().collect();
-                if kids.iter().any(|c| is_column(&c.tag)) {
-                    // A specialty section: its columns sit in the row Divi adds around them.
-                    let (cols, rest): (Vec<_>, Vec<_>) =
-                        kids.into_iter().partition(|c| is_column(&c.tag));
-                    let mut row = block(
-                        BlockKind::Row,
-                        &ScNode {
-                            tag: "et_pb_row".into(),
-                            ..ScNode::default()
-                        },
-                    );
-                    row.children = self.modules(&cols);
-                    b.children.push(row);
-                    b.children.extend(self.modules(&rest));
-                } else {
-                    b.children = self.modules(&kids);
+        match n.tag.as_str() {
+            "" => match self.rich(&n.text) {
+                Some(rt) => {
+                    let mut b = block(BlockKind::RichText, n);
+                    b.props.insert("text".into(), FieldValue::RichText(rt));
+                    vec![b]
                 }
-                return vec![b];
-            }
-            "et_pb_row" | "et_pb_row_inner" => block(BlockKind::Row, n),
-            tag if is_column(tag) => block(
+                None => vec![],
+            },
+            "et_pb_section" | "et_pb_fullwidth_section" => self.section(n),
+            "et_pb_row" | "et_pb_row_inner" => self.container(BlockKind::Row, n),
+            tag if is_column(tag) => self.container(
                 BlockKind::Column {
                     width: width(&get(n, "type")),
                 },
                 n,
             ),
-            "et_pb_text" => return self.text(n),
+            "et_pb_text" => self.text(n),
+            "et_pb_code" | "et_pb_fullwidth_code" => self.code(n),
+            "et_pb_tabs" => vec![self.panels(n, BlockKind::Tabs, "et_pb_tab")],
+            "et_pb_accordion" => {
+                vec![self.panels(n, BlockKind::Accordion, "et_pb_accordion_item")]
+            }
+            "et_pb_toggle" => {
+                let mut b = block(BlockKind::Accordion, n);
+                b.children.push(self.panel(n, "title"));
+                vec![b]
+            }
+            "et_pb_slider" | "et_pb_fullwidth_slider" => self.slider(n),
+            _ => self.leaf(n),
+        }
+    }
+
+    /// Rows and columns: their children in place.
+    fn container(&mut self, kind: BlockKind, n: &ScNode) -> Vec<Block> {
+        let mut b = block(kind, n);
+        b.children = self.modules(&n.children);
+        vec![b]
+    }
+
+    fn section(&mut self, n: &ScNode) -> Vec<Block> {
+        let mut b = block(BlockKind::Section, n);
+        b.children = if n.children.iter().any(|c| !hidden(c) && is_column(&c.tag)) {
+            self.specialty(n)
+        } else {
+            self.modules(&n.children)
+        };
+        vec![b]
+    }
+
+    /// A specialty section: its columns sit in the row Divi adds around them.
+    #[inline(never)]
+    fn specialty(&mut self, n: &ScNode) -> Vec<Block> {
+        let (cols, rest): (Vec<&ScNode>, Vec<&ScNode>) =
+            n.children.iter().partition(|c| is_column(&c.tag));
+        let mut row = block(
+            BlockKind::Row,
+            &ScNode {
+                tag: "et_pb_row".into(),
+                ..ScNode::default()
+            },
+        );
+        row.children = self.modules(cols);
+        let mut out = vec![row];
+        out.extend(self.modules(rest));
+        out
+    }
+
+    fn code(&mut self, n: &ScNode) -> Vec<Block> {
+        // Divi stores code entity-encoded; shortcodes inside (a form) still render.
+        let code: String = n
+            .children
+            .iter()
+            .filter(|c| c.tag.is_empty())
+            .map(|c| c.text.as_str())
+            .collect();
+        let code = decode_entities(&code).trim().to_string();
+        let mut out = vec![];
+        if !code.is_empty() {
+            let mut b = block(BlockKind::Raw, n);
+            b.props.insert("html".into(), FieldValue::Text(code));
+            out.push(b);
+        }
+        let inner: Vec<ScNode> = n
+            .children
+            .iter()
+            .filter(|c| !c.tag.is_empty())
+            .cloned()
+            .collect();
+        out.extend(self.modules(&inner));
+        out
+    }
+
+    fn slider(&mut self, n: &ScNode) -> Vec<Block> {
+        let mut b = block(BlockKind::Slider, n);
+        for s in n
+            .children
+            .iter()
+            .filter(|c| c.tag == "et_pb_slide" && !hidden(c))
+        {
+            let mut slide = self.panel(s, "heading");
+            let img = get(s, "image");
+            if !img.is_empty()
+                && let Some(id) = self.ctx.media_or_issue(&img, None)
+            {
+                slide.props.insert("media".into(), FieldValue::Media(id));
+            }
+            self.link_prop(&mut slide, "url", get(s, "button_link"));
+            b.children.push(slide);
+        }
+        vec![b]
+    }
+
+    /// Modules with no children to convert.
+    #[inline(never)]
+    fn leaf(&mut self, n: &ScNode) -> Vec<Block> {
+        match n.tag.as_str() {
             "et_pb_image" | "et_pb_fullwidth_image" => {
                 let mut b = block(BlockKind::Image, n);
                 let src = get(n, "src");
@@ -237,7 +346,7 @@ impl Divi<'_, '_, '_> {
                 self.text_prop(&mut b, "alt", get(n, "alt"));
                 self.text_prop(&mut b, "title", get(n, "title_text"));
                 self.link_prop(&mut b, "url", get(n, "url"));
-                return vec![b];
+                vec![b]
             }
             "et_pb_gallery" | "gallery" => {
                 let mut b = block(BlockKind::Gallery, n);
@@ -246,7 +355,7 @@ impl Divi<'_, '_, '_> {
                 } else {
                     get(n, "gallery_ids")
                 };
-                // ponytail: attachment ids, not URLs; normalise maps them to media items.
+                // Attachment post ids, mapped to media items through `media_ids`.
                 for id in ids.split(',').map(str::trim).filter(|s| !s.is_empty()) {
                     let mut img = Block {
                         kind: BlockKind::Image,
@@ -261,15 +370,25 @@ impl Divi<'_, '_, '_> {
                     };
                     img.props
                         .insert("attachment".into(), FieldValue::Text(id.into()));
+                    match id.parse::<u64>().ok().and_then(|i| self.media_ids.get(&i)) {
+                        Some(m) => {
+                            img.props.insert("media".into(), FieldValue::Media(*m));
+                        }
+                        None => self.issue(
+                            IssueKind::MissingMedia,
+                            format!("attachment {id} is not in the media library"),
+                            json!({ "attachment": id }),
+                        ),
+                    }
                     b.children.push(img);
                 }
-                return vec![b];
+                vec![b]
             }
             "et_pb_button" => {
                 let mut b = block(BlockKind::Button, n);
                 self.text_prop(&mut b, "text", get(n, "button_text"));
                 self.link_prop(&mut b, "url", get(n, "button_url"));
-                return vec![b];
+                vec![b]
             }
             "et_pb_video" => {
                 let mut b = block(BlockKind::Video, n);
@@ -278,57 +397,7 @@ impl Divi<'_, '_, '_> {
                     b.props.insert("media".into(), FieldValue::Media(id));
                 }
                 self.text_prop(&mut b, "url", src);
-                return vec![b];
-            }
-            "et_pb_code" | "et_pb_fullwidth_code" => {
-                // Divi stores code entity-encoded; shortcodes inside (a form) still render.
-                let code: String = n
-                    .children
-                    .iter()
-                    .filter(|c| c.tag.is_empty())
-                    .map(|c| c.text.as_str())
-                    .collect();
-                let code = decode_entities(&code).trim().to_string();
-                let mut out = vec![];
-                if !code.is_empty() {
-                    let mut b = block(BlockKind::Raw, n);
-                    b.props.insert("html".into(), FieldValue::Text(code));
-                    out.push(b);
-                }
-                let inner: Vec<ScNode> = n
-                    .children
-                    .iter()
-                    .filter(|c| !c.tag.is_empty())
-                    .cloned()
-                    .collect();
-                out.extend(self.modules(&inner));
-                return out;
-            }
-            "et_pb_tabs" => self.panels(n, BlockKind::Tabs, "et_pb_tab"),
-            "et_pb_accordion" => self.panels(n, BlockKind::Accordion, "et_pb_accordion_item"),
-            "et_pb_toggle" => {
-                let mut b = block(BlockKind::Accordion, n);
-                b.children.push(self.panel(n, "title"));
-                return vec![b];
-            }
-            "et_pb_slider" | "et_pb_fullwidth_slider" => {
-                let mut b = block(BlockKind::Slider, n);
-                for s in n
-                    .children
-                    .iter()
-                    .filter(|c| c.tag == "et_pb_slide" && !hidden(c))
-                {
-                    let mut slide = self.panel(s, "heading");
-                    let img = get(s, "image");
-                    if !img.is_empty()
-                        && let Some(id) = self.ctx.media_or_issue(&img, None)
-                    {
-                        slide.props.insert("media".into(), FieldValue::Media(id));
-                    }
-                    self.link_prop(&mut slide, "url", get(s, "button_link"));
-                    b.children.push(slide);
-                }
-                return vec![b];
+                vec![b]
             }
             "et_pb_map" | "et_pb_fullwidth_map" => {
                 let mut b = block(BlockKind::Map, n);
@@ -338,13 +407,13 @@ impl Divi<'_, '_, '_> {
                         b.props.insert(k.into(), FieldValue::Number(v));
                     }
                 }
-                return vec![b];
+                vec![b]
             }
-            "et_pb_divider" => return vec![block(BlockKind::Divider, n)],
+            "et_pb_divider" => vec![block(BlockKind::Divider, n)],
             "gravityform" | "gravityforms" | "ninja_form" => {
                 let mut b = block(BlockKind::FormRef, n);
                 self.text_prop(&mut b, "form", get(n, "id"));
-                return vec![b];
+                vec![b]
             }
             tag => {
                 let mut b = block(BlockKind::Raw, n);
@@ -355,12 +424,9 @@ impl Divi<'_, '_, '_> {
                     format!("Divi module {tag} has no neutral block; kept as its shortcode"),
                     json!({ "module": tag }),
                 );
-                return vec![b];
+                vec![b]
             }
-        };
-        // Rows and columns: their children in place.
-        b.children = self.modules(&n.children);
-        vec![b]
+        }
     }
 
     fn text_prop(&mut self, b: &mut Block, k: &str, v: String) {
@@ -432,15 +498,25 @@ impl Divi<'_, '_, '_> {
     }
 }
 
-/// `globals` maps Divi Library (et_pb_layout) post ids to their content.
+/// `globals` maps Divi Library (et_pb_layout) post ids to their content; `media_ids` maps
+/// attachment post ids to media items.
 pub fn divi_to_layout(
     content: &str,
     globals: &HashMap<u64, String>,
+    media_ids: &HashMap<u64, ItemId>,
     ctx: &mut HtmlCtx,
 ) -> Vec<Block> {
-    let mut d = Divi { globals, ctx };
-    let nodes = d.expand(parse(content), 0);
-    d.modules(&nodes)
+    let mut d = Divi {
+        globals,
+        media_ids,
+        ctx,
+        level: 0,
+        flagged_deep: false,
+    };
+    let nodes = d.expand(parse(content), 0, 0);
+    let blocks = d.modules(&nodes);
+    flag_literal_shortcodes(layout_richtexts(&blocks), d.ctx);
+    blocks
 }
 
 #[cfg(test)]
@@ -453,7 +529,7 @@ mod tests {
     fn run(src: &str, globals: &HashMap<u64, String>) -> (Vec<Block>, Vec<PendingIssue>) {
         let f = fixture();
         let mut issues = vec![];
-        let blocks = divi_to_layout(src, globals, &mut ctx(&f, &mut issues));
+        let blocks = divi_to_layout(src, globals, &HashMap::new(), &mut ctx(&f, &mut issues));
         (blocks, issues)
     }
 
@@ -636,5 +712,52 @@ mod tests {
         // Debug builds are ~10x slower than release; the bar is "well under a second" in release.
         assert!(took.as_secs_f64() < 10.0, "took {took:?}");
         eprintln!("2 MB Divi page: {took:?}");
+    }
+
+    #[test]
+    fn divi_url_query_preserved() {
+        let url = "https://elsewhere.test/x?a=1&region=uk&param=2&notify=1";
+        let (bs, _) = run(
+            &format!(r#"[et_pb_button button_text="Go &amp; see" button_url="{url}" /]"#),
+            &HashMap::new(),
+        );
+        assert_eq!(bs[0].props["url"], FieldValue::Text(url.into()));
+        assert_eq!(bs[0].props["text"], FieldValue::Text("Go & see".into()));
+    }
+
+    #[test]
+    fn divi_gallery_ids_resolve_or_flag() {
+        let f = fixture();
+        let mut issues = vec![];
+        let ids = HashMap::from([(7, f.media)]);
+        let bs = divi_to_layout(
+            r#"[et_pb_gallery gallery_ids="7,8" /]"#,
+            &HashMap::new(),
+            &ids,
+            &mut ctx(&f, &mut issues),
+        );
+        let g = &bs[0];
+        assert_eq!(g.kind, BlockKind::Gallery);
+        assert_eq!(g.children[0].props["media"], FieldValue::Media(f.media));
+        assert!(!g.children[1].props.contains_key("media"));
+        let kinds: Vec<_> = issues.iter().map(|i| i.kind).collect();
+        assert_eq!(kinds, [IssueKind::MissingMedia]);
+        assert!(issues[0].message.contains('8'));
+    }
+
+    #[test]
+    fn divi_tabs_keep_panels() {
+        let (bs, issues) = run(
+            r#"[et_pb_tabs][et_pb_tab title="One"]a[/et_pb_tab][et_pb_tab title="Two"]b[/et_pb_tab][/et_pb_tabs]"#,
+            &HashMap::new(),
+        );
+        assert_eq!(bs[0].kind, BlockKind::Tabs);
+        assert_eq!(bs[0].children.len(), 2);
+        assert_eq!(
+            bs[0].children[1].props["title"],
+            FieldValue::Text("Two".into())
+        );
+        assert_eq!(text_of(&bs[0].children[1]), "b");
+        assert!(issues.is_empty(), "{issues:?}");
     }
 }

@@ -61,6 +61,9 @@ pub enum Inline {
         #[serde(default)]
         new_tab: bool,
         inlines: Vec<Inline>,
+        /// `#fragment` of a link that resolved to a document or media item.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fragment: Option<String>,
     },
     Break,
 }
@@ -102,6 +105,9 @@ pub enum RtBlock {
         #[serde(default)]
         align: Align,
         width: Option<u32>,
+        /// Where the image links to, when it is wrapped in a link.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        link: Option<LinkTarget>,
     },
     Embed {
         provider: Option<String>,
@@ -194,6 +200,7 @@ mod tests {
                             target: LinkTarget::Url("https://example.test".into()),
                             new_tab: false,
                             inlines: vec![txt("world")],
+                            fragment: None,
                         },
                     ],
                     align: Align::None,
@@ -225,10 +232,24 @@ mod tests {
                     caption: None,
                     align: Align::Center,
                     width: Some(10),
+                    link: Some(LinkTarget::Doc(id)),
+                },
+                RtBlock::Media {
+                    media: id,
+                    caption: None,
+                    align: Align::None,
+                    width: None,
+                    link: None,
                 },
                 RtBlock::Paragraph {
                     inlines: vec![
                         Inline::Break,
+                        Inline::Link {
+                            target: LinkTarget::Doc(id),
+                            new_tab: true,
+                            inlines: vec![txt("x")],
+                            fragment: Some("team".into()),
+                        },
                         Inline::Text {
                             text: "a".into(),
                             marks: Marks {
@@ -243,5 +264,13 @@ mod tests {
         };
         let j = serde_json::to_string(&rt).unwrap();
         assert_eq!(serde_json::from_str::<RichText>(&j).unwrap(), rt);
+        // New optional fields: written only when set, absent reads as None.
+        assert!(j.contains("\"fragment\":\"team\""));
+        assert_eq!(j.matches("\"link\":").count(), 1);
+        let old = r#"{"type":"link","target":{"url":"u"},"inlines":[]}"#;
+        assert!(matches!(
+            serde_json::from_str::<Inline>(old).unwrap(),
+            Inline::Link { fragment: None, .. }
+        ));
     }
 }

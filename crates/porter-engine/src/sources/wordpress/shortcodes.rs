@@ -61,6 +61,10 @@ fn close_top(stack: &mut Vec<ScNode>) {
     }
 }
 
+/// Deeper nesting stays as text inside the node at this depth, so trees (and the recursion
+/// that walks and drops them) stay bounded. Converters cap lower, at `html::MAX_DEPTH`.
+const MAX_PARSE_DEPTH: usize = 2 * crate::html::MAX_DEPTH;
+
 pub fn parse_shortcodes(src: &str, known: &Regex) -> Vec<ScNode> {
     // Start of the last `[/tag]` per tag, so "a closer follows" is O(1).
     let mut last_close: HashMap<&str, usize> = HashMap::new();
@@ -75,6 +79,8 @@ pub fn parse_shortcodes(src: &str, known: &Regex) -> Vec<ScNode> {
 
     let mut stack = vec![node("#root")];
     let mut last = 0;
+    // Enclosing tags opened past the depth cap: kept as text, with their closers.
+    let mut overflow = 0usize;
     for c in TAG.captures_iter(src) {
         let (Some(whole), Some(tag)) = (c.get(0), c.get(2)) else {
             continue;
@@ -89,6 +95,13 @@ pub fn parse_shortcodes(src: &str, known: &Regex) -> Vec<ScNode> {
         last = whole.end();
         let raw_attrs = &c[3];
 
+        if c.get(1).is_some() && overflow > 0 {
+            overflow -= 1;
+            if let Some(top) = stack.last_mut() {
+                push_text(top, whole.as_str());
+            }
+            continue;
+        }
         if c.get(1).is_some() {
             // Pop back to the matching opener; unmatched closers are ignored.
             if let Some(at) = stack
@@ -114,7 +127,12 @@ pub fn parse_shortcodes(src: &str, known: &Regex) -> Vec<ScNode> {
         // Enclosing only if not slash-closed and a closer follows (WordPress's rule).
         let enclosing = !raw_attrs.trim_end().ends_with('/')
             && last_close.get(tag).is_some_and(|&at| at >= last);
-        if enclosing {
+        if enclosing && stack.len() > MAX_PARSE_DEPTH {
+            overflow += 1;
+            if let Some(top) = stack.last_mut() {
+                push_text(top, whole.as_str());
+            }
+        } else if enclosing {
             stack.push(n);
         } else if let Some(top) = stack.last_mut() {
             top.children.push(n);
@@ -129,27 +147,37 @@ pub fn parse_shortcodes(src: &str, known: &Regex) -> Vec<ScNode> {
     stack.pop().map(|r| r.children).unwrap_or_default()
 }
 
-/// Shortcode source for a node, for keeping what a converter can't map.
+/// Shortcode source for a node, for keeping what a converter can't map. Iterative, so
+/// any depth is safe.
 pub fn to_source(n: &ScNode) -> String {
-    if n.tag.is_empty() {
-        return n.text.clone();
-    }
-    let mut s = format!("[{}", n.tag);
-    for (k, v) in &n.attrs {
-        if v.contains('"') {
-            s.push_str(&format!(" {k}='{v}'"));
+    let mut s = String::new();
+    // (node, closing): closing entries write `[/tag]`.
+    let mut stack = vec![(n, false)];
+    while let Some((n, closing)) = stack.pop() {
+        if closing {
+            s.push_str(&format!("[/{}]", n.tag));
+            continue;
+        }
+        if n.tag.is_empty() {
+            s.push_str(&n.text);
+            continue;
+        }
+        s.push('[');
+        s.push_str(&n.tag);
+        for (k, v) in &n.attrs {
+            if v.contains('"') {
+                s.push_str(&format!(" {k}='{v}'"));
+            } else {
+                s.push_str(&format!(" {k}=\"{v}\""));
+            }
+        }
+        if n.children.is_empty() {
+            s.push_str(" /]");
         } else {
-            s.push_str(&format!(" {k}=\"{v}\""));
+            s.push(']');
+            stack.push((n, true));
+            stack.extend(n.children.iter().rev().map(|c| (c, false)));
         }
-    }
-    if n.children.is_empty() {
-        s.push_str(" /]");
-    } else {
-        s.push(']');
-        for c in &n.children {
-            s.push_str(&to_source(c));
-        }
-        s.push_str(&format!("[/{}]", n.tag));
     }
     s
 }

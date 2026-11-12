@@ -1,7 +1,8 @@
 //! Gutenberg block content (`<!-- wp:name {json} -->` comments) -> neutral layout blocks.
 
 use super::texturize::texturize;
-use crate::html::{HtmlCtx, html_to_richtext};
+use super::{flag_literal_shortcodes, layout_richtexts};
+use crate::html::{HtmlCtx, MAX_DEPTH, html_to_richtext, too_deep_issue};
 use indexmap::IndexMap;
 use porter_model::{Block, BlockKind, FieldValue, IssueKind, Original, Severity};
 use regex::Regex;
@@ -9,6 +10,10 @@ use scraper::{Html, Selector};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::LazyLock;
+
+/// Deeper nesting stays as HTML text inside the block at this depth, so trees stay
+/// bounded. Conversion caps lower, at `html::MAX_DEPTH`.
+const MAX_PARSE_DEPTH: usize = 2 * MAX_DEPTH;
 
 /// Reusable blocks can include each other; deeper than this is treated as a cycle.
 const MAX_REUSABLE_DEPTH: usize = 8;
@@ -45,6 +50,25 @@ impl GbBlock {
                 Piece::Block(b) => s.push_str(&b.html()),
             }
         }
+        s
+    }
+
+    /// The block as written, delimiters included.
+    fn source(&self) -> String {
+        let name = self.name.strip_prefix("core/").unwrap_or(&self.name);
+        let attrs = match &self.attrs {
+            Value::Object(m) if m.is_empty() => String::new(),
+            Value::Null => String::new(),
+            a => format!("{a} "),
+        };
+        let mut s = format!("<!-- wp:{name} {attrs}-->");
+        for p in &self.inner {
+            match p {
+                Piece::Html(h) => s.push_str(h),
+                Piece::Block(b) => s.push_str(&b.source()),
+            }
+        }
+        s.push_str(&format!("<!-- /wp:{name} -->"));
         s
     }
 
@@ -88,6 +112,8 @@ fn parse(content: &str) -> Vec<Piece> {
         }
     };
     let mut last = 0;
+    // Blocks opened past the depth cap: kept as HTML text, with their closers.
+    let mut overflow = 0usize;
     for c in DELIM.captures_iter(content) {
         let Some(m) = c.get(0) else { continue };
         if m.start() > last {
@@ -99,6 +125,12 @@ fn parse(content: &str) -> Vec<Piece> {
         last = m.end();
         let ns = c.get(2).map_or("core/", |m| m.as_str());
         let name = format!("{ns}{}", &c[3]);
+        let opens = c.get(1).is_none() && c.get(5).is_none();
+        if (c.get(1).is_some() && overflow > 0) || (opens && stack.len() > MAX_PARSE_DEPTH) {
+            overflow = if opens { overflow + 1 } else { overflow - 1 };
+            push(&mut stack, Piece::Html(m.as_str().to_string()));
+            continue;
+        }
         if c.get(1).is_some() {
             // Close back to the matching opener; a stray closer is dropped.
             if let Some(at) = stack
@@ -173,6 +205,9 @@ struct Gb<'r, 'c, 'a> {
     reusable: &'r HashMap<u64, String>,
     ctx: &'c mut HtmlCtx<'a>,
     depth: usize,
+    /// Nesting of `pieces` calls, capped at `MAX_DEPTH`.
+    level: usize,
+    flagged_deep: bool,
 }
 
 impl Gb<'_, '_, '_> {
@@ -196,12 +231,30 @@ impl Gb<'_, '_, '_> {
             inner: vec![],
         };
         let mut out = vec![];
+        if self.level >= MAX_DEPTH {
+            // Too deep: the rest stays as its source.
+            if !self.flagged_deep {
+                self.flagged_deep = true;
+                too_deep_issue(self.ctx);
+            }
+            for p in pieces {
+                if let Piece::Block(b) = p {
+                    let mut raw = block(BlockKind::Raw, b);
+                    raw.props
+                        .insert("html".into(), FieldValue::Text(b.source()));
+                    out.push(raw);
+                }
+            }
+            return out;
+        }
+        self.level += 1;
         for p in pieces {
             match p {
                 Piece::Html(h) => out.extend(self.rich(h, &freeform)),
                 Piece::Block(b) => out.extend(self.block(b)),
             }
         }
+        self.level -= 1;
         out
     }
 
@@ -257,7 +310,59 @@ impl Gb<'_, '_, '_> {
         out
     }
 
+    /// Dispatch only, so the frames on the recursion path stay small (the cap is 256 deep).
     fn block(&mut self, b: &GbBlock) -> Vec<Block> {
+        let kind = match b.name.as_str() {
+            "core/columns" => BlockKind::Row,
+            "core/column" => BlockKind::Column {
+                width: width(b.attrs.get("width")),
+            },
+            "core/group" => BlockKind::Section,
+            "core/block" => return self.reusable_block(b),
+            _ => return self.leaf(b),
+        };
+        let mut out = block(kind, b);
+        out.children = self.pieces(&b.inner);
+        vec![out]
+    }
+
+    fn reusable_block(&mut self, b: &GbBlock) -> Vec<Block> {
+        let id = b.attrs.get("ref").and_then(Value::as_u64);
+        let content = id.and_then(|id| self.reusable.get(&id));
+        match content {
+            Some(c) if self.depth < MAX_REUSABLE_DEPTH => {
+                self.depth += 1;
+                let out = self.pieces(&parse(c));
+                self.depth -= 1;
+                return out;
+            }
+            Some(_) => {
+                self.ctx.issue(
+                    IssueKind::UnsupportedBlock,
+                    Severity::Warning,
+                    format!(
+                        "reusable block {} nests more than {MAX_REUSABLE_DEPTH} deep (does it include itself?)",
+                        id.unwrap_or(0)
+                    ),
+                    json!({ "ref": id }),
+                );
+            }
+            None => self.ctx.issue(
+                IssueKind::UnresolvedRelation,
+                Severity::Warning,
+                format!(
+                    "reusable block {} not found",
+                    b.attrs.get("ref").unwrap_or(&Value::Null)
+                ),
+                json!({ "ref": b.attrs.get("ref") }),
+            ),
+        }
+        vec![self.raw(b)]
+    }
+
+    /// Blocks with no inner blocks to convert.
+    #[inline(never)]
+    fn leaf(&mut self, b: &GbBlock) -> Vec<Block> {
         let name = b.name.as_str();
         let one = match name {
             "core/paragraph" | "core/heading" | "core/list" | "core/quote" | "core/table" => {
@@ -282,26 +387,6 @@ impl Gb<'_, '_, '_> {
                 }
                 out
             }
-            "core/columns" => {
-                let mut out = block(BlockKind::Row, b);
-                out.children = self.pieces(&b.inner);
-                out
-            }
-            "core/column" => {
-                let mut out = block(
-                    BlockKind::Column {
-                        width: width(b.attrs.get("width")),
-                    },
-                    b,
-                );
-                out.children = self.pieces(&b.inner);
-                out
-            }
-            "core/group" => {
-                let mut out = block(BlockKind::Section, b);
-                out.children = self.pieces(&b.inner);
-                out
-            }
             "core/buttons" => return b.children().map(|c| self.button(c)).collect(),
             "core/button" => self.button(b),
             "core/embed" => {
@@ -314,36 +399,6 @@ impl Gb<'_, '_, '_> {
             "core/html" => self.raw(b),
             "core/separator" => block(BlockKind::Divider, b),
             "core/spacer" => block(BlockKind::Spacer, b),
-            "core/block" => {
-                let id = b.attrs.get("ref").and_then(Value::as_u64);
-                let content = id.and_then(|id| self.reusable.get(&id));
-                match content {
-                    Some(c) if self.depth < MAX_REUSABLE_DEPTH => {
-                        self.depth += 1;
-                        let out = self.pieces(&parse(c));
-                        self.depth -= 1;
-                        return out;
-                    }
-                    Some(_) => {
-                        self.ctx.issue(
-                            IssueKind::UnsupportedBlock,
-                            Severity::Warning,
-                            format!("reusable block {} nests more than {MAX_REUSABLE_DEPTH} deep (does it include itself?)", id.unwrap_or(0)),
-                            json!({ "ref": id }),
-                        );
-                    }
-                    None => self.ctx.issue(
-                        IssueKind::UnresolvedRelation,
-                        Severity::Warning,
-                        format!(
-                            "reusable block {} not found",
-                            b.attrs.get("ref").unwrap_or(&Value::Null)
-                        ),
-                        json!({ "ref": b.attrs.get("ref") }),
-                    ),
-                }
-                self.raw(b)
-            }
             _ => {
                 self.ctx.issue(
                     IssueKind::UnsupportedBlock,
@@ -364,12 +419,16 @@ pub fn gutenberg_to_layout(
     reusable: &HashMap<u64, String>,
     ctx: &mut HtmlCtx,
 ) -> Vec<Block> {
-    Gb {
+    let mut gb = Gb {
         reusable,
         ctx,
         depth: 0,
-    }
-    .pieces(&parse(content))
+        level: 0,
+        flagged_deep: false,
+    };
+    let blocks = gb.pieces(&parse(content));
+    flag_literal_shortcodes(layout_richtexts(&blocks), gb.ctx);
+    blocks
 }
 
 #[cfg(test)]
