@@ -114,6 +114,17 @@ export async function deleteObject(key: string) {
   await s3().send(new DeleteObjectCommand({ Bucket: need("S3_BUCKET"), Key: key }));
 }
 
+/** Deletes these keys, 1000 per S3 call. Missing keys are fine. */
+export async function deleteKeys(all: string[]) {
+  await ensureBucket();
+  const Bucket = need("S3_BUCKET");
+  for (let i = 0; i < all.length; i += 1000) {
+    const Objects = all.slice(i, i + 1000).map((Key) => ({ Key }));
+    const d = await s3().send(new DeleteObjectsCommand({ Bucket, Delete: { Objects, Quiet: true } }));
+    if (d.Errors?.length) throw new Error(`deleting ${d.Errors[0].Key}: ${d.Errors[0].Message}`);
+  }
+}
+
 /** Deletes every object under `prefix` (1000 per S3 call); returns how many. */
 export async function deletePrefix(prefix: string) {
   await ensureBucket();
@@ -128,6 +139,22 @@ export async function deletePrefix(prefix: string) {
     if (d.Errors?.length) throw new Error(`deleting ${prefix}: ${d.Errors[0].Key}: ${d.Errors[0].Message}`);
     n += Objects.length;
   }
+}
+
+/** Every project id with anything under `projects/<id>/` in storage. */
+export async function listProjectIds() {
+  await ensureBucket();
+  const Bucket = need("S3_BUCKET");
+  const ids: string[] = [];
+  let ContinuationToken: string | undefined;
+  do {
+    const r = await s3().send(
+      new ListObjectsV2Command({ Bucket, Prefix: "projects/", Delimiter: "/", ContinuationToken }),
+    );
+    for (const c of r.CommonPrefixes ?? []) if (c.Prefix) ids.push(c.Prefix.slice("projects/".length, -1));
+    ContinuationToken = r.IsTruncated ? r.NextContinuationToken : undefined;
+  } while (ContinuationToken);
+  return ids;
 }
 
 /** Multipart. Parts are PUT straight from the browser to presigned URLs; the server only lists and completes. */

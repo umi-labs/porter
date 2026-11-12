@@ -592,8 +592,14 @@ async function commitResult(
       await hooks.finishIn(tx, final, v.id);
     });
   } catch (e) {
-    // Nothing was committed: the snapshot object has no version and must not linger.
-    await deleteObject(snapshotKey).catch(() => {});
+    // Nothing was committed: the snapshot object has no version and must not linger. Unless the commit did land
+    // and only its acknowledgement was lost (a dropped connection): then the version needs it.
+    const [kept] = await db
+      .select({ id: projectVersion.id })
+      .from(projectVersion)
+      .where(eq(projectVersion.snapshotKey, snapshotKey))
+      .catch(() => [{ id: "unknown" }]);
+    if (!kept) await deleteObject(snapshotKey).catch(() => {});
     if (!(e instanceof LeaseLost)) throw e;
   }
 }

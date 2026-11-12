@@ -57,6 +57,13 @@
       "when": 1794481466702,
       "tag": "0007_smart_arclight",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794488313804,
+      "tag": "0008_cascade_fk_indexes",
+      "breakpoints": true
     }
   ]
 }

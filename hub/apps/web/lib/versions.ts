@@ -1,4 +1,4 @@
-import { mediaObject, project, projectVersion, versionMedia, versionUpload } from "@porter-hub/db";
+import { mediaObject, project, projectVersion, run, versionMedia, versionUpload } from "@porter-hub/db";
 import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "./permissions";
@@ -104,6 +104,19 @@ export async function getVersion(db: Db, actor: Actor, slug: string, n: string) 
 export async function initVersion(db: Db, actor: Actor, slug: string, input: unknown) {
   const { project: p } = await access(db, actor, slug, "push");
   const { base_version, snapshot_sha256, media_hashes } = parse(schemas.init, input);
+  // A run's result lands as latest+1 built from its own base: a push now would be buried under it on the next pull.
+  const [busy] = await db
+    .select({ id: run.id })
+    .from(run)
+    .where(and(eq(run.projectId, p.id), inArray(run.state, ["queued", "running"])));
+  if (busy)
+    throw new HttpError(
+      409,
+      "A run is queued or running on this project; wait for it to end, then pull and push",
+      {
+        run_id: busy.id,
+      },
+    );
   const latest = await latestOf(db, p.id);
   // Fail early so the client doesn't upload gigabytes for a push that will be refused.
   if (latest !== base_version) throw new HttpError(409, "Base version is not the latest", { latest });
@@ -117,17 +130,24 @@ export async function initVersion(db: Db, actor: Actor, slug: string, input: unk
     for (const r of rows) have.add(r.sha256);
   }
   const missing = hashes.filter((h) => !have.has(h));
-  const [up] = await db
-    .insert(versionUpload)
-    .values({
-      projectId: p.id,
-      userId: actor.id,
-      baseVersion: base_version,
-      snapshotSha256: snapshot_sha256,
-      mediaHashes: hashes,
-      missing,
-    })
-    .returning({ id: versionUpload.id });
+  const up = await db.transaction(async (tx) => {
+    // Retention's abandoned-init sweep holds `for update` on the project while it deletes orphaned media. Waiting
+    // here means this init is either seen by the sweep (its hashes kept) or comes after it (the objects are gone,
+    // so its PUTs really upload instead of getting 412 on an object about to vanish).
+    await tx.select({ id: project.id }).from(project).where(eq(project.id, p.id)).for("share");
+    const [row] = await tx
+      .insert(versionUpload)
+      .values({
+        projectId: p.id,
+        userId: actor.id,
+        baseVersion: base_version,
+        snapshotSha256: snapshot_sha256,
+        mediaHashes: hashes,
+        missing,
+      })
+      .returning({ id: versionUpload.id });
+    return row;
+  });
   return {
     upload_id: up.id,
     missing,

@@ -94,7 +94,10 @@ export const projectInvitation = pgTable(
     acceptedAt: timestamp("accepted_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
-  (t) => [index("project_invitation_email_idx").on(t.email)],
+  (t) => [
+    index("project_invitation_email_idx").on(t.email),
+    index("project_invitation_project_idx").on(t.projectId),
+  ],
 );
 
 export const projectVersion = pgTable(
@@ -149,6 +152,9 @@ export const versionMedia = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.versionId, t.sha256] }),
+    // Deleting a project cascades to media_object; each deleted row checks this FK. Without the index that is a
+    // sequential scan per media row (quadratic).
+    index("version_media_media_idx").on(t.projectId, t.sha256),
     foreignKey({
       columns: [t.projectId, t.sha256],
       foreignColumns: [mediaObject.projectId, mediaObject.sha256],
@@ -157,21 +163,25 @@ export const versionMedia = pgTable(
 );
 
 /** An init'd push awaiting commit; its id names the snapshot object. Bound to one project and user. */
-export const versionUpload = pgTable("version_upload", {
-  id: id(),
-  projectId: uuid("project_id")
-    .notNull()
-    .references(() => project.id, { onDelete: "cascade" }),
-  userId: text("user_id")
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
-  /** Every hash the push references, and the subset that was missing at init. */
-  baseVersion: integer("base_version"),
-  snapshotSha256: text("snapshot_sha256").notNull(),
-  mediaHashes: text("media_hashes").array().notNull(),
-  missing: text("missing").array().notNull(),
-  createdAt: createdAt(),
-});
+export const versionUpload = pgTable(
+  "version_upload",
+  {
+    id: id(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    /** Every hash the push references, and the subset that was missing at init. */
+    baseVersion: integer("base_version"),
+    snapshotSha256: text("snapshot_sha256").notNull(),
+    mediaHashes: text("media_hashes").array().notNull(),
+    missing: text("missing").array().notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("version_upload_project_idx").on(t.projectId)],
+);
 
 export const run = pgTable(
   "run",
@@ -203,6 +213,9 @@ export const run = pgTable(
   (t) => [
     index("run_project_idx").on(t.projectId, t.createdAt),
     index("run_state_idx").on(t.state),
+    // Deleting a version (via the project cascade) sets these null.
+    index("run_base_version_idx").on(t.baseVersionId),
+    index("run_result_version_idx").on(t.resultVersionId),
     // One active run per project at a time.
     uniqueIndex("run_one_active_per_project").on(t.projectId).where(sql`${t.state} in ('queued','running')`),
   ],

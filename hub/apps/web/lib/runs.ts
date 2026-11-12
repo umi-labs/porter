@@ -28,16 +28,33 @@ const schemas = {
 /** The version's porter.toml (from the cached extracted snapshot). */
 export type ReadToml = (v: typeof projectVersion.$inferSelect) => Promise<string>;
 const readToml: ReadToml = async (v) => readFile(join(await versionDir(v), "porter.toml"), "utf8");
-/** Open error-severity issues in the version's project.db; null when the snapshot has no issues table. */
-export type OpenErrors = (v: typeof projectVersion.$inferSelect) => Promise<number | null>;
-const openErrors: OpenErrors = async (v) =>
-  withDb(await versionDir(v), (q) =>
-    Number(
-      q(
-        "SELECT count(*) AS n FROM issues WHERE resolution = 'open' AND severity = 'error' AND deleted_at IS NULL",
-      )[0].n,
+/**
+ * What gates a remote apply, read from the version's project.db: open error-severity issues (null when the
+ * snapshot has no issues table) and whether a load dry run has finished (false when it can't be told).
+ */
+export type ApplyFacts = (
+  v: typeof projectVersion.$inferSelect,
+) => Promise<{ openErrors: number | null; dryRun: boolean }>;
+const applyFacts: ApplyFacts = async (v) => {
+  const dir = await versionDir(v);
+  return {
+    openErrors: withDb(dir, (q) =>
+      Number(
+        q(
+          "SELECT count(*) AS n FROM issues WHERE resolution = 'open' AND severity = 'error' AND deleted_at IS NULL",
+        )[0].n,
+      ),
     ),
-  );
+    dryRun:
+      withDb(
+        dir,
+        (q) =>
+          q(
+            "SELECT 1 FROM runs WHERE stage = 'load' AND dry_run = 1 AND ended_at IS NOT NULL AND deleted_at IS NULL LIMIT 1",
+          ).length > 0,
+      ) ?? false,
+  };
+};
 
 const base = alias(projectVersion, "base");
 const result = alias(projectVersion, "result");
@@ -87,7 +104,7 @@ export async function createRun(
   slug: string,
   input: unknown,
   toml = readToml,
-  errors = openErrors,
+  facts = applyFacts,
 ) {
   const { project: p } = await access(db, actor, slug, "run");
   const body = parse(schemas.create, input);
@@ -114,9 +131,12 @@ export async function createRun(
     if (!host) throw new HttpError(409, "porter.toml has no [destination] url to apply to");
     if ((body.confirm_host ?? "").toLowerCase() !== host.toLowerCase())
       throw new HttpError(400, "confirm_host: does not match the destination host in porter.toml");
+    // The engine only checks a dry run's freshness when one exists; the hub insists one does.
+    const f = await facts(v);
+    if (!f.dryRun) throw new HttpError(400, `Run a dry-run load first: v${v.number} has none on record`);
     // Open errors block Apply (docs/design/README.md), here as on the desktop. ponytail: no table (an older
     // snapshot) reads as none; the engine's own dry-run check still applies.
-    const n = (await errors(v)) ?? 0;
+    const n = f.openErrors ?? 0;
     if (n > 0)
       throw new HttpError(
         400,
@@ -174,7 +194,7 @@ const notifyRun = (db: Db, runId: string) => db.execute(sql`select pg_notify(${`
 
 /** Queued: cancelled at once. Running: flags it; the worker sends porter SIGINT (SIGKILL 30 s later). */
 export async function cancelRun(db: Db, actor: Actor, slug: string, id: string) {
-  const { project: p } = await access(db, actor, slug, "run");
+  const { project: p } = await access(db, actor, slug, "run", { archivedOk: true });
   const row = await loadRun(db, p.id, id);
   if (TERMINAL.has(row.r.state))
     throw new HttpError(409, `The run is already ${row.r.state}`, { state: row.r.state });

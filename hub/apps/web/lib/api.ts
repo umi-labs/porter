@@ -17,7 +17,7 @@ type P = Record<string, string>;
 export function makeApi(
   db: Db,
   getActor: GetActor,
-  opts: { listener?: () => Listener; readToml?: runs.ReadToml; openErrors?: runs.OpenErrors } = {},
+  opts: { listener?: () => Listener; readToml?: runs.ReadToml; applyFacts?: runs.ApplyFacts } = {},
 ) {
   const fail = (e: unknown) => {
     if (e instanceof HttpError) return Response.json({ ...e.extra, error: e.message }, { status: e.status });
@@ -101,7 +101,7 @@ export function makeApi(
     downloadUpload: route<P>((a, _r, p) => up.downloadUpload(db, a, slugOf(p), p.id)),
     mediaUrls: route<P>(async (a, r, p) => ver.mediaUrls(db, a, slugOf(p), await body(r))),
     createRun: route<P>(
-      async (a, r, p) => runs.createRun(db, a, slugOf(p), await body(r), opts.readToml, opts.openErrors),
+      async (a, r, p) => runs.createRun(db, a, slugOf(p), await body(r), opts.readToml, opts.applyFacts),
       201,
     ),
     listRuns: route<P>((a, _r, p) => runs.listRuns(db, a, slugOf(p))),

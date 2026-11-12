@@ -13,6 +13,7 @@ import { freshDb } from "@porter-hub/db/test-helper";
 import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { makeApi } from "./api";
+import { isStaff } from "./projects";
 
 let fresh: Awaited<ReturnType<typeof freshDb>>;
 let conn: ReturnType<typeof connect>;
@@ -165,6 +166,11 @@ describe("projects", () => {
       expect(await status(api.createProject(req(as, "POST", { name: "Nope" }))), as).toBe(403);
     }
     expect(await status(api.createProject(req(null, "POST", { name: "Nope" })))).toBe(401);
+  });
+  test("isStaff gates the home page's New project form the same way", async () => {
+    expect(await isStaff(conn.db, { id: "staff" })).toBe(true);
+    for (const id of ["client", "stranger", "dev-not-staff"])
+      expect(await isStaff(conn.db, { id }), id).toBe(false);
   });
 });
 

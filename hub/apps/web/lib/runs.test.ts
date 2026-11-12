@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   auditLog,
   connect,
@@ -45,6 +46,7 @@ const slug = { slug: "acme" };
 // biome-ignore lint/suspicious/noExplicitAny: test JSON
 const json = async (r: Response) => (await r.json()) as Record<string, any>;
 let openErrors: number | null = 0;
+let dryRun = true;
 const clearRuns = () => conn.db.delete(run).where(eq(run.projectId, pid));
 const notify = (id: string) => conn.db.execute(sql`select pg_notify(${`run_${id}`}, 'x')`);
 
@@ -84,7 +86,7 @@ beforeAll(async () => {
     {
       listener: () => listener,
       readToml: async () => TOML,
-      openErrors: async () => openErrors,
+      applyFacts: async () => ({ openErrors, dryRun }),
     },
   );
 });
@@ -285,6 +287,34 @@ describe("run requests", () => {
     await clearRuns();
   });
 
+  test("apply is refused until a dry-run load is on record", async () => {
+    dryRun = false;
+    try {
+      const r = await api.createRun(
+        req("dev", { stages: ["load"], apply: true, confirm_host: "cms.example.com:8443" }),
+        slug,
+      );
+      expect(r.status).toBe(400);
+      expect((await json(r)).error).toBe("Run a dry-run load first: v1 has none on record");
+      expect(await conn.db.select().from(run).where(eq(run.projectId, pid))).toHaveLength(0);
+      expect((await api.createRun(req("dev", { stages: ["load"] }), slug)).status).toBe(201);
+    } finally {
+      dryRun = true;
+    }
+  });
+
+  test("a run on an archived project can still be cancelled", async () => {
+    const q = await json(await api.createRun(req("dev", { stages: ["analyse"] }), slug));
+    await conn.db.update(project).set({ archivedAt: new Date() }).where(eq(project.id, pid));
+    try {
+      const r = await api.cancelRun(req("dev", {}), { ...slug, id: q.id });
+      expect(r.status).toBe(200);
+      expect((await json(r)).state).toBe("cancelled");
+    } finally {
+      await conn.db.update(project).set({ archivedAt: null }).where(eq(project.id, pid));
+    }
+  });
+
   test("an archived project takes no new runs (409)", async () => {
     await conn.db.update(project).set({ archivedAt: new Date() }).where(eq(project.id, pid));
     try {
@@ -299,7 +329,11 @@ describe("run requests", () => {
   test("apply reads the destination host from the version's real snapshot", async () => {
     const dir = mkdtempSync(join(tmpdir(), "runs-snap-"));
     writeFileSync(join(dir, "porter.toml"), TOML);
-    writeFileSync(join(dir, "project.db"), "");
+    const pdb = new DatabaseSync(join(dir, "project.db"));
+    pdb.exec(
+      "CREATE TABLE runs (id TEXT, stage TEXT, dry_run INTEGER, ended_at TEXT, deleted_at TEXT); INSERT INTO runs VALUES ('1', 'load', 1, 'now', NULL)",
+    );
+    pdb.close();
     const out = join(dir, "..", `${randomUUID()}.tar.zst`);
     await packTarZst(dir, out);
     const sha = createHash("sha256").update(readFileSync(out)).digest("hex");

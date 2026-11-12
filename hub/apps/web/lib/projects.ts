@@ -70,9 +70,16 @@ export const audit = (
 
 /**
  * Loads the project and checks the caller may do `action`. Non-members get 404 (so existence doesn't
- * leak); members lacking the action get 403.
+ * leak); members lacking the action get 403. `archivedOk` is for calls that only stop things (cancel a
+ * run, abort an upload): they must work on an archived project too.
  */
-export async function access(db: Db, actor: Actor, slug: string, action: Action) {
+export async function access(
+  db: Db,
+  actor: Actor,
+  slug: string,
+  action: Action,
+  { archivedOk = false }: { archivedOk?: boolean } = {},
+) {
   const [row] = await db
     .select({ project, role: projectMember.role })
     .from(project)
@@ -84,7 +91,8 @@ export async function access(db: Db, actor: Actor, slug: string, action: Action)
   if (!row) throw new HttpError(404, "Project not found");
   if (!roleCan(row.role, action)) throw new HttpError(403, "You don't have permission to do that");
   // An archived project is waiting for retention to delete it: nothing new goes in.
-  if (row.project.archivedAt && WRITES.includes(action)) throw new HttpError(409, "The project is archived");
+  if (row.project.archivedAt && !archivedOk && WRITES.includes(action))
+    throw new HttpError(409, "The project is archived");
   return row;
 }
 const WRITES: readonly Action[] = ["push", "run", "upload"];
@@ -109,13 +117,18 @@ export async function getProject(db: Db, actor: Actor, slug: string) {
   return { id: p.id, name: p.name, slug: p.slug, summary: p.summary, role };
 }
 
-export async function createProject(db: Db, actor: Actor, input: z.infer<typeof schemas.createProject>) {
+/** Staff = a member of the staff org. Only staff create projects. */
+export async function isStaff(db: Db, actor: Actor) {
   const [staff] = await db
     .select({ id: member.id })
     .from(member)
     .innerJoin(organization, eq(organization.id, member.organizationId))
     .where(and(eq(member.userId, actor.id), eq(organization.slug, staffOrgSlug())));
-  if (!staff) throw new HttpError(403, "Only staff can create projects");
+  return !!staff;
+}
+
+export async function createProject(db: Db, actor: Actor, input: z.infer<typeof schemas.createProject>) {
+  if (!(await isStaff(db, actor))) throw new HttpError(403, "Only staff can create projects");
   const slug = input.slug ?? slugify(input.name);
   if (!slug) throw new HttpError(400, "name: needs letters or digits to make a slug");
   const orgId = await ensureStaffOrg(db);

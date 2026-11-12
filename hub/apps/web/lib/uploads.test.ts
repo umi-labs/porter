@@ -142,7 +142,7 @@ describe("permissions", () => {
       (a) => api.completeUpload(req(a, { sha256: "0".repeat(64) }), idp(randomUUID())),
     ],
     ["abort", ["viewer"], (a) => api.abortUpload(req(a, {}), idp(randomUUID()))],
-    ["download", ["client"], (a) => api.downloadUpload(req(a), idp(randomUUID()))],
+    ["download", ["client", "viewer"], (a) => api.downloadUpload(req(a), idp(randomUUID()))],
   ];
   for (const [name, forbidden, call] of routes) {
     test(`${name}: 401 signed out, 404 non-member, 403 for ${forbidden.join("/") || "nobody"}`, async () => {
@@ -375,6 +375,17 @@ describe("multipart flow", () => {
     expect((await api.abortUpload(req("client", {}), idp(c.id))).status).toBe(200);
   });
 
+  test("an open upload on an archived project can still be aborted, not created", async () => {
+    const c = await json(await create("client", { filename: "a.sql", size: 5, purpose: "dump" }));
+    await conn.db.update(project).set({ archivedAt: new Date() }).where(eq(project.id, pid));
+    try {
+      expect((await create("client", { filename: "b.sql", size: 5, purpose: "dump" })).status).toBe(409);
+      expect((await api.abortUpload(req("client", {}), idp(c.id))).status).toBe(200);
+    } finally {
+      await conn.db.update(project).set({ archivedAt: null }).where(eq(project.id, pid));
+    }
+  });
+
   /** A `verifying` row pointing at `key`, as if complete had just run. */
   const verifyingRow = async (key: string, size: number, hash = sha(data)) => {
     const [row] = await conn.db
@@ -527,8 +538,8 @@ describe("visibility and download", () => {
     }
   });
 
-  test("pull gets a 15-minute presigned GET with an attachment Content-Disposition", async () => {
-    for (const as of ["owner", "dev", "viewer"]) {
+  test("push gets a 15-minute presigned GET with an attachment Content-Disposition", async () => {
+    for (const as of ["owner", "dev"]) {
       const r = await json(await api.downloadUpload(req(as), idp(clientUp)));
       expect(r.expires_in).toBe(900);
       expect(r.url).toContain("X-Amz-Expires=900");

@@ -71,8 +71,15 @@ const view = (u: typeof upload.$inferSelect) => ({
 });
 
 /** The upload, if this caller may see it: clients only see their own. A hidden upload is a 404. */
-async function load(db: Db, actor: Actor, slug: string, rawId: string, action: "view" | "upload" | "pull") {
-  const { project: p, role } = await access(db, actor, slug, action);
+async function load(
+  db: Db,
+  actor: Actor,
+  slug: string,
+  rawId: string,
+  action: "view" | "upload" | "push",
+  opts?: { archivedOk?: boolean },
+) {
+  const { project: p, role } = await access(db, actor, slug, action, opts);
   const id = parse(schemas.id, rawId);
   const [u] = await db
     .select()
@@ -244,7 +251,7 @@ export async function completeUpload(db: Db, actor: Actor, slug: string, id: str
 }
 
 export async function abortUpload(db: Db, actor: Actor, slug: string, id: string) {
-  const { p, role, u } = await load(db, actor, slug, id, "upload");
+  const { p, role, u } = await load(db, actor, slug, id, "upload", { archivedOk: true });
   needDrive(role, u, actor);
   if (u.state !== "uploading" || !u.multipartId) throw new HttpError(409, `Upload is ${u.state}`);
   await store.abortMultipart(u.objectKey, u.multipartId).catch((e) => {
@@ -264,8 +271,9 @@ export async function abortUpload(db: Db, actor: Actor, slug: string, id: string
   return { id: u.id, state: "aborted" };
 }
 
+/** Client dumps carry personal data: downloading needs `push` (owner, developer), not `pull` (viewers). */
 export async function downloadUpload(db: Db, actor: Actor, slug: string, id: string) {
-  const { p, u } = await load(db, actor, slug, id, "pull");
+  const { p, u } = await load(db, actor, slug, id, "push");
   if (u.state !== "ready") throw new HttpError(409, `Upload is ${u.state}, not ready`);
   const url = await store.presignGet(u.objectKey, store.URL_TTL_SECONDS, contentDisposition(u.filename));
   await audit(db, actor, p.id, "upload.download", u.id);

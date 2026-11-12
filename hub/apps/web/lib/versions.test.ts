@@ -8,6 +8,7 @@ import {
   project,
   projectMember,
   projectVersion,
+  run,
   user,
 } from "@porter-hub/db";
 import { runMigrations } from "@porter-hub/db/migrate";
@@ -215,6 +216,30 @@ describe("push and pull", () => {
     const early = await initV(req("dev2", { base_version: latest, media_hashes: [] }));
     expect(early.status).toBe(409);
     expect((await json(early)).latest).toBe(latest + 1);
+  });
+
+  test("init is refused while a run is queued or running, naming the run", async () => {
+    const latest = (await conn.db.select().from(projectVersion).where(eq(projectVersion.projectId, pid)))
+      .length;
+    const [r] = await conn.db
+      .insert(run)
+      .values({ projectId: pid, stages: ["analyse"] })
+      .returning();
+    try {
+      for (const state of ["queued", "running"] as const) {
+        await conn.db.update(run).set({ state }).where(eq(run.id, r.id));
+        const res = await initV(req("dev", { base_version: latest, media_hashes: [] }));
+        expect(res.status).toBe(409);
+        const b = await json(res);
+        expect(b).toMatchObject({ run_id: r.id });
+        expect(b.latest).toBeUndefined();
+        expect(b.error).toMatch(/run is queued or running/);
+      }
+      await conn.db.update(run).set({ state: "finished" }).where(eq(run.id, r.id));
+      expect((await initV(req("dev", { base_version: latest, media_hashes: [] }))).status).toBe(200);
+    } finally {
+      await conn.db.delete(run).where(eq(run.id, r.id));
+    }
   });
 
   test("concurrent commits from the same base: exactly one wins", async () => {
