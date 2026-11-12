@@ -406,3 +406,96 @@ async fn cancel_stops_sitemap_walk() {
         t.elapsed()
     );
 }
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap() {
+        let e = e.unwrap();
+        let dest = to.join(e.file_name());
+        if e.file_type().unwrap().is_dir() {
+            copy_dir(&e.path(), &dest);
+        } else {
+            std::fs::copy(e.path(), dest).unwrap();
+        }
+    }
+}
+
+/// A live crawl's `raw/crawl` and `media/`, copied to a snapshot folder, replay through a
+/// `file://` url with no network: the same routes, saved HTML and media files.
+#[tokio::test]
+async fn crawl_from_snapshot_dir() {
+    let s = MockServer::start().await;
+    page(&s, "/", r#"<title>Home</title><a href="/p">p</a>"#).await;
+    page(
+        &s,
+        "/p",
+        r#"<title>P</title><img src="/a-300x200.jpg" srcset="/a-300x200.jpg 300w, /a.jpg 1200w">"#,
+    )
+    .await;
+    for (p, body) in [("/a-300x200.jpg", "small"), ("/a.jpg", "big")] {
+        Mock::given(method("GET"))
+            .and(path(p))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(body, "image/jpeg"))
+            .mount(&s)
+            .await;
+    }
+    let (_live_dir, live) = run(cfg(&format!("{}/", s.uri()), &[]), Stage::Extract, false).await;
+
+    let snap = tempfile::tempdir().unwrap();
+    copy_dir(&live.raw_dir("crawl"), &snap.path().join("crawl"));
+    copy_dir(&live.dir().join("media"), &snap.path().join("media"));
+    // One file the snapshot lost: reported, not fetched.
+    let lines = std::fs::read_to_string(snap.path().join("crawl/media.ndjson")).unwrap();
+    let kept: Vec<&str> = lines.lines().filter(|l| !l.contains("a-300x200")).collect();
+    std::fs::write(snap.path().join("crawl/media.ndjson"), kept.join("\n")).unwrap();
+    drop(s); // the server is gone: nothing may reach the network
+
+    let url = url::Url::from_directory_path(snap.path())
+        .unwrap()
+        .to_string();
+    let (_d, p) = run(cfg(&url, &[]), Stage::Extract, false).await;
+    let key = |rs: Vec<Route>| {
+        let mut v: Vec<(String, Option<u16>, Option<String>)> = rs
+            .into_iter()
+            .map(|r| (r.url, r.http_status, r.title))
+            .collect();
+        v.sort();
+        v
+    };
+    let replayed = key(routes(&p));
+    assert_eq!(replayed, key(routes(&live)));
+    assert_eq!(replayed.len(), 2, "{replayed:?}");
+    let html = std::fs::read_dir(p.raw_dir("crawl").join("html")).unwrap();
+    assert_eq!(html.count(), 2);
+    let media = p.store().items::<Media>(ItemKind::Media).unwrap();
+    assert_eq!(media.len(), 1, "{media:?}");
+    let big = p
+        .store()
+        .media_by_url(&format!("{}/a.jpg", live_uri(&live)))
+        .unwrap();
+    assert_eq!(
+        std::fs::read(p.store().media_path(big.unwrap()).unwrap()).unwrap(),
+        b"big"
+    );
+    let issues = p
+        .store()
+        .issues(&porter_engine::store::IssueFilter::default())
+        .unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("a-300x200.jpg is not in the snapshot")),
+        "{issues:?}"
+    );
+
+    // Analyse replays too, and writes what it detected.
+    let (_d2, a) = run(cfg(&url, &[]), Stage::Analyse, false).await;
+    assert_eq!(key(routes(&a)).len(), 2);
+    assert!(a.raw_dir("crawl").join("detect.json").exists());
+}
+
+/// The live crawl's origin, from the routes it recorded.
+fn live_uri(p: &Project) -> String {
+    let u = url::Url::parse(&routes(p)[0].url).unwrap();
+    u.origin().ascii_serialization()
+}

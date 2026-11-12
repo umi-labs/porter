@@ -1,6 +1,10 @@
 //! Public-site crawl connector: the one source porter always has access to.
 //! Records every URL's status, redirect hops and head metadata, detects the platform
 //! and (in `extract`) saves HTML and downloads media.
+//!
+//! A `file://` url reads a saved snapshot instead of the network: a folder holding a copy of
+//! a project's `raw/crawl` (as `crawl/`) and `media/`. Pages come from `crawl/pages/*.json`
+//! (their HTML from `crawl/html/`, keyed by `UrlKey`), media from `crawl/media.ndjson`.
 
 use crate::config::ConnectorConfig;
 use crate::connectors::fetch::{
@@ -851,6 +855,7 @@ async fn download_media(sh: &Shared, route: ItemId, urls: &[String]) -> Result<(
                     .filter(|n| !n.is_empty())
                     .unwrap_or("file");
                 let h = store.put_media_bytes(&bytes, url, name)?;
+                index_media(ctx, url, &h.hash)?;
                 if h.replaced.is_some() {
                     ctx.issue(
                         IssueKind::MissingMedia,
@@ -865,6 +870,19 @@ async fn download_media(sh: &Shared, route: ItemId, urls: &[String]) -> Result<(
         }
         pause(sh).await;
     }
+    Ok(())
+}
+
+/// `raw/crawl/media.ndjson`: URL -> content hash, so a snapshot keeps which file each URL was.
+fn index_media(ctx: &StageCtx, url: &str, hash: &str) -> Result<()> {
+    use std::io::Write;
+    let raw = ctx.project.raw_dir(NAME);
+    std::fs::create_dir_all(&raw)?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(raw.join("media.ndjson"))?;
+    writeln!(f, "{}", serde_json::json!({ "url": url, "hash": hash }))?;
     Ok(())
 }
 
@@ -911,6 +929,9 @@ fn enqueue(seen: &mut HashSet<UrlKey>, frontier: &mut Vec<Url>, mut u: Url) {
 }
 
 async fn crawl(ctx: &StageCtx, opts: &Opts, extract: bool) -> Result<()> {
+    if opts.start.scheme() == "file" {
+        return snapshot(ctx, opts, extract);
+    }
     let client = Client::builder()
         .user_agent(USER_AGENT)
         .redirect(reqwest::redirect::Policy::none())
@@ -992,21 +1013,145 @@ async fn crawl(ctx: &StageCtx, opts: &Opts, extract: bool) -> Result<()> {
         )?;
     }
     if !extract {
-        let platform = platforms
-            .into_iter()
-            .min_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)))
-            .map(|(p, _)| p);
-        let detected = Detected {
-            platform,
-            builders: builders.into_iter().collect(),
-            plugins: plugins.into_iter().collect(),
+        write_detect(ctx, platforms, builders, plugins)?;
+    }
+    Ok(())
+}
+
+fn write_detect(
+    ctx: &StageCtx,
+    platforms: BTreeMap<String, usize>,
+    builders: BTreeSet<String>,
+    plugins: BTreeSet<String>,
+) -> Result<()> {
+    let platform = platforms
+        .into_iter()
+        .min_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)))
+        .map(|(p, _)| p);
+    let detected = Detected {
+        platform,
+        builders: builders.into_iter().collect(),
+        plugins: plugins.into_iter().collect(),
+    };
+    let raw = ctx.project.raw_dir(NAME);
+    std::fs::create_dir_all(&raw)?;
+    std::fs::write(
+        raw.join("detect.json"),
+        serde_json::to_vec_pretty(&detected)?,
+    )?;
+    Ok(())
+}
+
+/// The crawl replayed from a saved snapshot (see the module docs); no network. Each saved page
+/// becomes its route with the status it had; in extract its HTML is saved and the media it
+/// references are copied from the snapshot's `media/`.
+fn snapshot(ctx: &StageCtx, opts: &Opts, extract: bool) -> Result<()> {
+    let root = opts
+        .start
+        .to_file_path()
+        .map_err(|_| anyhow!("crawl url {} is not a local path", opts.start))?;
+    let snap = root.join("crawl");
+    let pages = std::fs::read_dir(snap.join("pages"))
+        .with_context(|| format!("snapshot {} has no crawl/pages", root.display()))?;
+    let mut index: std::collections::HashMap<String, String> = Default::default();
+    if let Ok(text) = std::fs::read_to_string(snap.join("media.ndjson")) {
+        for v in text
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        {
+            if let (Some(u), Some(h)) = (v["url"].as_str(), v["hash"].as_str()) {
+                index.insert(u.to_string(), h.to_string());
+            }
+        }
+    }
+    let raw = ctx.project.raw_dir(NAME);
+    let css_url = Regex::new(r#"url\(\s*['"]?([^'")]+)"#)?;
+    let store = ctx.project.store();
+    let mut paths: Vec<_> = pages.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    paths.sort();
+    let mut platforms: BTreeMap<String, usize> = BTreeMap::new();
+    let (mut builders, mut plugins) = (BTreeSet::new(), BTreeSet::new());
+    let mut done = 0u64;
+    for path in paths {
+        if ctx.cancel.is_cancelled() {
+            break;
+        }
+        let Ok(head) = serde_json::from_slice::<PageHead>(&std::fs::read(&path)?) else {
+            continue;
         };
-        let raw = ctx.project.raw_dir(NAME);
-        std::fs::create_dir_all(&raw)?;
-        std::fs::write(
-            raw.join("detect.json"),
-            serde_json::to_vec_pretty(&detected)?,
+        let Ok(url) = Url::parse(&head.url) else {
+            continue;
+        };
+        if !opts.allows(&url) {
+            continue;
+        }
+        let key = hash16(&key_of(&url));
+        let id = put_route(
+            ctx,
+            &url,
+            head.status,
+            RouteTarget::None,
+            head.title.clone(),
         )?;
+        let html = std::fs::read_to_string(snap.join("html").join(format!("{key}.html"))).ok();
+        let parsed = html
+            .as_deref()
+            .map(|h| parse_page(h, &url, &HeaderMap::new(), &css_url, &opts.keep_query));
+        let out = raw.join("pages");
+        std::fs::create_dir_all(&out)?;
+        std::fs::write(
+            out.join(format!("{key}.json")),
+            serde_json::to_vec_pretty(&head)?,
+        )?;
+        if let Some(p) = &parsed {
+            if let Some(pl) = &p.detected.platform {
+                *platforms.entry(pl.clone()).or_default() += 1;
+            }
+            builders.extend(p.detected.builders.iter().cloned());
+            plugins.extend(p.detected.plugins.iter().cloned());
+        }
+        if extract {
+            if let Some(h) = &html {
+                let dir = raw.join("html");
+                std::fs::create_dir_all(&dir)?;
+                std::fs::write(dir.join(format!("{key}.html")), h)?;
+            }
+            for m in parsed.iter().flat_map(|p| &p.media) {
+                if !ctx.refresh && store.media_by_url(m)?.is_some() {
+                    continue;
+                }
+                let file = index
+                    .get(m)
+                    .filter(|h| h.len() > 4 && h.is_ascii())
+                    .map(|h| root.join("media").join(&h[..2]).join(&h[2..4]).join(h));
+                match file.and_then(|f| std::fs::read(f).ok()) {
+                    Some(bytes) => {
+                        let name = m
+                            .split(['?', '#'])
+                            .next()
+                            .and_then(|u| u.rsplit('/').next());
+                        let h = store.put_media_bytes(&bytes, m, name.unwrap_or("file"))?;
+                        index_media(ctx, m, &h.hash)?;
+                        ctx.item_status(h.id, ItemKind::Media, ItemStatus::Done)?;
+                    }
+                    None => {
+                        ctx.issue(
+                            IssueKind::MissingMedia,
+                            Severity::Warning,
+                            Some(id),
+                            format!("{m} is not in the snapshot"),
+                            serde_json::json!({ "url": m }),
+                        )?;
+                    }
+                }
+            }
+        }
+        ctx.item_status(id, ItemKind::Route, ItemStatus::Done)?;
+        done += 1;
+        ctx.progress(done, None, "pages");
+    }
+    if !extract {
+        write_detect(ctx, platforms, builders, plugins)?;
     }
     Ok(())
 }
