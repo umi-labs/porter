@@ -19,3 +19,10 @@ url.workspace = true
 percent-encoding.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+reqwest.workspace = true
+
+[dev-dependencies]
+wiremock.workspace = true

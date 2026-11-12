@@ -3,7 +3,10 @@
 
 pub mod config;
 pub mod events;
+pub mod http;
 pub mod mapping;
 pub mod project;
+pub mod registry;
+pub mod stage;
 pub mod store;
 pub mod url;

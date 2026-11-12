@@ -1,7 +1,7 @@
 use super::{NOW, RunId, Store, wire};
 use crate::events::Summary;
 use anyhow::{Result, anyhow};
-use porter_model::{Resolution, Stage};
+use porter_model::{ItemStatus, Resolution, Severity, Stage};
 use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
@@ -58,5 +58,37 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(())
+    }
+}
+
+impl Store {
+    /// Counts of statuses this run wrote for `stage` and issues it opened or reopened.
+    /// `interrupted` is left false for the caller to set.
+    pub fn run_tally(&self, run: RunId, stage: Stage) -> Result<Summary> {
+        let conn = self.conn();
+        let (run_id, stage) = (run.0.to_string(), wire(&stage)?);
+        let mut s = Summary::default();
+        let mut stmt = conn.prepare(
+            "SELECT status FROM statuses WHERE run_id = ?1 AND stage = ?2 AND deleted_at IS NULL",
+        )?;
+        for row in stmt.query_map([&run_id, &stage], |r| r.get::<_, String>(0))? {
+            match serde_json::from_str(&row?)? {
+                ItemStatus::Done => s.done += 1,
+                ItemStatus::Partial { .. } => s.partial += 1,
+                ItemStatus::Skipped { .. } => s.skipped += 1,
+                ItemStatus::Failed { .. } => s.failed += 1,
+            }
+        }
+        let mut stmt = conn.prepare(
+            "SELECT severity FROM issues WHERE run_id = ?1 AND stage = ?2 AND deleted_at IS NULL",
+        )?;
+        for row in stmt.query_map([&run_id, &stage], |r| r.get::<_, String>(0))? {
+            match super::from_wire(row?)? {
+                Severity::Error => s.errors += 1,
+                Severity::Warning => s.warnings += 1,
+                Severity::Info => s.infos += 1,
+            }
+        }
+        Ok(s)
     }
 }
