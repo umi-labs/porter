@@ -749,3 +749,40 @@ async fn count_mismatch_points_at_removed_items() {
         counts[0].message
     );
 }
+
+#[tokio::test]
+async fn every_document_gets_a_verify_status() {
+    let fake = Fake::default();
+    let s = payload(&fake).await;
+    let f = fx(&s.uri());
+    f.loaded(&doc("1", "a", None), "pages", 1);
+    fake.put("pages", json!({"id": 1, "title": "A", "parent": null}));
+    // Mapped but never loaded, and a type with no mapping.
+    let st = f.p.store();
+    let b = doc("2", "b", None);
+    st.put_item(ItemKind::Document, b.id, &b.source, &b)
+        .unwrap();
+    let mut c = doc("3", "c", None);
+    c.doc_type = "event".into();
+    st.put_item(ItemKind::Document, c.id, &c.source, &c)
+        .unwrap();
+    f.verify().await;
+    assert_eq!(f.status(did("1")), Some(ItemStatus::Done));
+    assert_eq!(
+        f.status(did("2")),
+        Some(ItemStatus::Skipped {
+            reason: "not loaded".into()
+        })
+    );
+    assert_eq!(
+        f.status(did("3")),
+        Some(ItemStatus::Skipped {
+            reason: "not mapped".into()
+        })
+    );
+    let html = porter_engine::report::render_verify(&f.p).unwrap();
+    assert!(
+        html.contains("1 not loaded") && html.contains("1 not mapped"),
+        "{html}"
+    );
+}

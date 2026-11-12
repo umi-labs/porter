@@ -326,3 +326,55 @@ fn init_rejects_unknown_adapter() {
         ));
     assert!(!d.path().join("porter.toml").exists());
 }
+
+#[test]
+fn dry_run_run_skips_verify() {
+    let d = tempfile::tempdir().unwrap();
+    init(d.path());
+    let wxr = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-engine/tests/fixtures/wxr/basic.xml");
+    let toml = d.path().join("porter.toml");
+    let text = std::fs::read_to_string(&toml)
+        .unwrap()
+        .replace("[destination]\n", "[destination]\nadapter = \"payload\"\nurl = \"http://127.0.0.1:9\"\napi_key_env = \"PORTER_TEST_UNSET_KEY\"\n");
+    std::fs::write(
+        &toml,
+        format!(
+            "{text}\n[[connectors]]\nkind = \"wxr\"\npath = {:?}\n",
+            wxr.display().to_string()
+        ),
+    )
+    .unwrap();
+    let out = porter(d.path())
+        .env_remove("PORTER_TEST_UNSET_KEY")
+        .timeout(Duration::from_secs(30))
+        .args(["--json", "run", "--continue"])
+        .assert();
+    let o = out.get_output();
+    let stdout = String::from_utf8(o.stdout.clone()).unwrap();
+    let events: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert!(
+        events
+            .iter()
+            .any(|e| e["event"] == "stage-finished" && e["stage"] == "load"),
+        "{stdout}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| e["event"] == "stage-started" && e["stage"] == "verify"),
+        "{stdout}"
+    );
+    assert!(
+        events.iter().any(|e| e["event"] == "stage-skipped"
+            && e["stage"] == "verify"
+            && e["reason"] == "dry run"),
+        "{stdout}"
+    );
+    // Verify never asked for the (unset) API key.
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(!stderr.contains("PORTER_TEST_UNSET_KEY"), "{stderr}");
+}

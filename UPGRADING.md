@@ -50,7 +50,7 @@ The `_variants` locale handling is kept. WordPress is now reached through the `c
 2. `porter init <name> --adapter wordpress` (or `umbraco`) in a new folder.
 3. Add your connectors and `[destination]` to the new `porter.toml`.
 4. `porter analyse`; it seeds `[mapping]` with defaults. Carry your old decisions across by hand.
-5. `porter run` (a dry run), read `porter issues --open`, then `porter run --apply`.
+5. `porter run`: load is a dry run (would-be writes go to `raw/load-preview/`) and verify is skipped, since nothing reached the destination. It stops at the first stage with error issues or failed items; `--continue` runs on. Read `porter issues --open`, then `porter run --apply` to load and verify.
 
 ## Not built yet
 

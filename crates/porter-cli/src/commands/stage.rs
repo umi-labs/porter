@@ -280,12 +280,15 @@ fn seed_mapping(env: &Env) -> bool {
     }
 }
 
+/// `skip`: a stage left out of `cmds` on purpose, with why. It is reported once the
+/// stage before it has run (a `stage-skipped` event under `--json`), and has no exit code.
 async fn drive(
     dir: &Path,
     json: bool,
     cmds: &[StageCmd],
     keep_going: bool,
     refresh: bool,
+    skip: Option<(Stage, &str)>,
 ) -> Result<i32> {
     let printer = Printer::start(json);
     let mut env = match env(dir, &printer) {
@@ -314,6 +317,19 @@ async fn drive(
             eprintln!("mapping seeded in porter.toml");
         }
     }
+    let skipped = skip.filter(|_| {
+        let last = cmds.last().map(|c| c.stage());
+        rows.iter().any(|(s, _)| Some(*s) == last)
+    });
+    if let Some((stage, reason)) = skipped {
+        if json {
+            crate::output::print_json(&serde_json::json!(
+                {"v": 1, "event": "stage-skipped", "stage": stage, "reason": reason}
+            ));
+        } else {
+            eprintln!("{} skipped: {reason}", wire(&stage));
+        }
+    }
     if !json && !rows.is_empty() {
         table(&rows);
     }
@@ -321,19 +337,26 @@ async fn drive(
 }
 
 pub async fn run(dir: &Path, json: bool, cmd: StageCmd, refresh: bool) -> Result<i32> {
-    drive(dir, json, &[cmd], false, refresh).await
+    drive(dir, json, &[cmd], false, refresh, None).await
 }
 
+/// Without `apply` load is a dry run, so there is nothing in the destination to verify:
+/// verify is skipped ("dry run") rather than run against what an earlier run left there.
 pub async fn run_all(dir: &Path, json: bool, keep_going: bool, apply: bool) -> Result<i32> {
-    let steps = [
+    let mut steps = vec![
         StageCmd::Analyse,
         StageCmd::Extract,
         StageCmd::Normalise,
         StageCmd::Schema(Mode::Check),
         StageCmd::Load(apply),
-        StageCmd::Verify,
     ];
-    drive(dir, json, &steps, keep_going, false).await
+    let skip = if apply {
+        steps.push(StageCmd::Verify);
+        None
+    } else {
+        Some((Stage::Verify, "dry run"))
+    };
+    drive(dir, json, &steps, keep_going, false, skip).await
 }
 
 #[cfg(test)]

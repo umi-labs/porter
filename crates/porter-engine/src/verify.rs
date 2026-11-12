@@ -286,11 +286,21 @@ async fn structure(
     checks: &mut Checks,
 ) -> Result<()> {
     let mapping = &ctx.config.mapping;
-    let todo: Vec<(&Document, &TypeMap)> = docs
-        .iter()
-        .filter(|d| loaded.get(d.id).is_some())
-        .filter_map(|d| Some((d, mapping.types.get(&d.doc_type)?)))
-        .collect();
+    let mut todo: Vec<(&Document, &TypeMap)> = vec![];
+    // Every document gets a status: the ones there is nothing to check say why.
+    for d in docs {
+        let tm = mapping.types.get(&d.doc_type).filter(|tm| tm.to.is_some());
+        let reason = match tm {
+            None => "not mapped",
+            Some(_) if loaded.get(d.id).is_none() => "not loaded",
+            Some(tm) => {
+                todo.push((d, tm));
+                continue;
+            }
+        };
+        let reason = reason.to_string();
+        ctx.item_status(d.id, ItemKind::Document, ItemStatus::Skipped { reason })?;
+    }
     let mut media_exists: HashMap<ItemId, bool> = HashMap::new();
     // One up-front note when the destination can't see every reference.
     let mut blind_said = false;

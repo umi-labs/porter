@@ -24,12 +24,18 @@ pub fn render_verify(project: &Project) -> Result<String> {
 
     let mut per_kind: BTreeMap<&str, BTreeMap<&'static str, u64>> = BTreeMap::new();
     let mut failures: Vec<(String, &str, &str)> = Vec::new();
+    // Not checked, by reason (not loaded, not mapped...).
+    let mut unchecked: BTreeMap<&str, u64> = BTreeMap::new();
     for (id, kind, _) in &rows {
         let Some(s) = status.get(id) else { continue };
         *per_kind.entry(kind).or_default().entry(tag(s)).or_default() += 1;
         let why = match s {
             ItemStatus::Failed { error } => error,
             ItemStatus::Partial { reason } => reason,
+            ItemStatus::Skipped { reason } => {
+                *unchecked.entry(reason).or_default() += 1;
+                continue;
+            }
             _ => continue,
         };
         failures.push((
@@ -49,6 +55,10 @@ pub fn render_verify(project: &Project) -> Result<String> {
                 thead { tr { th { "Type" } th { "Results" } } }
                 tbody { @for (k, m) in &per_kind { tr { td { (k) } td { (counts(m)) } } } }
             } }
+        }
+        h2 { "Not verified" }
+        @if unchecked.is_empty() { p.muted { "None." } } @else {
+            p { @for (i, (why, n)) in unchecked.iter().enumerate() { @if i > 0 { ", " } (n) " " (why) } }
         }
         h2 { "Counts" }
         @if checks.counts.is_empty() { p.muted { "No counts checked." } } @else {
