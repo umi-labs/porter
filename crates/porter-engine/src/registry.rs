@@ -1,4 +1,5 @@
 use crate::config::ProjectConfig;
+use crate::destinations::payload::PayloadDestination;
 use crate::sources::umbraco::UmbracoSource;
 use crate::sources::wordpress::WordPressSource;
 use crate::stage::{Destination, Source};
@@ -9,7 +10,7 @@ pub fn source_names() -> &'static [&'static str] {
 }
 
 pub fn destination_names() -> &'static [&'static str] {
-    &[]
+    &["payload"]
 }
 
 pub fn source(name: &str) -> Option<Box<dyn Source>> {
@@ -20,6 +21,9 @@ pub fn source(name: &str) -> Option<Box<dyn Source>> {
     }
 }
 
-pub fn destination(_name: &str, _cfg: &ProjectConfig) -> Option<Box<dyn Destination>> {
-    None
+pub fn destination(name: &str, cfg: &ProjectConfig) -> Option<Box<dyn Destination>> {
+    match name {
+        "payload" => Some(Box::new(PayloadDestination::new(&cfg.destination))),
+        _ => None,
+    }
 }

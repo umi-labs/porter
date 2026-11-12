@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod connectors;
+pub mod destinations;
 pub mod events;
 pub mod html;
 pub mod http;

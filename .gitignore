@@ -8,3 +8,12 @@
 # Can hold WordPress credentials
 /porter.config.*
 /.porter.*
+
+# Payload test app
+/tests/payload-app/node_modules
+/tests/payload-app/.next
+/tests/payload-app/*.db
+/tests/payload-app/*.db-*
+/tests/payload-app/media
+/tests/payload-app/next-env.d.ts
+/tests/payload-app/payload-dev.log
