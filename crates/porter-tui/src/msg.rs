@@ -11,6 +11,8 @@ pub enum Msg {
     Key(KeyEvent),
     Resize(u16, u16),
     Engine(Event),
+    /// The engine event channel overflowed and this many events never arrived.
+    Lagged(u64),
     Data(DataMsg),
     Tick,
     RunDone(RunOutcome),
@@ -45,6 +47,8 @@ pub enum RefreshScope {
     All,
 }
 
+// OpenEditor, OpenReport and Copy are constructed by Task 6; remove this allow then.
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Cmd {
     Run(RunPlan),

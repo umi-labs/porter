@@ -1,4 +1,5 @@
-use crate::lists::{ISSUES_PAGE, IssueList, IssuesState, ItemsState, Window, kind_name};
+use crate::keymap::{self, Action};
+use crate::lists::{Filter, ISSUES_PAGE, IssueList, IssuesState, ItemsState, Window, kind_name};
 use crate::msg::{Cmd, DataMsg, Msg, RefreshScope};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use porter_engine::events::{Event, Summary};
@@ -11,7 +12,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use uuid::Uuid;
 
-const LOG_CAP: usize = 1000;
+pub const LOG_CAP: usize = 2000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
@@ -22,7 +23,7 @@ pub enum Panel {
 }
 
 impl Panel {
-    const ALL: [Panel; 4] = [Panel::Project, Panel::Stages, Panel::Issues, Panel::Items];
+    pub const ALL: [Panel; 4] = [Panel::Project, Panel::Stages, Panel::Issues, Panel::Items];
 
     fn step(self, by: usize) -> Panel {
         let i = Self::ALL.iter().position(|p| *p == self).unwrap_or(0);
@@ -122,6 +123,9 @@ pub struct App {
     pending_overview: u32,
     seq: u64,
     pub log: VecDeque<LogLine>,
+    pub show_log: bool,
+    pub help: bool,
+    pub help_scroll: usize,
     pub running: Option<RunInfo>,
     pub size: (u16, u16),
     pub quit: bool,
@@ -144,6 +148,9 @@ impl App {
             pending_overview: 0,
             seq: 0,
             log: VecDeque::new(),
+            show_log: true,
+            help: false,
+            help_scroll: 0,
             running: None,
             size,
             quit: false,
@@ -331,6 +338,12 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
             return if finished { app.refresh_cmds() } else { vec![] };
         }
         Msg::Resize(w, h) => app.size = (w, h),
+        Msg::Lagged(n) => {
+            app.push_log(format!("dropped {n} events"));
+            app.dirty = true;
+            // A dropped event may have been a stage ending: re-read what is on screen.
+            return app.refresh_cmds();
+        }
         Msg::Data(d) => {
             app.dirty = true;
             return on_data(app, d);
@@ -353,60 +366,47 @@ fn key(app: &mut App, k: KeyEvent) -> Vec<Cmd> {
     if k.kind == KeyEventKind::Release {
         return vec![];
     }
-    if app.modal == Some(Modal::ConfirmQuit) {
-        return match k.code {
-            KeyCode::Char('y') => {
-                app.quit = true;
-                app.cancelling = true;
-                vec![Cmd::Cancel, Cmd::Quit]
+    match keymap::lookup(&keymap::active(app), &k) {
+        Some(a) => perform(app, a, k),
+        None => typed(app, k),
+    }
+}
+
+/// Runs what a key is bound to; the table decides which keys reach here.
+fn perform(app: &mut App, a: Action, k: KeyEvent) -> Vec<Cmd> {
+    match a {
+        Action::FocusNext => app.set_focus(app.focus.step(1)),
+        Action::FocusPrev => app.set_focus(app.focus.step(3)),
+        Action::FocusNth => {
+            if let KeyCode::Char(c) = k.code
+                && let Some(p) = c.to_digit(10).and_then(|n| Panel::ALL.get(n as usize - 1))
+            {
+                app.set_focus(*p);
             }
-            KeyCode::Char('n') | KeyCode::Esc => {
-                app.modal = None;
-                vec![]
+        }
+        Action::Down => return move_by(app, 1),
+        Action::Up => return move_by(app, -1),
+        Action::PageDown => return move_by(app, 20),
+        Action::PageUp => return move_by(app, -20),
+        Action::Open => return open(app),
+        Action::Back => {
+            if app.detail.pop().is_none() {
+                return clear_filter(app);
             }
-            _ => vec![],
-        };
-    }
-    if matches!(app.modal, Some(Modal::Resolve(_))) {
-        return resolve_key(app, k);
-    }
-    if let Some(c) = filter_key(app, k) {
-        return c;
-    }
-    if let Some(c) = detail_key(app, k) {
-        return c;
-    }
-    if let Some(c) = list_key(app, k) {
-        return c;
-    }
-    let stages = app.focus == Panel::Stages;
-    match k.code {
-        KeyCode::Tab => app.set_focus(app.focus.step(1)),
-        KeyCode::BackTab => app.set_focus(app.focus.step(3)),
-        KeyCode::Char('1') => app.set_focus(Panel::Project),
-        KeyCode::Char('2') => app.set_focus(Panel::Stages),
-        KeyCode::Char('3') => app.set_focus(Panel::Issues),
-        KeyCode::Char('4') => app.set_focus(Panel::Items),
-        KeyCode::Char('j') | KeyCode::Down if stages => {
-            let st = &mut app.panels.stages;
-            st.sel = (st.sel + 1).min(STAGES.len() - 1);
         }
-        KeyCode::Char('k') | KeyCode::Up if stages => {
-            app.panels.stages.sel = app.panels.stages.sel.saturating_sub(1);
-        }
-        KeyCode::Char(' ') if stages => {
+        Action::RunStage => {
             let s = app.panels.stages.selected();
             return app.start_stage(s);
         }
-        KeyCode::Char('R') => {
+        Action::RunAll => {
             return app.start(RunPlan::All {
                 keep_going: false,
                 apply: false,
             });
         }
-        KeyCode::Char('v') => return app.start_stage(Stage::Verify),
-        KeyCode::Char('q') => return quit(app),
-        KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+        Action::Verify => return app.start_stage(Stage::Verify),
+        Action::Cancel => return app.cancel(),
+        Action::CtrlC => {
             // First press cancels a run; a second (or an idle press) quits.
             if app.running.is_some() && !app.cancelling {
                 return app.cancel();
@@ -418,8 +418,81 @@ fn key(app: &mut App, k: KeyEvent) -> Vec<Cmd> {
                 vec![Cmd::Quit]
             };
         }
-        KeyCode::Char('c') => return app.cancel(),
-        _ => {}
+        Action::Quit => return quit(app),
+        Action::ToggleLog => app.show_log = !app.show_log,
+        Action::Help => app.help = true,
+        Action::CloseHelp => {
+            app.help = false;
+            app.help_scroll = 0;
+        }
+        // Later tasks replace these with the real thing.
+        Action::LoadDry | Action::LoadApply | Action::Report | Action::Edit | Action::Copy => {
+            app.push_log(format!("{}: not available yet", keymap::what(a)));
+        }
+        Action::Filter => {
+            if let Some(f) = filter_mut(app) {
+                f.editing = true;
+            }
+        }
+        Action::CycleFilter => return cycle_filter(app),
+        Action::Resolve => {
+            let m = match app.detail.last() {
+                Some(DetailView::Issues(l)) => l.win.at(l.sel).map(resolve_modal),
+                Some(DetailView::Issue(i)) => Some(resolve_modal(i)),
+                _ => None,
+            };
+            app.modal = m.or(app.modal.take());
+        }
+        Action::Jump => {
+            if let Some(DetailView::Issue(i)) = app.detail.last() {
+                return i.item.map(Cmd::Item).into_iter().collect();
+            }
+        }
+        Action::ConfirmYes => {
+            app.quit = true;
+            app.cancelling = true;
+            return vec![Cmd::Cancel, Cmd::Quit];
+        }
+        Action::CloseModal => app.modal = None,
+        Action::ResolveNext | Action::ResolvePrev => {
+            if let Some(Modal::Resolve(m)) = &mut app.modal {
+                m.choice = (m.choice + if a == Action::ResolveNext { 1 } else { 2 }) % 3;
+            }
+        }
+        Action::ResolveConfirm => return resolve_confirm(app),
+        Action::FilterCancel => return clear_filter(app),
+        Action::FilterCommit => return commit_filter(app),
+        Action::FilterBackspace => {
+            if let Some(f) = filter_mut(app) {
+                f.text.pop();
+            }
+            reset_filter_sel(app);
+        }
+    }
+    vec![]
+}
+
+/// Keys the table does not bind: text typed into the `/` filter or the resolve note.
+fn typed(app: &mut App, k: KeyEvent) -> Vec<Cmd> {
+    let KeyCode::Char(c) = k.code else {
+        return vec![];
+    };
+    if k.modifiers.contains(KeyModifiers::CONTROL) {
+        return vec![];
+    }
+    if let Some(Modal::Resolve(m)) = &mut app.modal {
+        if m.choice == 0 {
+            m.note.push(c);
+        }
+        return vec![];
+    }
+    if app.modal.is_none()
+        && !app.help
+        && let Some(f) = filter_mut(app)
+        && f.editing
+    {
+        f.text.push(c);
+        reset_filter_sel(app);
     }
     vec![]
 }
@@ -494,82 +567,95 @@ fn landed_overview(app: &mut App) {
     }
 }
 
-fn delta(k: KeyCode) -> Option<i64> {
-    match k {
-        KeyCode::Char('j') | KeyCode::Down => Some(1),
-        KeyCode::Char('k') | KeyCode::Up => Some(-1),
-        KeyCode::PageDown => Some(20),
-        KeyCode::PageUp => Some(-20),
-        _ => None,
+/// Moves the selection of whatever list the keys drive: an open issue list, the stages,
+/// or the focused panel.
+fn move_by(app: &mut App, d: i64) -> Vec<Cmd> {
+    if app.help {
+        app.help_scroll = (app.help_scroll as i64 + d).max(0) as usize;
+        return vec![];
+    }
+    if let Some(DetailView::Issues(l)) = app.detail.last_mut() {
+        return l.step(d);
+    }
+    match app.focus {
+        Panel::Items => app.panels.items.step(d),
+        Panel::Issues => {
+            let st = &mut app.panels.issues;
+            let n = st.shown().len();
+            st.sel = if d < 0 {
+                st.sel.saturating_sub(d.unsigned_abs() as usize)
+            } else {
+                st.sel + d as usize
+            }
+            .min(n.saturating_sub(1));
+            vec![]
+        }
+        Panel::Stages => {
+            let st = &mut app.panels.stages;
+            st.sel = (st.sel as i64 + d).clamp(0, STAGES.len() as i64 - 1) as usize;
+            vec![]
+        }
+        Panel::Project => vec![],
     }
 }
 
-/// Keys of the Issues and Items panels themselves (Detail closed).
-fn list_key(app: &mut App, k: KeyEvent) -> Option<Vec<Cmd>> {
-    if !matches!(app.focus, Panel::Issues | Panel::Items) {
-        return None;
+/// Enter: drill into an issue list's issue, an issue's item, or the focused list's selection.
+fn open(app: &mut App) -> Vec<Cmd> {
+    match app.detail.last() {
+        Some(DetailView::Issues(l)) => {
+            if let Some(i) = l.win.at(l.sel).cloned() {
+                app.detail.push(DetailView::Issue(i));
+            }
+            return vec![];
+        }
+        Some(DetailView::Issue(i)) => return i.item.map(Cmd::Item).into_iter().collect(),
+        _ => {}
     }
-    let items = app.focus == Panel::Items;
-    if let Some(d) = delta(k.code) {
-        if items {
-            return Some(app.panels.items.step(d));
-        }
-        let st = &mut app.panels.issues;
-        let n = st.shown().len();
-        st.sel = if d < 0 {
-            st.sel.saturating_sub(d.unsigned_abs() as usize)
-        } else {
-            st.sel + d as usize
-        }
-        .min(n.saturating_sub(1));
-        return Some(vec![]);
+    if app.focus == Panel::Items {
+        let Some(id) = app.panels.items.selected().map(|r| r.id) else {
+            return vec![];
+        };
+        app.detail.clear();
+        return vec![Cmd::Item(id)];
     }
-    match k.code {
-        KeyCode::Char('/') => {
-            let f = if items {
-                &mut app.panels.items.filter
-            } else {
-                &mut app.panels.issues.filter
-            };
-            f.editing = true;
-            Some(vec![])
-        }
-        KeyCode::Char('f') if items => {
-            let it = &mut app.panels.items;
-            it.mode = it.mode.next();
-            it.fsel = 0;
-            Some(vec![])
-        }
-        KeyCode::Char('f') => {
-            let mode = app.panels.issues.mode.next();
-            let seq = app.next_seq();
-            let st = &mut app.panels.issues;
-            st.mode = mode;
-            st.sel = 0;
-            st.seq = seq;
-            Some(vec![Cmd::IssueGroups { mode, seq }])
-        }
-        KeyCode::Esc => Some(clear_filter(app)),
-        KeyCode::Enter if items => {
-            let id = app.panels.items.selected()?.id;
-            app.detail.clear();
-            Some(vec![Cmd::Item(id)])
-        }
-        KeyCode::Enter => {
-            let (kind, mode) = (app.panels.issues.selected()?.kind, app.panels.issues.mode);
-            let seq = app.next_seq();
-            let mut win = Window::new(ISSUES_PAGE);
-            win.reset(seq);
-            let list = IssueList {
-                kind,
-                mode,
-                win,
-                sel: 0,
-            };
-            let cmd = list.cmd(0);
-            app.detail = vec![DetailView::Issues(list)];
-            Some(vec![cmd])
-        }
+    let Some(g) = app.panels.issues.selected() else {
+        return vec![];
+    };
+    let (kind, mode) = (g.kind, app.panels.issues.mode);
+    let seq = app.next_seq();
+    let mut win = Window::new(ISSUES_PAGE);
+    win.reset(seq);
+    let list = IssueList {
+        kind,
+        mode,
+        win,
+        sel: 0,
+    };
+    let cmd = list.cmd(0);
+    app.detail = vec![DetailView::Issues(list)];
+    vec![cmd]
+}
+
+fn cycle_filter(app: &mut App) -> Vec<Cmd> {
+    if app.focus == Panel::Items {
+        let it = &mut app.panels.items;
+        it.mode = it.mode.next();
+        it.fsel = 0;
+        return vec![];
+    }
+    let mode = app.panels.issues.mode.next();
+    let seq = app.next_seq();
+    let st = &mut app.panels.issues;
+    st.mode = mode;
+    st.sel = 0;
+    st.seq = seq;
+    vec![Cmd::IssueGroups { mode, seq }]
+}
+
+fn filter_mut(app: &mut App) -> Option<&mut Filter> {
+    match app.focus {
+        Panel::Items => Some(&mut app.panels.items.filter),
+        Panel::Issues => Some(&mut app.panels.issues.filter),
         _ => None,
     }
 }
@@ -602,39 +688,31 @@ fn reload_items(app: &mut App) -> Vec<Cmd> {
     vec![it.cmd(0)]
 }
 
-/// Typing into the `/` filter: fuzzy and incremental on the loaded page; Enter also hands
-/// the text to the server so it narrows the whole result; Esc clears.
-fn filter_key(app: &mut App, k: KeyEvent) -> Option<Vec<Cmd>> {
+/// Enter in the `/` filter: the text stays on the loaded page and, for items, is also
+/// handed to the server so it narrows the whole result.
+fn commit_filter(app: &mut App) -> Vec<Cmd> {
     let items = app.focus == Panel::Items;
-    let f = match app.focus {
-        Panel::Items => &mut app.panels.items.filter,
-        Panel::Issues => &mut app.panels.issues.filter,
-        _ => return None,
+    let Some(f) = filter_mut(app) else {
+        return vec![];
     };
-    if !f.editing {
-        return None;
+    f.editing = false;
+    if items {
+        let text = Some(f.text.trim().to_string()).filter(|t| !t.is_empty());
+        if text != f.server {
+            f.server = text;
+            return reload_items(app);
+        }
     }
-    match k.code {
-        KeyCode::Esc => return Some(clear_filter(app)),
-        KeyCode::Enter => {
-            f.editing = false;
-            if items {
-                let text = Some(f.text.trim().to_string()).filter(|t| !t.is_empty());
-                if text != f.server {
-                    f.server = text;
-                    return Some(reload_items(app));
-                }
-            }
-        }
-        KeyCode::Backspace => {
-            f.text.pop();
-        }
-        KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => f.text.push(c),
+    reset_filter_sel(app);
+    vec![]
+}
+
+fn reset_filter_sel(app: &mut App) {
+    match app.focus {
+        Panel::Items => app.panels.items.fsel = 0,
+        Panel::Issues => app.panels.issues.sel = 0,
         _ => {}
     }
-    app.panels.items.fsel = 0;
-    app.panels.issues.sel = if items { app.panels.issues.sel } else { 0 };
-    Some(vec![])
 }
 
 fn resolve_modal(i: &Issue) -> Modal {
@@ -647,70 +725,24 @@ fn resolve_modal(i: &Issue) -> Modal {
     })
 }
 
-/// Keys inside an opened Detail view.
-fn detail_key(app: &mut App, k: KeyEvent) -> Option<Vec<Cmd>> {
-    let top = app.detail.last_mut()?;
-    match (k.code, top) {
-        (KeyCode::Esc, _) => {
-            app.detail.pop();
-            Some(vec![])
-        }
-        (c, DetailView::Issues(l)) if delta(c).is_some() => Some(l.step(delta(c)?)),
-        (KeyCode::Enter, DetailView::Issues(l)) => {
-            let i = l.win.at(l.sel)?.clone();
-            app.detail.push(DetailView::Issue(i));
-            Some(vec![])
-        }
-        (KeyCode::Char('x'), DetailView::Issues(l)) => {
-            let m = resolve_modal(l.win.at(l.sel)?);
-            app.modal = Some(m);
-            Some(vec![])
-        }
-        (KeyCode::Char('x'), DetailView::Issue(i)) => {
-            let m = resolve_modal(i);
-            app.modal = Some(m);
-            Some(vec![])
-        }
-        (KeyCode::Enter | KeyCode::Char('g'), DetailView::Issue(i)) => {
-            Some(i.item.map(Cmd::Item).into_iter().collect())
-        }
-        _ => None,
-    }
-}
-
-fn resolve_key(app: &mut App, k: KeyEvent) -> Vec<Cmd> {
+fn resolve_confirm(app: &mut App) -> Vec<Cmd> {
     let Some(Modal::Resolve(m)) = &mut app.modal else {
         return vec![];
     };
-    match k.code {
-        KeyCode::Esc => app.modal = None,
-        KeyCode::Down | KeyCode::Tab => m.choice = (m.choice + 1) % 3,
-        KeyCode::Up | KeyCode::BackTab => m.choice = (m.choice + 2) % 3,
-        KeyCode::Backspace if m.choice == 0 => {
-            m.note.pop();
+    let r = match m.choice {
+        0 if m.note.trim().is_empty() => {
+            m.error = Some("a note is required for \"handled manually\"".into());
+            return vec![];
         }
-        KeyCode::Char(c) if m.choice == 0 && !k.modifiers.contains(KeyModifiers::CONTROL) => {
-            m.note.push(c);
-        }
-        KeyCode::Enter => {
-            let r = match m.choice {
-                0 if m.note.trim().is_empty() => {
-                    m.error = Some("a note is required for \"handled manually\"".into());
-                    return vec![];
-                }
-                0 => Resolution::HandledManually {
-                    note: m.note.trim().to_string(),
-                },
-                1 => Resolution::WontFix,
-                _ => Resolution::Open,
-            };
-            let id = m.issue;
-            app.modal = None;
-            return vec![Cmd::Resolve(id, r)];
-        }
-        _ => {}
-    }
-    vec![]
+        0 => Resolution::HandledManually {
+            note: m.note.trim().to_string(),
+        },
+        1 => Resolution::WontFix,
+        _ => Resolution::Open,
+    };
+    let id = m.issue;
+    app.modal = None;
+    vec![Cmd::Resolve(id, r)]
 }
 
 fn quit(app: &mut App) -> Vec<Cmd> {

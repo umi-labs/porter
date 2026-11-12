@@ -73,7 +73,7 @@ pub async fn run_tui(dir: &Path) -> Result<i32> {
                     }
                 } => match r {
                     Ok(e) => Msg::Engine(e),
-                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Lagged(n)) => Msg::Lagged(n),
                     Err(RecvError::Closed) => { engine = None; continue }
                 },
                 Some(m) = rx.recv() => m,

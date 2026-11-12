@@ -1,5 +1,4 @@
-use crate::app::{App, Modal, Panel};
-use ratatui::text::Line;
+use crate::app::{App, Modal};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -9,13 +8,15 @@ use ratatui::{
 
 mod detail;
 mod filter;
+mod footer;
+mod help;
 mod issues;
 mod items;
+mod layout;
+mod log;
 mod modal;
 mod project;
 pub mod stages;
-
-pub const MIN_SIZE: (u16, u16) = (80, 24);
 
 /// Accent for the focused border; plain bold when NO_COLOR is set.
 fn accent() -> Style {
@@ -41,6 +42,10 @@ fn panel(title: &str, focused: bool) -> Block<'_> {
 
 pub fn view(app: &App, f: &mut Frame) {
     let area = f.area();
+    let Some(l) = layout::areas(area, app.show_log, !app.detail.is_empty()) else {
+        f.render_widget(Paragraph::new("terminal too small (need 80×24)"), area);
+        return;
+    };
     if app.session.is_none() {
         f.render_widget(
             Paragraph::new("no porter project here — setup coming in Task 7\n\nq quit"),
@@ -48,48 +53,19 @@ pub fn view(app: &App, f: &mut Frame) {
         );
         return;
     }
-    if area.width < MIN_SIZE.0 || area.height < MIN_SIZE.1 {
-        f.render_widget(Paragraph::new("terminal too small (needs 80x24)"), area);
-        return;
+    if let Some([project, stages, issues, items]) = l.panels {
+        self::project::render(app, f, project);
+        self::stages::render(app, f, stages);
+        self::issues::render(app, f, issues);
+        self::items::render(app, f, items);
     }
-    let [main, log, footer] = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(5),
-        Constraint::Length(1),
-    ])
-    .areas(area);
-    let [left, detail] =
-        Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)]).areas(main);
-    let [project, stages, issues, items] = Layout::vertical([
-        Constraint::Length(4),
-        Constraint::Length(8),
-        Constraint::Fill(1),
-        Constraint::Fill(1),
-    ])
-    .areas(left);
-
-    self::project::render(app, f, project);
-    self::stages::render(app, f, stages);
-    self::issues::render(app, f, issues);
-    self::items::render(app, f, items);
-    self::detail::render(app, f, detail);
-    let log_block = panel("Log", false);
-    let inner = log_block.inner(log);
-    f.render_widget(log_block, log);
-    let n = inner.height as usize;
-    let tail: Vec<Line> = app
-        .log
-        .iter()
-        .rev()
-        .take(n)
-        .rev()
-        .map(|l| Line::raw(l.0.as_str()))
-        .collect();
-    f.render_widget(Paragraph::new(tail), inner);
-    f.render_widget(
-        Paragraph::new(footer_text(app)).style(Style::default().add_modifier(Modifier::DIM)),
-        footer,
-    );
+    if let Some(d) = l.detail {
+        self::detail::render(app, f, d);
+    }
+    if let Some(r) = l.log {
+        self::log::render(app, f, r);
+    }
+    self::footer::render(app, f, l.footer);
 
     match &app.modal {
         Some(Modal::ConfirmQuit) => {
@@ -104,19 +80,8 @@ pub fn view(app: &App, f: &mut Frame) {
         Some(Modal::Resolve(m)) => modal::resolve(m, f, area),
         None => {}
     }
-}
-
-fn footer_text(app: &App) -> &'static str {
-    match (app.focus, app.detail.last()) {
-        (_, Some(crate::app::DetailView::Issues(_))) => {
-            "j/k move · enter open · x resolve · esc back · q quit"
-        }
-        (_, Some(crate::app::DetailView::Issue(_))) => "g jump to item · x resolve · esc back",
-        (_, Some(crate::app::DetailView::Item(_))) => "esc back · tab focus · q quit",
-        (Panel::Issues | Panel::Items, None) => {
-            "j/k move · enter open · / filter · f all/open/errors · tab focus · q quit"
-        }
-        _ => "tab focus · space run · R all · v verify · c cancel · q quit",
+    if app.help {
+        self::help::render(app, f, area);
     }
 }
 
@@ -152,6 +117,7 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::Panel;
     use crate::app::update;
     use crate::msg::Msg;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -616,5 +582,211 @@ mod tests {
             error: None,
         }));
         insta::assert_snapshot!(render(&app, 120, 40));
+    }
+
+    // --- Task 5: log, help, footer, responsive layouts ---------------------------
+
+    #[test]
+    fn layout_200x60() {
+        let (mut app, _d) = lists_app();
+        app.focus = Panel::Items;
+        insta::assert_snapshot!(render(&app, 200, 60));
+    }
+
+    #[test]
+    fn layout_120x40() {
+        let (mut app, _d) = lists_app();
+        app.focus = Panel::Items;
+        insta::assert_snapshot!(render(&app, 120, 40));
+    }
+
+    #[test]
+    fn layout_80x24() {
+        let (mut app, _d) = lists_app();
+        app.focus = Panel::Issues;
+        insta::assert_snapshot!(render(&app, 80, 24));
+    }
+
+    #[test]
+    fn layout_60x20_is_too_small() {
+        let (app, _d) = lists_app();
+        let out = render(&app, 60, 20);
+        assert!(out.contains("terminal too small (need 80×24)"));
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn narrow_detail_replaces_left_column_and_esc_goes_back() {
+        let (mut app, _d) = lists_app();
+        app.focus = Panel::Issues;
+        let before = render(&app, 90, 30);
+        assert!(before.contains("Stages") && !before.contains("Detail"));
+        press_key(&mut app, KeyCode::Enter);
+        let open = render(&app, 90, 30);
+        assert!(
+            open.contains("Detail") && !open.contains("Stages"),
+            "{open}"
+        );
+        press_key(&mut app, KeyCode::Esc);
+        assert_eq!(render(&app, 90, 30), before);
+        assert!(
+            render(&app, 100, 30).contains("Detail"),
+            "wide: both at once"
+        );
+    }
+
+    #[test]
+    fn at_toggles_the_log() {
+        let (mut app, _d) = lists_app();
+        app.push_log("hello from the log".into());
+        assert!(render(&app, 120, 40).contains("hello from the log"));
+        press_key(&mut app, KeyCode::Char('@'));
+        assert!(!render(&app, 120, 40).contains("hello from the log"));
+        press_key(&mut app, KeyCode::Char('@'));
+        assert!(render(&app, 120, 40).contains("hello from the log"));
+    }
+
+    #[test]
+    fn help_opens_with_question_mark_and_closes_with_esc() {
+        let (mut app, _d) = lists_app();
+        press_key(&mut app, KeyCode::Char('?'));
+        assert!(app.help);
+        // Keys other than close/scroll do nothing underneath the overlay.
+        let focus = app.focus;
+        press_key(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, focus);
+        insta::assert_snapshot!("help_120x40", render(&app, 120, 40));
+        press_key(&mut app, KeyCode::Esc);
+        assert!(!app.help);
+    }
+
+    #[test]
+    fn help_lists_every_bound_key() {
+        let (mut app, _d) = lists_app();
+        app.help = true;
+        let out = render(&app, 140, 100);
+        for b in crate::keymap::BINDINGS {
+            assert!(out.contains(b.shown), "help is missing key {}", b.shown);
+            assert!(out.contains(b.what), "help is missing {}", b.what);
+        }
+    }
+
+    #[test]
+    fn footer_follows_focus_and_fits_80_columns() {
+        let (mut app, _d) = lists_app();
+        for p in [Panel::Project, Panel::Stages, Panel::Issues, Panel::Items] {
+            app.focus = p;
+            let last = render(&app, 80, 24).lines().last().unwrap().to_string();
+            assert!(
+                last.contains("? help") && last.contains("q quit"),
+                "{p:?}: {last}"
+            );
+            assert_eq!(last.contains("space run"), p == Panel::Stages, "{p:?}");
+            assert_eq!(
+                last.contains("/ filter"),
+                matches!(p, Panel::Issues | Panel::Items)
+            );
+        }
+    }
+
+    #[test]
+    fn resize_never_panics() {
+        let mut apps = vec![];
+        let mk = |f: fn(&mut App)| {
+            let (mut a, d) = lists_app();
+            f(&mut a);
+            (a, d)
+        };
+        apps.push(mk(|_| {}));
+        apps.push(mk(|a| a.help = true));
+        apps.push(mk(|a| a.show_log = false));
+        apps.push(mk(|a| a.modal = Some(Modal::ConfirmQuit)));
+        apps.push(mk(|a| {
+            a.focus = Panel::Issues;
+            a.modal = Some(Modal::Resolve(ResolveModal {
+                issue: Uuid::nil(),
+                title: "t".into(),
+                choice: 0,
+                note: "n".into(),
+                error: Some("e".into()),
+            }))
+        }));
+        apps.push(mk(|a| {
+            a.focus = Panel::Issues;
+            press_key(a, KeyCode::Enter);
+            let i = mk_issue(1, IssueKind::MissingMedia, Severity::Error, "m");
+            a.detail.push(DetailView::Issue(i));
+        }));
+        apps.push(mk(|a| {
+            a.focus = Panel::Items;
+            a.detail.push(DetailView::Item(Box::new(ItemDetail {
+                row: a.panels.items.selected().unwrap().clone(),
+                source: SourceRef {
+                    connector: "c".into(),
+                    source_id: "1".into(),
+                    url: None,
+                },
+                data: serde_json::json!({"a": 1}),
+                issues: vec![],
+            })));
+        }));
+        for _ in 0..300 {
+            apps.push(mk(|a| a.push_log("log".into())));
+        }
+        apps.truncate(7);
+        let none = App::new(None, (80, 24));
+        let mut x: u64 = 0x2545F4914F6CDD1D;
+        let mut next = |m: u64| {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            1 + (x >> 33) % m
+        };
+        let mut sizes = vec![
+            (1, 1),
+            (79, 23),
+            (80, 24),
+            (99, 30),
+            (100, 24),
+            (300, 100),
+            (1, 100),
+            (300, 1),
+        ];
+        sizes.extend((0..200).map(|_| (next(300) as u16, next(100) as u16)));
+        for (w, h) in sizes {
+            for (a, _) in &apps {
+                render(a, w, h);
+            }
+            render(&none, w, h);
+        }
+    }
+
+    #[test]
+    fn lagged_events_are_logged_and_state_refreshed() {
+        let (mut app, _d) = lists_app();
+        let cmds = update(&mut app, Msg::Lagged(7));
+        assert!(app.log.back().is_some_and(|l| l.0 == "dropped 7 events"));
+        assert!(
+            !cmds.is_empty(),
+            "dropped events may have hidden a stage ending"
+        );
+    }
+
+    #[test]
+    fn stubs_say_not_available_yet() {
+        let (mut app, _d) = lists_app();
+        for c in ['l', 'L', 'o', 'e'] {
+            press_key(&mut app, KeyCode::Char(c));
+            assert!(
+                app.log
+                    .back()
+                    .is_some_and(|l| l.0.ends_with("not available yet")),
+                "{c}"
+            );
+        }
+    }
+
+    fn press_key(app: &mut App, c: KeyCode) {
+        update(app, Msg::Key(KeyEvent::new(c, KeyModifiers::NONE)));
     }
 }
