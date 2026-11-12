@@ -1,4 +1,15 @@
-import { connect, invitation, member, projectInvitation, projectMember, schema, user } from "@porter-hub/db";
+import { randomUUID } from "node:crypto";
+import {
+  account,
+  connect,
+  invitation,
+  member,
+  organization as org,
+  projectInvitation,
+  projectMember,
+  schema,
+  user,
+} from "@porter-hub/db";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware } from "better-auth/api";
@@ -67,10 +78,54 @@ async function mayGetMagicLink(db: Db, email: string) {
   return invited.length + client.length > 0;
 }
 
-/** Staff (any org membership) or an owner/developer on some project. */
+/** The one staff org (org membership there = staff). */
+const staffOrgSlug = () => process.env.STAFF_ORG_SLUG || "umi";
+
+/** Creates the staff org if missing (server-side only, idempotent); returns its id. */
+export async function ensureStaffOrg(db: Db) {
+  const slug = staffOrgSlug();
+  await db
+    .insert(org)
+    .values({ id: randomUUID(), name: "Umi", slug, createdAt: new Date() })
+    .onConflictDoNothing({ target: org.slug });
+  const [o] = await db.select({ id: org.id }).from(org).where(eq(org.slug, slug));
+  return o.id;
+}
+
+/** Adds a verified staff-domain user who signed in with Google to the staff org, once. */
+async function provisionGoogleStaff(db: Db, userId: string, domain: string) {
+  const [u] = await db.select().from(user).where(eq(user.id, userId));
+  if (!u?.emailVerified || !isStaffEmail(u.email, domain)) return;
+  const [google] = await db
+    .select({ id: account.id })
+    .from(account)
+    .where(and(eq(account.userId, userId), eq(account.providerId, "google")))
+    .limit(1);
+  if (!google) return;
+  const orgId = await ensureStaffOrg(db);
+  const [already] = await db
+    .select({ id: member.id })
+    .from(member)
+    .where(and(eq(member.organizationId, orgId), eq(member.userId, userId)))
+    .limit(1);
+  // ponytail: check-then-insert (member has no unique (org,user)); two simultaneous first sign-ins could
+  // double-insert. Add a unique index if that ever shows up.
+  if (!already) {
+    await db
+      .insert(member)
+      .values({ id: randomUUID(), organizationId: orgId, userId, role: "member", createdAt: new Date() });
+  }
+}
+
+/** Staff-org member, or an owner/developer on some project. */
 async function canApproveDevice(db: Db, userId: string) {
   const [staff, dev] = await Promise.all([
-    db.select({ id: member.id }).from(member).where(eq(member.userId, userId)).limit(1),
+    db
+      .select({ id: member.id })
+      .from(member)
+      .innerJoin(org, eq(org.id, member.organizationId))
+      .where(and(eq(member.userId, userId), eq(org.slug, staffOrgSlug())))
+      .limit(1),
     db
       .select({ id: projectMember.userId })
       .from(projectMember)
@@ -106,6 +161,9 @@ export function createAuth(
     for (const k of ["BETTER_AUTH_SECRET", "BETTER_AUTH_URL"]) {
       if (!env[k]) throw new Error(`${k} must be set in production`);
     }
+    if ((env.BETTER_AUTH_SECRET ?? "").length < 32) {
+      throw new Error("BETTER_AUTH_SECRET must be at least 32 characters in production");
+    }
   }
   const db = deps.db ?? connect().db;
   const sendMail = deps.sendMail ?? smtpMailer();
@@ -123,7 +181,8 @@ export function createAuth(
           handler: createAuthMiddleware(async (ctx) => {
             // Through auth.api so a bearer token counts too (sibling hooks see the raw request).
             const s = await auth.api.getSession({ headers: ctx.headers ?? new Headers() });
-            if (s && !(await canApproveDevice(db, s.user.id))) {
+            // Fails closed: no session, or not staff/developer, is refused before the handler runs.
+            if (!s || !(await canApproveDevice(db, s.user.id))) {
               throw new APIError("FORBIDDEN", {
                 message: "Only staff and developers can approve CLI sign-ins",
               });
@@ -157,6 +216,7 @@ export function createAuth(
             clientId: google.clientId,
             clientSecret: google.clientSecret ?? "",
             // Google enforces the Workspace domain (hd claim); we check the email itself too.
+            // Keep `domain` lowercased: Google emits hd in lowercase and the comparison is exact.
             hd: domain,
             mapProfileToUser: (p) => {
               if (p.email_verified !== true || !isStaffEmail(p.email, domain)) {
@@ -168,15 +228,17 @@ export function createAuth(
         }
       : {},
     hooks: {
-      // Password sign-up is for staff: only emails with a pending organization invitation.
+      // Password sign-up is for staff: only emails with a pending invitation to the staff org.
       before: createAuthMiddleware(async (ctx) => {
         if (ctx.path !== "/sign-up/email") return;
         const email = String(ctx.body?.email ?? "");
         const [inv] = await db
           .select({ id: invitation.id })
           .from(invitation)
+          .innerJoin(org, eq(org.id, invitation.organizationId))
           .where(
             and(
+              eq(org.slug, staffOrgSlug()),
               lower(invitation.email, email),
               eq(invitation.status, "pending"),
               gt(invitation.expiresAt, new Date()),
@@ -201,10 +263,18 @@ export function createAuth(
           },
         },
       },
-      session: { create: { after: (s) => acceptProjectInvites(db, s.userId) } },
+      session: {
+        create: {
+          after: async (s) => {
+            await provisionGoogleStaff(db, s.userId, domain);
+            await acceptProjectInvites(db, s.userId);
+          },
+        },
+      },
     },
     plugins: [
-      organization({ requireEmailVerificationOnInvitation: true }),
+      // One staff org, created server-side (ensureStaffOrg); nobody creates orgs over HTTP.
+      organization({ allowUserToCreateOrganization: false, requireEmailVerificationOnInvitation: true }),
       magicLink({
         sendMagicLink: async ({ email, url }) => {
           // Same response whether or not anyone is invited (no account enumeration); the mail is not

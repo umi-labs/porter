@@ -9,8 +9,8 @@ import {
 } from "@porter-hub/db";
 import { runMigrations } from "@porter-hub/db/migrate";
 import { freshDb } from "@porter-hub/db/test-helper";
-import { eq, sql } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { and, eq, sql } from "drizzle-orm";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { createAuth, type Mail } from "./auth";
 
 const DOMAIN = "umidigital.co.uk";
@@ -19,12 +19,21 @@ let conn: ReturnType<typeof connect>;
 let auth: ReturnType<typeof createAuth>;
 const sent: Mail[] = [];
 let projectId: string;
-let orgId: string;
+/** A non-staff org (the project's client company); membership here must not make anyone staff. */
+let otherOrgId: string;
 
-beforeAll(async () => {
+const baseEnv = () => {
   vi.stubEnv("STAFF_EMAIL_DOMAIN", DOMAIN);
   vi.stubEnv("BETTER_AUTH_SECRET", "test-secret-test-secret-test-secret-0123");
   vi.stubEnv("BETTER_AUTH_URL", "http://localhost:3000");
+};
+beforeEach(baseEnv);
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+beforeAll(async () => {
+  baseEnv();
   fresh = await freshDb();
   await runMigrations(fresh.url);
   conn = connect(fresh.url);
@@ -39,10 +48,13 @@ beforeAll(async () => {
   });
   const [o] = await conn.db
     .insert(organization)
-    .values({ id: "umi", name: "Umi", slug: "umi", createdAt: new Date() })
+    .values({ id: "acme-org", name: "Acme", slug: "acme-org", createdAt: new Date() })
     .returning();
-  orgId = o.id;
-  const [p] = await conn.db.insert(project).values({ orgId, name: "Acme", slug: "acme" }).returning();
+  otherOrgId = o.id;
+  const [p] = await conn.db
+    .insert(project)
+    .values({ orgId: otherOrgId, name: "Acme", slug: "acme" })
+    .returning();
   projectId = p.id;
 });
 
@@ -73,6 +85,30 @@ const userByEmail = async (email: string) =>
 
 const bearer = (token: string) => new Headers({ authorization: `Bearer ${token}` });
 
+const staffOrgMembers = async (email: string) => {
+  const u = await userByEmail(email);
+  if (!u) return [];
+  return conn.db
+    .select({ role: member.role })
+    .from(member)
+    .innerJoin(organization, eq(organization.id, member.organizationId))
+    .where(and(eq(member.userId, u.id), eq(organization.slug, "umi")));
+};
+
+/** Invites `email` to the project and signs in via its magic link; returns the session token. */
+async function clientSession(email: string) {
+  sent.length = 0;
+  await conn.db
+    .insert(projectInvitation)
+    .values({ projectId, email, expiresAt: new Date(Date.now() + 86_400_000) });
+  await auth.api.signInMagicLink({ body: { email }, headers: new Headers() });
+  const token = new URL(sent[0].text.match(/https?:\/\/\S+/)?.[0] ?? "").searchParams.get("token") ?? "";
+  const res = (await auth.api.magicLinkVerify({ query: { token }, headers: new Headers() })) as {
+    token: string;
+  };
+  return res.token;
+}
+
 describe("google", () => {
   test("google sign-in outside staff domain is rejected", async () => {
     const ok = await googleSignIn(`isaac@${DOMAIN}`);
@@ -100,6 +136,40 @@ describe("google", () => {
       await expect(googleSignIn(email, extra), email).rejects.toThrow();
       expect(await userByEmail(email), email).toBeUndefined();
     }
+  });
+
+  test("a returning Google user is re-checked on every sign-in", async () => {
+    await googleSignIn(`back@${DOMAIN}`);
+    // Same Google account (sub), but Google now says the address is unverified / outside the domain.
+    await expect(googleSignIn(`back@${DOMAIN}`, { email_verified: false })).rejects.toThrow();
+    await expect(
+      googleSignIn(`back@gmail.com`, { sub: `g-back@${DOMAIN}`, hd: undefined }),
+    ).rejects.toThrow();
+  });
+
+  test("a Google staff user is auto-added to the staff org", async () => {
+    expect(await staffOrgMembers(`isaac@${DOMAIN}`)).toEqual([{ role: "member" }]);
+    // Signing in again does not add a second membership.
+    await googleSignIn(`isaac@${DOMAIN}`);
+    expect(await staffOrgMembers(`isaac@${DOMAIN}`)).toEqual([{ role: "member" }]);
+    const orgs = await conn.db.select().from(organization).where(eq(organization.slug, "umi"));
+    expect(orgs).toHaveLength(1);
+  });
+
+  test("a lookalike domain is not added to the staff org", async () => {
+    await expect(googleSignIn(`evil3@evil-${DOMAIN}`)).rejects.toThrow();
+    expect(await staffOrgMembers(`evil3@evil-${DOMAIN}`)).toEqual([]);
+    // A verified non-staff user (a client) never becomes a staff-org member either.
+    await clientSession("look@acme.example");
+    expect(await staffOrgMembers("look@acme.example")).toEqual([]);
+  });
+
+  test("a client cannot create an org", async () => {
+    const token = await clientSession("orgmaker@acme.example");
+    await expect(
+      auth.api.createOrganization({ body: { name: "Mine", slug: "mine" }, headers: bearer(token) }),
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(await conn.db.select().from(organization).where(eq(organization.slug, "mine"))).toEqual([]);
   });
 });
 
@@ -184,13 +254,9 @@ describe("device authorization", () => {
       body: expect.objectContaining({ error: "authorization_pending" }),
     });
 
-    // A staff session (org member) claims and approves the code.
+    // A Google staff session (auto-added to the staff org) claims and approves the code.
     const staff = await googleSignIn(`dev@${DOMAIN}`);
     const staffToken = (staff as { token: string }).token;
-    const staffUser = await userByEmail(`dev@${DOMAIN}`);
-    await conn.db
-      .insert(member)
-      .values({ id: "m-dev", organizationId: orgId, userId: staffUser.id, createdAt: new Date() });
     await auth.api.deviceVerify({ query: { user_code: code.user_code }, headers: bearer(staffToken) });
     await expect(
       auth.api.deviceApprove({ body: { userCode: code.user_code }, headers: bearer(staffToken) }),
@@ -207,18 +273,7 @@ describe("device authorization", () => {
   });
 
   test("a client cannot approve a device code", async () => {
-    sent.length = 0;
-    await conn.db.insert(projectInvitation).values({
-      projectId,
-      email: "client2@acme.example",
-      expiresAt: new Date(Date.now() + 86_400_000),
-    });
-    await auth.api.signInMagicLink({ body: { email: "client2@acme.example" }, headers: new Headers() });
-    const token = new URL(sent[0].text.match(/https?:\/\/\S+/)?.[0] ?? "").searchParams.get("token") ?? "";
-    const { token: clientToken } = (await auth.api.magicLinkVerify({
-      query: { token },
-      headers: new Headers(),
-    })) as { token: string };
+    const clientToken = await clientSession("client2@acme.example");
 
     const code = await auth.api.deviceCode({ body: { client_id: "porter-cli" } });
     await auth.api.deviceVerify({ query: { user_code: code.user_code }, headers: bearer(clientToken) });
@@ -229,6 +284,33 @@ describe("device authorization", () => {
     await expect(poll(code.device_code)).rejects.toMatchObject({
       body: expect.objectContaining({ error: "authorization_pending" }),
     });
+  });
+
+  test("a member of a non-staff org cannot approve a device code", async () => {
+    const token = await clientSession("acme-admin@acme.example");
+    const u = await userByEmail("acme-admin@acme.example");
+    await conn.db.insert(member).values({
+      id: "m-acme",
+      organizationId: otherOrgId,
+      userId: u.id,
+      role: "owner",
+      createdAt: new Date(),
+    });
+    const code = await auth.api.deviceCode({ body: { client_id: "porter-cli" } });
+    await auth.api.deviceVerify({ query: { user_code: code.user_code }, headers: bearer(token) });
+    await expect(
+      auth.api.deviceApprove({ body: { userCode: code.user_code }, headers: bearer(token) }),
+    ).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  test("the approval hook rejects requests with no session", async () => {
+    const code = await auth.api.deviceCode({ body: { client_id: "porter-cli" } });
+    await expect(
+      auth.api.deviceApprove({ body: { userCode: code.user_code }, headers: new Headers() }),
+    ).rejects.toMatchObject({ statusCode: 403 });
+    await expect(
+      auth.api.deviceApprove({ body: { userCode: code.user_code }, headers: bearer("not-a-session") }),
+    ).rejects.toMatchObject({ statusCode: 403 });
   });
 });
 
@@ -243,10 +325,19 @@ describe("email and password", () => {
     expect(await userByEmail("walkin@example.com")).toBeUndefined();
 
     const inviter = await userByEmail(`isaac@${DOMAIN}`);
-    await conn.db.execute(
-      sql`insert into invitation (id, organization_id, email, role, status, expires_at, inviter_id)
-          values ('inv1', ${orgId}, 'contractor@example.com', 'member', 'pending', now() + interval '1 day', ${inviter.id})`,
-    );
+    const invite = (id: string, orgId: string, email: string) =>
+      conn.db.execute(
+        sql`insert into invitation (id, organization_id, email, role, status, expires_at, inviter_id)
+            values (${id}, ${orgId}, ${email}, 'member', 'pending', now() + interval '1 day', ${inviter.id})`,
+      );
+    // An invitation to some other org does not open password sign-up.
+    await invite("inv0", otherOrgId, "sidedoor@example.com");
+    await expect(signUp("sidedoor@example.com", "long-enough-password")).rejects.toMatchObject({
+      statusCode: 403,
+    });
+
+    const [staffOrg] = await conn.db.select().from(organization).where(eq(organization.slug, "umi"));
+    await invite("inv1", staffOrg.id, "contractor@example.com");
     await expect(signUp("contractor@example.com", "short-pw")).rejects.toThrow();
     await expect(signUp("contractor@example.com", "long-enough-password")).resolves.toBeDefined();
     expect(sent.some((m) => m.to === "contractor@example.com")).toBe(true); // verification email
@@ -254,14 +345,15 @@ describe("email and password", () => {
 });
 
 describe("environment", () => {
+  // Env stubs are reset by beforeEach(baseEnv), so a failing assertion can't leak NODE_ENV=production.
   test("refuses to start in production without BETTER_AUTH_URL and BETTER_AUTH_SECRET", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("BETTER_AUTH_SECRET", "");
     expect(() => createAuth({ db: conn.db })).toThrow(/BETTER_AUTH_SECRET/);
+    vi.stubEnv("BETTER_AUTH_SECRET", "too-short");
+    expect(() => createAuth({ db: conn.db })).toThrow(/at least 32/);
     vi.stubEnv("BETTER_AUTH_SECRET", "x".repeat(40));
     vi.stubEnv("BETTER_AUTH_URL", "");
     expect(() => createAuth({ db: conn.db })).toThrow(/BETTER_AUTH_URL/);
-    vi.stubEnv("NODE_ENV", "test");
-    vi.stubEnv("BETTER_AUTH_URL", "http://localhost:3000");
   });
 });
