@@ -59,6 +59,12 @@ pub enum HubCmd {
     Link {
         #[arg(value_name = "SLUG")]
         project_slug: String,
+        /// Create the project on the hub first (staff only); you become its owner
+        #[arg(long)]
+        create: bool,
+        /// The new project's name (default: the slug)
+        #[arg(long, requires = "create")]
+        name: Option<String>,
     },
     /// Upload the project (without media) and its missing media as a new version
     Push {
@@ -146,7 +152,19 @@ pub async fn dispatch(ctx: Ctx, args: HubArgs) -> Result<i32> {
         HubCmd::Login => login::login(&ctx, origin()?).await,
         HubCmd::Logout => login::logout(&ctx, origin()?).await,
         HubCmd::Whoami => login::whoami(&ctx, &Hub::new(origin()?, String::new())?).await,
-        HubCmd::Link { project_slug } => link::run(&ctx, &project_slug, url.or(conf.url)),
+        HubCmd::Link {
+            project_slug,
+            create,
+            name,
+        } => {
+            link::run(
+                &ctx,
+                &project_slug,
+                url.or(conf.url),
+                create.then_some(name),
+            )
+            .await
+        }
         HubCmd::Push { message, force } => {
             push::run(&ctx, &Hub::new(origin()?, slug()?)?, message, force).await
         }
@@ -386,16 +404,21 @@ impl Hub {
     }
 }
 
-/// "hub returned 403 Forbidden: <error>".
+/// "hub returned 403 Forbidden: <error>", plus "(run <id>)" when the hub names the run in the way.
 pub fn hub_error(st: StatusCode, v: &Value) -> String {
     let hint = match st {
         StatusCode::UNAUTHORIZED => " (sign in with `porter hub login` or check PORTER_HUB_TOKEN)",
         StatusCode::NOT_FOUND => " (unknown project, or you are not a member)",
         _ => "",
     };
+    let run = v
+        .get("run_id")
+        .and_then(Value::as_str)
+        .map(|id| format!(" (run {})", clean(id)))
+        .unwrap_or_default();
     match v.get("error").and_then(Value::as_str) {
-        Some(e) => format!("hub returned {st}: {}{hint}", clean(e)),
-        None => format!("hub returned {st}{hint}"),
+        Some(e) => format!("hub returned {st}: {}{run}{hint}", clean(e)),
+        None => format!("hub returned {st}{run}{hint}"),
     }
 }
 

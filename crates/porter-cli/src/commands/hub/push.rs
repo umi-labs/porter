@@ -147,9 +147,14 @@ pub async fn run(ctx: &Ctx, hub: &Hub, message: Option<String>, force: bool) -> 
     bail!("the hub kept moving on; pull and push again")
 }
 
-/// A 409: with `--force` (first try) retry on top of the hub's latest, else refuse.
+/// A 409. Only "stale base" carries `latest` (null before the first version): with
+/// `--force` (first try) retry on top of it, else refuse. Any other 409 (the project is
+/// archived, a run is going) is the hub's own words; `--force` can't help with those.
 fn stale(v: &Value, retry: bool, forced: bool) -> Result<Option<u64>> {
-    let latest = v.get("latest").and_then(Value::as_u64);
+    let Some(latest) = v.get("latest") else {
+        bail!("{}", super::hub_error(StatusCode::CONFLICT, v));
+    };
+    let latest = latest.as_u64();
     if retry {
         return Ok(latest);
     }

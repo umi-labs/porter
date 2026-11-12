@@ -137,6 +137,60 @@ async fn push_refuses_on_409() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn push_409s_that_are_not_stale_print_the_hub_and_never_suggest_force() {
+    for (at, body, want) in [
+        (
+            "versions/init",
+            json!({"error": "The project is archived"}),
+            "hub returned 409 Conflict: The project is archived",
+        ),
+        (
+            "versions/init",
+            json!({"error": "A run is queued or running on this project; wait for it to end, then pull and push", "run_id": "r-1"}),
+            "A run is queued or running on this project; wait for it to end, then pull and push (run r-1)",
+        ),
+        (
+            "versions/commit",
+            json!({"error": "The project is archived"}),
+            "hub returned 409 Conflict: The project is archived",
+        ),
+    ] {
+        for force in [false, true] {
+            let (hub, s3) = (MockServer::start().await, MockServer::start().await);
+            Mock::given(method("POST"))
+                .and(path(api(at)))
+                .respond_with(ResponseTemplate::new(409).set_body_json(body.clone()))
+                .with_priority(1)
+                .mount(&hub)
+                .await;
+            mount_push(
+                &hub,
+                &s3,
+                ResponseTemplate::new(201).set_body_json(json!({"number": 1})),
+            )
+            .await;
+            let d = tempfile::tempdir().unwrap();
+            project(d.path(), &[]);
+            let args: &[&str] = if force {
+                &["hub", "push", "--force"]
+            } else {
+                &["hub", "push"]
+            };
+            let (code, _, err) = run(d.path(), &hub, args).await;
+            assert_eq!(code, 1, "{err}");
+            assert!(err.contains(want), "{at} force={force}: {err}");
+            assert!(
+                !err.contains("--force") && !err.contains("moved on"),
+                "{err}"
+            );
+            let reqs = hub.received_requests().await.unwrap();
+            assert_eq!(bodies(&reqs, "versions/init").len(), 1, "never retried");
+            assert!(!d.path().join(".porter-hub.json").exists());
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn push_uploads_only_missing_media_and_treats_412_as_uploaded() {
     let (hub, s3) = (MockServer::start().await, MockServer::start().await);
     let d = tempfile::tempdir().unwrap();
@@ -571,6 +625,7 @@ async fn apply_refusals_from_the_hub_are_printed() {
     for msg in [
         "Apply load on its own after a dry run",
         "v3 has 2 open errors; fix them and push before applying",
+        "Run a dry-run load first: v3 has none on record",
     ] {
         let hub = MockServer::start().await;
         Mock::given(method("POST"))
@@ -718,6 +773,54 @@ async fn link_keeps_comments() {
     assert!(
         t.contains("[hub]\nurl = \"https://hub.example.com\"\nproject = \"acme\""),
         "{t}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn link_create_makes_the_project_then_links_it() {
+    let hub = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/projects"))
+        .and(header("authorization", format!("Bearer {TOKEN}").as_str()))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({"slug": "acme"})))
+        .expect(1)
+        .mount(&hub)
+        .await;
+    let d = tempfile::tempdir().unwrap();
+    project(d.path(), &[]);
+    let args = ["hub", "link", "acme", "--create", "--name", "Acme Ltd"];
+    let (code, _, err) = run(d.path(), &hub, &args).await;
+    assert_eq!(code, 0, "{err}");
+    let post: Value = hub.received_requests().await.unwrap()[0]
+        .body_json()
+        .unwrap();
+    assert_eq!(post, json!({"name": "Acme Ltd", "slug": "acme"}));
+    let t = std::fs::read_to_string(d.path().join("porter.toml")).unwrap();
+    assert!(t.contains("project = \"acme\""), "{t}");
+
+    // Refused (not staff, or the slug is taken): the hub's message, and porter.toml untouched.
+    let hub = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/projects"))
+        .respond_with(
+            ResponseTemplate::new(403)
+                .set_body_json(json!({"error": "Only staff can create projects"})),
+        )
+        .mount(&hub)
+        .await;
+    let d = tempfile::tempdir().unwrap();
+    project(d.path(), &[]);
+    let (code, _, err) = run(d.path(), &hub, &["hub", "link", "acme", "--create"]).await;
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("Only staff can create projects"), "{err}");
+    let posted: Value = hub.received_requests().await.unwrap()[0]
+        .body_json()
+        .unwrap();
+    assert_eq!(posted["name"], "acme", "name defaults to the slug");
+    assert!(
+        !std::fs::read_to_string(d.path().join("porter.toml"))
+            .unwrap()
+            .contains("[hub]")
     );
 }
 

@@ -43,9 +43,11 @@ pub fn report(p: &Project) -> Result<Value> {
 pub fn run(dir: &Path, json: bool) -> Result<i32> {
     let p = super::open(dir)?;
     if json {
-        let mut r = report(&p)?;
-        r["v"] = json!(1);
-        r["event"] = json!("status");
+        // The envelope first, as in every other event.
+        let mut r = json!({"v": 1, "event": "status"});
+        if let (Some(r), Value::Object(body)) = (r.as_object_mut(), report(&p)?) {
+            r.extend(body);
+        }
         print_json(&r);
         return Ok(0);
     }

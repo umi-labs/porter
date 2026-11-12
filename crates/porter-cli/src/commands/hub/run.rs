@@ -43,10 +43,7 @@ pub async fn run(
     }
     let (st, v) = hub.project(Method::POST, &["runs"], Some(&body)).await?;
     if st != StatusCode::CREATED {
-        match v.get("run_id").and_then(Value::as_str) {
-            Some(id) => bail!("{} (run {id})", hub_error(st, &v)),
-            None => bail!("{}", hub_error(st, &v)),
-        }
+        bail!("{}", hub_error(st, &v));
     }
     let id = v
         .get("id")

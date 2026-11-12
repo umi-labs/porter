@@ -32,6 +32,11 @@ fn json_stdout_is_pure_ndjson() {
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["event"], "status");
     assert_eq!(lines[0]["v"], 1);
+    // The envelope leads, as in every other event.
+    assert!(
+        stdout.starts_with(r#"{"v":1,"event":"status","#),
+        "{stdout}"
+    );
 }
 
 #[test]
