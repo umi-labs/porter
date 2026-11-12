@@ -55,18 +55,32 @@ mod tests {
     use super::*;
 
     fn b(kind: BlockKind, children: Vec<Block>) -> Block {
-        Block { kind, props: IndexMap::new(), children, original: None }
+        Block {
+            kind,
+            props: IndexMap::new(),
+            children,
+            original: None,
+        }
     }
 
     #[test]
     fn walk_visits_depth_first() {
-        let tree = b(BlockKind::Section, vec![b(
-            BlockKind::Row,
-            vec![
-                b(BlockKind::Column { width: Some(0.5) }, vec![b(BlockKind::Image, vec![])]),
-                b(BlockKind::Column { width: None }, vec![b(BlockKind::RichText, vec![])]),
-            ],
-        )]);
+        let tree = b(
+            BlockKind::Section,
+            vec![b(
+                BlockKind::Row,
+                vec![
+                    b(
+                        BlockKind::Column { width: Some(0.5) },
+                        vec![b(BlockKind::Image, vec![])],
+                    ),
+                    b(
+                        BlockKind::Column { width: None },
+                        vec![b(BlockKind::RichText, vec![])],
+                    ),
+                ],
+            )],
+        );
         let mut seen = vec![];
         tree.walk(&mut |x| seen.push(x.kind.clone()));
         assert_eq!(
@@ -85,7 +99,8 @@ mod tests {
     #[test]
     fn layout_roundtrip() {
         let mut blk = b(BlockKind::Button, vec![b(BlockKind::Spacer, vec![])]);
-        blk.props.insert("label".into(), FieldValue::Text("Go".into()));
+        blk.props
+            .insert("label".into(), FieldValue::Text("Go".into()));
         blk.original = Some(Original {
             builder: "builder-x".into(),
             module: "module-a".into(),

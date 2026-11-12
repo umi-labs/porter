@@ -67,9 +67,22 @@ mod tests {
 
     #[test]
     fn document_roundtrip() {
-        let src = SourceRef { connector: "x".into(), source_id: "1".into(), url: Some("https://example.test/a".into()) };
-        let other = ItemId::new(ItemKind::Media, &SourceRef { connector: "x".into(), source_id: "9".into(), url: None });
-        let date = DateTime::parse_from_rfc3339("2024-01-02T03:04:05Z").unwrap().with_timezone(&Utc);
+        let src = SourceRef {
+            connector: "x".into(),
+            source_id: "1".into(),
+            url: Some("https://example.test/a".into()),
+        };
+        let other = ItemId::new(
+            ItemKind::Media,
+            &SourceRef {
+                connector: "x".into(),
+                source_id: "9".into(),
+                url: None,
+            },
+        );
+        let date = DateTime::parse_from_rfc3339("2024-01-02T03:04:05Z")
+            .unwrap()
+            .with_timezone(&Utc);
         let mut obj = IndexMap::new();
         obj.insert("k".to_string(), FieldValue::Bool(true));
         let mut fields = IndexMap::new();
@@ -83,7 +96,10 @@ mod tests {
             ("layout", FieldValue::Layout(vec![])),
             ("media", FieldValue::Media(other)),
             ("doc", FieldValue::Doc(other)),
-            ("list", FieldValue::List(vec![FieldValue::Null, FieldValue::Number(2.0)])),
+            (
+                "list",
+                FieldValue::List(vec![FieldValue::Null, FieldValue::Number(2.0)]),
+            ),
             ("object", FieldValue::Object(obj)),
         ] {
             fields.insert(k.to_string(), v);
@@ -99,7 +115,10 @@ mod tests {
             parent: None,
             title: "A".into(),
             fields,
-            seo: Seo { noindex: true, ..Seo::default() },
+            seo: Seo {
+                noindex: true,
+                ..Seo::default()
+            },
             created: Some(date),
             updated: None,
             author: None,

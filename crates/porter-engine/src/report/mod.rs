@@ -46,7 +46,9 @@ pub fn read_coverage(project: &Project) -> Result<Option<Coverage>> {
         return Ok(None);
     }
     let text = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
-    Ok(Some(serde_json::from_str(&text).with_context(|| format!("parsing {}", p.display()))?))
+    Ok(Some(
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", p.display()))?,
+    ))
 }
 
 pub fn write_coverage(project: &Project, c: &Coverage) -> Result<()> {
@@ -54,7 +56,8 @@ pub fn write_coverage(project: &Project, c: &Coverage) -> Result<()> {
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(&p, serde_json::to_string_pretty(c)?).with_context(|| format!("writing {}", p.display()))
+    std::fs::write(&p, serde_json::to_string_pretty(c)?)
+        .with_context(|| format!("writing {}", p.display()))
 }
 
 /// Writes `reports/{analysis,extract,verify}.html` for each stage with a finished run.
@@ -63,7 +66,11 @@ pub fn write_all(project: &Project) -> Result<Vec<PathBuf>> {
     std::fs::create_dir_all(&dir)?;
     let mut out = Vec::new();
     for (stage, name, render) in [
-        (Stage::Analyse, "analysis", render_analysis as fn(&Project) -> Result<String>),
+        (
+            Stage::Analyse,
+            "analysis",
+            render_analysis as fn(&Project) -> Result<String>,
+        ),
         (Stage::Extract, "extract", render_extract),
         (Stage::Verify, "verify", render_verify),
     ] {
@@ -78,7 +85,12 @@ pub fn write_all(project: &Project) -> Result<Vec<PathBuf>> {
 }
 
 fn last_finished(project: &Project, stage: Stage) -> Result<Option<RunRow>> {
-    Ok(project.store().runs(stage)?.into_iter().rev().find(|r| r.ended_at.is_some()))
+    Ok(project
+        .store()
+        .runs(stage)?
+        .into_iter()
+        .rev()
+        .find(|r| r.ended_at.is_some()))
 }
 
 fn tag(s: &ItemStatus) -> &'static str {
@@ -103,14 +115,21 @@ fn counts(m: &BTreeMap<&'static str, u64>) -> String {
     if m.is_empty() {
         return "-".into();
     }
-    m.iter().map(|(k, v)| format!("{v} {k}")).collect::<Vec<_>>().join(", ")
+    m.iter()
+        .map(|(k, v)| format!("{v} {k}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn human_bytes(n: u64) -> String {
     let mut v = n as f64;
     for unit in ["B", "KB", "MB", "GB"] {
         if v < 1024.0 {
-            return if unit == "B" { format!("{n} B") } else { format!("{v:.1} {unit}") };
+            return if unit == "B" {
+                format!("{n} B")
+            } else {
+                format!("{v:.1} {unit}")
+            };
         }
         v /= 1024.0;
     }
@@ -147,7 +166,9 @@ fn issues_section(issues: &[Issue]) -> Markup {
 }
 
 fn page(project: &Project, title: &str, run: Option<&RunRow>, body: Markup) -> String {
-    let when = run.and_then(|r| r.ended_at.clone()).unwrap_or_else(|| "no finished run".into());
+    let when = run
+        .and_then(|r| r.ended_at.clone())
+        .unwrap_or_else(|| "no finished run".into());
     html! {
         (DOCTYPE)
         html lang="en" {

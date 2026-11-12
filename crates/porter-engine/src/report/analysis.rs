@@ -11,7 +11,9 @@ struct Node {
 
 /// Path part of a URL, without scheme/host, query or fragment.
 fn path_of(url: &str) -> &str {
-    let rest = url.split_once("://").map_or(url, |(_, r)| r.find('/').map_or("/", |i| &r[i..]));
+    let rest = url
+        .split_once("://")
+        .map_or(url, |(_, r)| r.find('/').map_or("/", |i| &r[i..]));
     rest.split(['?', '#']).next().unwrap_or("/")
 }
 
@@ -44,7 +46,10 @@ pub fn render_analysis(project: &Project) -> Result<String> {
     let forms: Vec<(ItemId, _, Form)> = store.items(ItemKind::Form)?;
     let menus: Vec<(ItemId, _, Menu)> = store.items(ItemKind::Menu)?;
     let status: HashMap<ItemId, ItemStatus> = store.statuses(Stage::Analyse)?.into_iter().collect();
-    let issues = store.issues(&IssueFilter { stage: Some(Stage::Analyse), ..Default::default() })?;
+    let issues = store.issues(&IssueFilter {
+        stage: Some(Stage::Analyse),
+        ..Default::default()
+    })?;
     let runs = store.runs(Stage::Analyse)?;
     let coverage = read_coverage(project)?;
 
@@ -53,7 +58,9 @@ pub fn render_analysis(project: &Project) -> Result<String> {
     for (id, _, d) in &docs {
         let t = status.get(id).map_or("unprocessed", tag);
         *types.entry(&d.doc_type).or_default().entry(t).or_default() += 1;
-        *locales.entry(d.locale.clone().unwrap_or_else(|| "(none)".into())).or_default() += 1;
+        *locales
+            .entry(d.locale.clone().unwrap_or_else(|| "(none)".into()))
+            .or_default() += 1;
     }
     // Total bytes of media files that are on disk; a missing file counts as 0.
     let bytes: u64 = media
@@ -136,7 +143,12 @@ pub fn render_analysis(project: &Project) -> Result<String> {
         (issues_section(&issues))
         (runs_table(&runs))
     };
-    Ok(page(project, "Analysis report", runs.iter().rev().find(|r| r.ended_at.is_some()), body))
+    Ok(page(
+        project,
+        "Analysis report",
+        runs.iter().rev().find(|r| r.ended_at.is_some()),
+        body,
+    ))
 }
 
 #[cfg(test)]
@@ -146,7 +158,11 @@ mod tests {
     use porter_model::{DocStatus, IssueKind, Resolution, Seo, Severity, SourceRef};
 
     pub(crate) fn doc(i: &str, title: &str, path: &str) -> (Document, SourceRef) {
-        let src = SourceRef { connector: "c".into(), source_id: i.into(), url: None };
+        let src = SourceRef {
+            connector: "c".into(),
+            source_id: i.into(),
+            url: None,
+        };
         (
             Document {
                 id: ItemId::new(ItemKind::Document, &src),
@@ -176,8 +192,12 @@ mod tests {
         let run = p.store().begin_run(Stage::Analyse).unwrap();
         for (n, t) in titles.iter().enumerate() {
             let (d, src) = doc(&n.to_string(), t, &format!("/section/page-{n}"));
-            p.store().put_item(ItemKind::Document, d.id, &src, &d).unwrap();
-            p.store().set_status(run, Stage::Analyse, d.id, &ItemStatus::Done).unwrap();
+            p.store()
+                .put_item(ItemKind::Document, d.id, &src, &d)
+                .unwrap();
+            p.store()
+                .set_status(run, Stage::Analyse, d.id, &ItemStatus::Done)
+                .unwrap();
         }
         p.store()
             .open_issue(
@@ -225,9 +245,31 @@ mod tests {
     }
 
     #[test]
+    fn empty_project_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = Project::init(dir.path(), "demo", "x").unwrap();
+        assert!(write_all(&p).unwrap().is_empty());
+    }
+
+    #[test]
+    fn finished_run_with_no_content_renders() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = Project::init(dir.path(), "demo", "x").unwrap();
+        let run = p.store().begin_run(Stage::Analyse).unwrap();
+        p.store().end_run(run, &Summary::default()).unwrap();
+        let html = render_analysis(&p).unwrap();
+        assert!(html.contains("No coverage recorded"));
+        assert_eq!(write_all(&p).unwrap().len(), 1);
+    }
+
+    #[test]
     fn no_coverage_says_so() {
         let (_d, p) = seeded(["A", "B", "C"]);
-        assert!(render_analysis(&p).unwrap().contains("No coverage recorded"));
+        assert!(
+            render_analysis(&p)
+                .unwrap()
+                .contains("No coverage recorded")
+        );
     }
 
     #[test]

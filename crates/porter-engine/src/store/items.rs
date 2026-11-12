@@ -112,7 +112,9 @@ impl Store {
         let mut stmt = conn.prepare(
             "SELECT item_id, status FROM statuses WHERE stage = ?1 AND deleted_at IS NULL ORDER BY item_id",
         )?;
-        let rows = stmt.query_map([wire(&stage)?], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let rows = stmt.query_map([wire(&stage)?], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
         let mut out = Vec::new();
         for row in rows {
             let (id, status) = row?;

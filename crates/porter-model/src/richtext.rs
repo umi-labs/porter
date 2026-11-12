@@ -124,7 +124,11 @@ fn inline_text(inlines: &[Inline], out: &mut String) {
 
 fn block_text(b: &RtBlock) -> String {
     let join = |parts: Vec<String>, sep: &str| {
-        parts.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(sep)
+        parts
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(sep)
     };
     let blocks = |bs: &[RtBlock]| join(bs.iter().map(block_text).collect(), "\n");
     match b {
@@ -137,10 +141,15 @@ fn block_text(b: &RtBlock) -> String {
         RtBlock::Quote { blocks: bs } => blocks(bs),
         RtBlock::Code { text, .. } => text.clone(),
         RtBlock::Table { rows, .. } => join(
-            rows.iter().map(|r| join(r.iter().map(|c| blocks(c)).collect(), "\t")).collect(),
+            rows.iter()
+                .map(|r| join(r.iter().map(|c| blocks(c)).collect(), "\t"))
+                .collect(),
             "\n",
         ),
-        RtBlock::Media { caption, .. } => caption.as_ref().map(RichText::plain_text).unwrap_or_default(),
+        RtBlock::Media { caption, .. } => caption
+            .as_ref()
+            .map(RichText::plain_text)
+            .unwrap_or_default(),
         RtBlock::Rule | RtBlock::Embed { .. } | RtBlock::Raw { .. } => String::new(),
     }
 }
@@ -163,18 +172,29 @@ mod tests {
     use crate::{ItemId, ItemKind, SourceRef};
 
     fn txt(s: &str) -> Inline {
-        Inline::Text { text: s.into(), marks: Marks::default() }
+        Inline::Text {
+            text: s.into(),
+            marks: Marks::default(),
+        }
     }
 
     #[test]
     fn plain_text_flattens() {
         let rt = RichText {
             blocks: vec![
-                RtBlock::Heading { level: 1, inlines: vec![txt("Title")], align: Align::None },
+                RtBlock::Heading {
+                    level: 1,
+                    inlines: vec![txt("Title")],
+                    align: Align::None,
+                },
                 RtBlock::Paragraph {
                     inlines: vec![
                         txt("Hello "),
-                        Inline::Link { target: LinkTarget::Url("https://example.test".into()), new_tab: false, inlines: vec![txt("world")] },
+                        Inline::Link {
+                            target: LinkTarget::Url("https://example.test".into()),
+                            new_tab: false,
+                            inlines: vec![txt("world")],
+                        },
                     ],
                     align: Align::None,
                 },
@@ -185,12 +205,40 @@ mod tests {
 
     #[test]
     fn richtext_roundtrip() {
-        let id = ItemId::new(ItemKind::Media, &SourceRef { connector: "x".into(), source_id: "1".into(), url: None });
+        let id = ItemId::new(
+            ItemKind::Media,
+            &SourceRef {
+                connector: "x".into(),
+                source_id: "1".into(),
+                url: None,
+            },
+        );
         let rt = RichText {
             blocks: vec![
-                RtBlock::List { ordered: true, start: 1, items: vec![vec![RtBlock::Rule]] },
-                RtBlock::Media { media: id, caption: None, align: Align::Center, width: Some(10) },
-                RtBlock::Paragraph { inlines: vec![Inline::Break, Inline::Text { text: "a".into(), marks: Marks { bold: true, ..Marks::default() } }], align: Align::None },
+                RtBlock::List {
+                    ordered: true,
+                    start: 1,
+                    items: vec![vec![RtBlock::Rule]],
+                },
+                RtBlock::Media {
+                    media: id,
+                    caption: None,
+                    align: Align::Center,
+                    width: Some(10),
+                },
+                RtBlock::Paragraph {
+                    inlines: vec![
+                        Inline::Break,
+                        Inline::Text {
+                            text: "a".into(),
+                            marks: Marks {
+                                bold: true,
+                                ..Marks::default()
+                            },
+                        },
+                    ],
+                    align: Align::None,
+                },
             ],
         };
         let j = serde_json::to_string(&rt).unwrap();

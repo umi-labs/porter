@@ -76,7 +76,11 @@ mod tests {
     use super::*;
 
     fn src(id: &str) -> SourceRef {
-        SourceRef { connector: "conn-a".into(), source_id: id.into(), url: None }
+        SourceRef {
+            connector: "conn-a".into(),
+            source_id: id.into(),
+            url: None,
+        }
     }
 
     #[test]
@@ -99,7 +103,10 @@ mod tests {
     #[test]
     fn kind_wire_name_matches_serde() {
         for k in [ItemKind::Document, ItemKind::Submission, ItemKind::Settings] {
-            assert_eq!(serde_json::to_string(&k).unwrap(), format!("\"{}\"", k.as_str()));
+            assert_eq!(
+                serde_json::to_string(&k).unwrap(),
+                format!("\"{}\"", k.as_str())
+            );
         }
     }
 }

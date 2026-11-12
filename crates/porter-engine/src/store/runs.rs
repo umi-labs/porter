@@ -168,7 +168,13 @@ impl Store {
              WHERE stage = ?1 AND deleted_at IS NULL ORDER BY id",
         )?;
         let rows = stmt.query_map([wire(&stage)?], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, Option<String>>(4)?))
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get::<_, Option<String>>(4)?,
+            ))
         })?;
         let mut out = Vec::new();
         for row in rows {

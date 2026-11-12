@@ -1,6 +1,6 @@
 use super::*;
 use crate::store::IssueFilter;
-use porter_model::{Document, ItemId, ItemKind};
+use porter_model::{Document, ItemId, ItemKind, Resolution};
 use std::collections::HashMap;
 
 // ponytail: the verify stage doesn't yet persist per-URL / link / relation check
@@ -15,7 +15,10 @@ pub fn render_verify(project: &Project) -> Result<String> {
         .into_iter()
         .map(|(id, _, d)| (id, format!("{} ({})", d.title, d.path)))
         .collect();
-    let issues = store.issues(&IssueFilter { stage: Some(Stage::Verify), ..Default::default() })?;
+    let issues = store.issues(&IssueFilter {
+        stage: Some(Stage::Verify),
+        ..Default::default()
+    })?;
     let runs = store.runs(Stage::Verify)?;
 
     let mut per_kind: BTreeMap<&str, BTreeMap<&'static str, u64>> = BTreeMap::new();
@@ -28,13 +31,17 @@ pub fn render_verify(project: &Project) -> Result<String> {
             ItemStatus::Partial { reason } => reason,
             _ => continue,
         };
-        failures.push((titles.get(id).cloned().unwrap_or_else(|| id.to_string()), kind, why));
+        failures.push((
+            titles.get(id).cloned().unwrap_or_else(|| id.to_string()),
+            kind,
+            why,
+        ));
     }
     let passed: u64 = per_kind.values().flat_map(|m| m.get("done")).sum();
     let failed: u64 = per_kind.values().flat_map(|m| m.get("failed")).sum();
 
     let body = html! {
-        div.stats { (stat("Checks passed", passed)) (stat("Checks failed", failed)) (stat("Open issues", issues.len())) }
+        div.stats { (stat("Checks passed", passed)) (stat("Checks failed", failed)) (stat("Open issues", issues.iter().filter(|i| i.resolution == Resolution::Open).count())) }
         h2 { "Checks per type" }
         @if per_kind.is_empty() { p.muted { "No verify results yet." } } @else {
             div.scroll { table {
@@ -52,5 +59,10 @@ pub fn render_verify(project: &Project) -> Result<String> {
         (issues_section(&issues))
         (runs_table(&runs))
     };
-    Ok(page(project, "Verify report", runs.iter().rev().find(|r| r.ended_at.is_some()), body))
+    Ok(page(
+        project,
+        "Verify report",
+        runs.iter().rev().find(|r| r.ended_at.is_some()),
+        body,
+    ))
 }
