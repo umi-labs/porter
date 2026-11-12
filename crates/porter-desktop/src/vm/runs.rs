@@ -7,6 +7,7 @@ use porter_engine::store::RunRow;
 use porter_model::Stage;
 
 use super::pipeline::{name, state_text};
+use crate::ui::chip::ChipState;
 use porter_engine::session::{StageState, run_state};
 
 /// Runs per stage, newest first.
@@ -29,6 +30,8 @@ pub struct HistoryRow {
     /// "clean", "errors", "clean (dry run)", "interrupted".
     pub outcome: String,
     pub counts: String,
+    /// The stage state the run ended in, for its chip.
+    pub chip: ChipState,
 }
 
 impl Runs {
@@ -75,6 +78,7 @@ impl Runs {
 pub fn history_row(r: &RunRow) -> HistoryRow {
     let state = run_state(r);
     HistoryRow {
+        chip: ChipState::from(&state),
         started_at: r.started_at.clone(),
         ended_at: r.ended_at.clone().unwrap_or_else(|| "—".into()),
         outcome: match state {
@@ -120,6 +124,7 @@ mod tests {
             config_fp: None,
         };
         assert_eq!(history_row(&r).outcome, "dry run · nothing written");
+        assert_eq!(history_row(&r).chip, ChipState::DryRun);
     }
 
     #[test]

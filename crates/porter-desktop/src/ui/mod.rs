@@ -6,3 +6,4 @@ pub mod buttons;
 pub mod chip;
 pub mod path_label;
 pub mod severity;
+pub mod table;

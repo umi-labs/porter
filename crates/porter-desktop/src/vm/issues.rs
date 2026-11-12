@@ -144,6 +144,51 @@ impl Issues {
             .collect()
     }
 
+    /// Lands on the rows a count counted: open issues of `kind` and `severity`, nothing
+    /// else filtering them out. The selection is kept.
+    pub fn focus(&mut self, kind: Option<IssueKind>, severity: Option<Severity>) {
+        self.kind = kind;
+        self.severity = severity;
+        self.status = Status::Open;
+        self.text.clear();
+    }
+
+    /// How many issues of the shown status are of `kind`: the number on its filter chip.
+    pub fn kind_count(&self, kind: IssueKind) -> usize {
+        self.in_status().filter(|i| i.kind == kind).count()
+    }
+
+    /// How many issues of the shown status have this severity.
+    pub fn severity_count(&self, severity: Severity) -> usize {
+        self.in_status().filter(|i| i.severity == severity).count()
+    }
+
+    fn in_status(&self) -> impl Iterator<Item = &Issue> {
+        self.all.iter().filter(|i| match self.status {
+            Status::Open => i.resolution == Resolution::Open,
+            Status::Closed => i.resolution != Resolution::Open,
+            Status::All => true,
+        })
+    }
+
+    /// Why the table has no rows, when it has none: nothing at all, or the filters.
+    pub fn empty(&self) -> Option<(&'static str, &'static str)> {
+        if !self.loaded() || self.error.is_some() || !self.visible().is_empty() {
+            return None;
+        }
+        Some(if self.all.is_empty() {
+            (
+                "No issues",
+                "Nothing has opened an issue yet. Run the stages and they appear here.",
+            )
+        } else {
+            (
+                "No issue matches these filters",
+                "Clear a filter to see more of the issues.",
+            )
+        })
+    }
+
     pub fn is_selected(&self, id: Uuid) -> bool {
         self.selected.contains(&id)
     }
@@ -396,5 +441,34 @@ mod tests {
         assert_eq!(jump_target(ItemKind::Document), Ok(Jump::Content));
         assert_eq!(jump_target(ItemKind::Media), Ok(Jump::Media));
         assert!(jump_target(ItemKind::Route).unwrap_err().contains("route"));
+    }
+
+    #[test]
+    fn a_count_lands_on_the_rows_it_counted() {
+        let mut s = three();
+        s.status = Status::All;
+        s.text = "x".into();
+        s.severity = Some(Severity::Info);
+        s.focus(Some(IssueKind::MissingMedia), Some(Severity::Error));
+        assert_eq!(s.status, Status::Open);
+        assert!(s.text.is_empty());
+        // The chip counts the rows the table then shows.
+        assert_eq!(s.visible().len(), 1);
+        // The closed missing-media issue is not counted on an open filter.
+        s.focus(Some(IssueKind::MissingMedia), None);
+        assert_eq!(s.kind_count(IssueKind::MissingMedia), 1);
+        assert_eq!(s.visible().len(), s.kind_count(IssueKind::MissingMedia));
+        s.focus(None, Some(Severity::Warning));
+        assert_eq!(s.visible().len(), s.severity_count(Severity::Warning));
+    }
+
+    #[test]
+    fn empty_says_whether_it_is_the_filters() {
+        let mut s = three();
+        assert_eq!(s.empty(), None);
+        s.focus(Some(IssueKind::WriteFailed), None);
+        assert_eq!(s.empty().unwrap().0, "No issue matches these filters");
+        assert_eq!(loaded(vec![]).empty().unwrap().0, "No issues");
+        assert_eq!(Issues::default().empty(), None, "not loaded is not empty");
     }
 }

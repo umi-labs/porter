@@ -3,7 +3,9 @@
 //! filter keeps out of how many there are.
 
 use porter_engine::session::{Page, RouteFilter, RouteRow, Routes};
-use porter_model::RouteTarget;
+use porter_model::{RouteTarget, Severity};
+
+use crate::ui::chip::ChipState;
 
 /// Routes per page.
 pub const PAGE: u64 = 200;
@@ -30,6 +32,8 @@ pub struct Urls {
     total: u64,
     loading: bool,
     error: Option<String>,
+    /// What each filter matched the last time it was read; the chips show these.
+    counts: [Option<u64>; 4],
 }
 
 /// Why a row needs attention.
@@ -43,11 +47,23 @@ pub enum Flag {
 }
 
 impl Flag {
-    pub fn label(self) -> &'static str {
+    /// How bad it is: an unresolved route fails to load its link, a chain is slow.
+    pub fn level(self) -> Option<Severity> {
         match self {
-            Flag::Unresolved => "unresolved",
-            Flag::Chain => "redirect chain",
-            Flag::NotFound => "404",
+            Flag::Unresolved => Some(Severity::Error),
+            Flag::Chain => Some(Severity::Warning),
+            Flag::NotFound => None,
+        }
+    }
+
+    /// The chip a row's result column shows: a state and its word. A route with no
+    /// flag is "in route table", dashed: it is porter's model, not a live check.
+    pub fn chip(f: Option<Flag>) -> (ChipState, &'static str) {
+        match f {
+            Some(Flag::Unresolved) => (ChipState::Errors, "Unresolved"),
+            Some(Flag::Chain) => (ChipState::Warnings, "Redirect chain"),
+            Some(Flag::NotFound) => (ChipState::Skipped, "404 in source"),
+            None => (ChipState::NotRun, "In route table"),
         }
     }
 }
@@ -60,6 +76,23 @@ pub struct UrlRow {
     pub target: &'static str,
     pub new_url: String,
     pub flag: Option<Flag>,
+}
+
+fn slot(f: RouteFilter) -> usize {
+    match f {
+        RouteFilter::All => 0,
+        RouteFilter::Unresolved => 1,
+        RouteFilter::Chains => 2,
+        RouteFilter::NotFound => 3,
+    }
+}
+
+/// An empty table: what to say, and whether clearing the filter would show rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Empty {
+    pub title: &'static str,
+    pub body: String,
+    pub clear_filter: bool,
 }
 
 pub fn flag(r: &RouteRow) -> Option<Flag> {
@@ -129,6 +162,7 @@ impl Urls {
         self.generation += 1;
         self.rows.clear();
         self.matching = 0;
+        self.counts[slot(self.filter)] = None;
         self.error = None;
         self.loading = true;
         vec![self.query(0)]
@@ -164,6 +198,8 @@ impl Urls {
                 self.rows.extend(r.rows);
                 self.matching = r.matching;
                 self.total = r.total;
+                self.counts[slot(self.filter)] = Some(r.matching);
+                self.counts[0] = Some(r.total);
             }
             Err(e) => self.error = Some(e),
         }
@@ -203,15 +239,53 @@ impl Urls {
         s
     }
 
+    /// The number on `f`'s chip, or None until that filter has been read: "…", never a guess.
+    pub fn count(&self, f: RouteFilter) -> Option<u64> {
+        self.counts[slot(f)]
+    }
+
+    /// The table is still being read and has nothing to show: "Building route table · 0 of 840".
+    pub fn loading_text(&self) -> Option<String> {
+        if !self.asked || (self.loading && self.rows.is_empty()) {
+            return Some(match self.total {
+                0 => "Building route table…".into(),
+                t => format!("Building route table · {} of {t}", self.rows.len()),
+            });
+        }
+        None
+    }
+
     /// Why the table is empty, when it is.
-    pub fn empty_note(&self) -> Option<&'static str> {
-        if self.loading || self.error.is_some() || !self.rows.is_empty() {
+    pub fn empty(&self) -> Option<Empty> {
+        if self.loading || !self.asked || self.error.is_some() || !self.rows.is_empty() {
             return None;
         }
-        Some(if self.total == 0 {
-            "No URLs yet: run extract and normalise."
-        } else {
-            "No URL matches this filter."
+        if self.total == 0 {
+            return Some(Empty {
+                title: "No URLs yet",
+                body: "Run extract and normalise to build the route table.".into(),
+                clear_filter: false,
+            });
+        }
+        let (title, what) = match self.filter {
+            RouteFilter::All => ("No URLs", "".to_string()),
+            RouteFilter::Unresolved => ("No unresolved URLs", "lead somewhere".to_string()),
+            RouteFilter::Chains => (
+                "No redirect chains in the route table",
+                "reach a document directly or in one hop".to_string(),
+            ),
+            RouteFilter::NotFound => (
+                "No old URL returned 404",
+                "answered when they were crawled".to_string(),
+            ),
+        };
+        Some(Empty {
+            title,
+            body: format!(
+                "All {} old URLs {what}. This is from porter's model; the live site hasn't been checked.",
+                self.total
+            ),
+            clear_filter: self.filter != RouteFilter::All,
         })
     }
 }
@@ -356,5 +430,75 @@ mod tests {
         let mut c = r(3, Some(301), RouteTarget::Redirect(id(9)), Some("/y"));
         c.chain = true;
         assert_eq!(flag(&c), Some(Flag::Chain));
+    }
+
+    #[test]
+    fn a_result_is_a_state_and_a_word_and_never_green() {
+        for f in [
+            None,
+            Some(Flag::Unresolved),
+            Some(Flag::Chain),
+            Some(Flag::NotFound),
+        ] {
+            let (state, word) = Flag::chip(f);
+            assert!(!word.is_empty());
+            assert_ne!(
+                state,
+                ChipState::Clean,
+                "a route table is a model, not a written result"
+            );
+        }
+        assert_eq!(Flag::Unresolved.level(), Some(Severity::Error));
+        assert_eq!(Flag::Chain.level(), Some(Severity::Warning));
+        assert_eq!(Flag::NotFound.level(), None);
+    }
+
+    #[test]
+    fn chips_show_what_each_filter_read_and_dots_until_then() {
+        let mut u = Urls::default();
+        u.open();
+        assert_eq!(u.loading_text().as_deref(), Some("Building route table…"));
+        u.land(
+            0,
+            reply(0, vec![r(1, Some(200), RouteTarget::None, None)], 1, 9),
+        );
+        assert_eq!(u.loading_text(), None);
+        assert_eq!(u.count(RouteFilter::All), Some(9));
+        assert_eq!(u.count(RouteFilter::Chains), None, "not read yet: no guess");
+        u.set_filter(RouteFilter::Chains);
+        let g = u.generation;
+        u.land(g, reply(0, vec![], 0, 9));
+        assert_eq!(u.count(RouteFilter::Chains), Some(0));
+        assert_eq!(u.count(RouteFilter::All), Some(9));
+    }
+
+    #[test]
+    fn an_empty_filter_says_what_it_found_and_offers_to_clear() {
+        let mut u = Urls::default();
+        u.open();
+        u.land(
+            0,
+            reply(0, vec![r(1, Some(200), RouteTarget::None, None)], 1, 1612),
+        );
+        u.set_filter(RouteFilter::Chains);
+        let g = u.generation;
+        u.land(g, reply(0, vec![], 0, 1612));
+        let e = u.empty().unwrap();
+        assert_eq!(e.title, "No redirect chains in the route table");
+        assert!(e.body.contains("All 1612 old URLs"), "{}", e.body);
+        assert!(e.body.contains("live site hasn't been checked"));
+        assert!(e.clear_filter);
+    }
+
+    #[test]
+    fn no_rows_at_all_names_the_stages_that_fill_it() {
+        let mut u = Urls::default();
+        assert_eq!(u.empty(), None, "not asked yet is loading, not empty");
+        u.open();
+        assert_eq!(u.empty(), None, "loading is not empty");
+        u.land(0, reply(0, vec![], 0, 0));
+        let e = u.empty().unwrap();
+        assert_eq!(e.title, "No URLs yet");
+        assert!(!e.clear_filter);
     }
 }

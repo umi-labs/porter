@@ -39,6 +39,37 @@ pub struct RowIssue {
     pub message: String,
 }
 
+/// How bad a row is: its worst issue. None when it has none.
+pub fn level(issues: &[RowIssue]) -> Option<Severity> {
+    if issues.iter().any(|i| i.error) {
+        Some(Severity::Error)
+    } else if issues.is_empty() {
+        None
+    } else {
+        Some(Severity::Warning)
+    }
+}
+
+/// The row a problem sits on: what clicking it selects.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    Type(String),
+    Field(String, String),
+    /// An index into `block_rows()`.
+    Block(usize),
+}
+
+/// One problem and the row that causes it, for "Next problem" and the list of what
+/// blocks Apply. `why` is the schema check's own message.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Problem {
+    pub target: Target,
+    /// The row's name: `post`, `post.price`, `hero`.
+    pub what: String,
+    pub why: String,
+    pub error: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TypeRow {
     pub name: String,
@@ -238,6 +269,74 @@ impl Mapping {
     /// Issues that belong to no row (destination warnings and the like).
     pub fn general_issues(&self) -> &[RowIssue] {
         &self.placed.general
+    }
+
+    /// Every problem that sits on a row, in the order the page reads: each type, then its
+    /// fields, then the blocks. Problems with no row (`general_issues`) are not here.
+    pub fn problems(&self) -> Vec<Problem> {
+        let mut out = vec![];
+        let mut add = |target: Target, what: String, issues: &[RowIssue]| {
+            out.extend(issues.iter().map(|i| Problem {
+                target: target.clone(),
+                what: what.clone(),
+                why: i.message.clone(),
+                error: i.error,
+            }));
+        };
+        for t in self.type_rows() {
+            add(Target::Type(t.name.clone()), t.name.clone(), &t.issues);
+            for f in self.field_rows(&t.name) {
+                let what = format!("{}.{}", t.name, f.path);
+                add(Target::Field(t.name.clone(), f.path), what, &f.issues);
+            }
+        }
+        for (i, b) in self.block_rows().into_iter().enumerate() {
+            let what = b.module.clone().unwrap_or(b.kind.clone());
+            add(Target::Block(i), what, &b.issues);
+        }
+        out
+    }
+
+    /// `counts()` once the mapping has been read, for the sidebar.
+    pub fn problem_counts(&self) -> Option<(usize, usize)> {
+        self.loaded().map(|_| self.counts())
+    }
+
+    /// (errors, warnings) over `problems()`: the numbers in the header.
+    pub fn counts(&self) -> (usize, usize) {
+        let p = self.problems();
+        let e = p.iter().filter(|p| p.error).count();
+        (e, p.len() - e)
+    }
+
+    /// The row the editor is on.
+    pub fn selection(&self) -> Option<Target> {
+        match (
+            &self.selected_type,
+            &self.selected_field,
+            self.selected_block,
+        ) {
+            (_, _, Some(i)) => Some(Target::Block(i)),
+            (Some(t), Some(f), None) => Some(Target::Field(t.clone(), f.clone())),
+            (Some(t), None, None) => Some(Target::Type(t.clone())),
+            _ => None,
+        }
+    }
+
+    /// The first problem on a row after `after`, wrapping round; a row with several
+    /// problems is one stop. With a single problem row it is that row again.
+    pub fn next_problem(&self, after: Option<&Target>) -> Option<Problem> {
+        let all = self.problems();
+        let start = after
+            .and_then(|a| all.iter().rposition(|p| &p.target == a))
+            .map_or(0, |i| i + 1);
+        all.iter()
+            .cycle()
+            .skip(start)
+            .take(all.len())
+            .find(|p| Some(&p.target) != after)
+            .or(all.first())
+            .cloned()
     }
 
     /// Every source type seen or mapped: seen ones first, in the store's order.
@@ -826,6 +925,69 @@ fields = { title = "heading" }
         assert_eq!(blocks[1].r#match.kind.as_deref(), Some("gallery"));
         assert!(m.raw_block_issues()[0].message.contains("rawHtml"));
         assert_eq!(m.general_issues().len(), 1);
+    }
+
+    #[test]
+    fn problems_name_the_row_and_say_why() {
+        let d = tempfile::tempdir().unwrap();
+        let m = loaded(d.path(), Ok(Some(dest())));
+        let p = m.problems();
+        let rows: Vec<_> = p.iter().map(|p| (p.what.as_str(), p.error)).collect();
+        assert_eq!(
+            rows,
+            [
+                ("post", true),
+                ("post.title", true),
+                ("post.price", false),
+                ("page", false),
+                ("hero_banner", true),
+            ]
+        );
+        assert!(p[1].why.contains("does not exist"));
+        assert_eq!(p[1].target, Target::Field("post".into(), "title".into()));
+        assert_eq!(p[4].target, Target::Block(0));
+        assert_eq!(m.counts(), (3, 2));
+    }
+
+    #[test]
+    fn next_problem_walks_the_rows_and_wraps() {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = loaded(d.path(), Ok(Some(dest())));
+        let first = m.next_problem(None).unwrap();
+        assert_eq!(first.target, Target::Type("post".into()));
+        let second = m.next_problem(Some(&first.target)).unwrap();
+        assert_eq!(second.what, "post.title");
+        let last = Target::Block(0);
+        assert_eq!(m.next_problem(Some(&last)).unwrap().what, "post", "wraps");
+        // The editor's own row is where the walk continues from.
+        m.selected_type = Some("post".into());
+        m.selected_field = Some("price".into());
+        assert_eq!(
+            m.selection(),
+            Some(Target::Field("post".into(), "price".into()))
+        );
+        assert_eq!(m.next_problem(m.selection().as_ref()).unwrap().what, "page");
+        m.selected_block = Some(0);
+        assert_eq!(m.selection(), Some(Target::Block(0)));
+    }
+
+    #[test]
+    fn a_row_is_as_bad_as_its_worst_issue() {
+        let m = |error| RowIssue {
+            error,
+            message: "x".into(),
+        };
+        assert_eq!(level(&[]), None);
+        assert_eq!(level(&[m(false)]), Some(Severity::Warning));
+        assert_eq!(level(&[m(false), m(true)]), Some(Severity::Error));
+    }
+
+    #[test]
+    fn no_problems_means_no_next() {
+        let m = Mapping::default();
+        assert_eq!(m.counts(), (0, 0));
+        assert_eq!(m.next_problem(None), None);
+        assert_eq!(m.selection(), None);
     }
 
     #[test]

@@ -12,7 +12,6 @@ pub type Progress = (u64, Option<u64>, String);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
-    Muted,
     Success,
     Warning,
     Danger,
@@ -323,6 +322,15 @@ impl Pipeline {
     }
 
     /// Live states (running, could not run, just finished) win over the stored run.
+    /// Why the last dry-run load no longer holds, when it is one and does not: shown
+    /// beside the mapping, whose edits are the usual reason.
+    pub fn load_stale(&self) -> Option<String> {
+        self.rows()
+            .into_iter()
+            .find(|r| r.stage == Stage::Load && r.state == StageState::DryRun)
+            .and_then(|r| r.stale)
+    }
+
     pub fn rows(&self) -> Vec<StageRow> {
         let empty = Overview::default();
         let ov = self.overview.as_ref().unwrap_or(&empty);
@@ -678,6 +686,40 @@ mod tests {
             Some("5 done · 2 failed · 3 errors · 0 warnings")
         );
         assert_eq!(row(&p, Stage::Extract).stale, None);
+    }
+
+    #[test]
+    fn a_stale_dry_run_says_why_and_a_fresh_one_says_nothing() {
+        let mut p = Pipeline::default();
+        let dry = |id| (Stage::Load, with_id(id, run(Some(sum(4, 0, 0, 0)), true)));
+        p.overview_landed(Ok(Overview {
+            last_runs: vec![dry("5")],
+            ..Default::default()
+        }));
+        assert_eq!(p.load_stale(), None);
+        p.overview_landed(Ok(Overview {
+            last_runs: vec![
+                dry("5"),
+                (
+                    Stage::Normalise,
+                    with_id("6", run(Some(sum(4, 0, 0, 0)), false)),
+                ),
+            ],
+            ..Default::default()
+        }));
+        assert_eq!(p.load_stale().as_deref(), Some("normalise re-ran since"));
+        // A load that is not a dry run is not "the dry run".
+        p.overview_landed(Ok(Overview {
+            last_runs: vec![
+                (Stage::Load, with_id("5", run(Some(sum(4, 0, 0, 0)), false))),
+                (
+                    Stage::Normalise,
+                    with_id("6", run(Some(sum(4, 0, 0, 0)), false)),
+                ),
+            ],
+            ..Default::default()
+        }));
+        assert_eq!(p.load_stale(), None);
     }
 
     #[test]

@@ -1,14 +1,17 @@
 //! Issues: the filterable table with a selection, bulk resolve (handled manually needs a
 //! note) and a jump to the item each issue is about.
 
-use gpui::{Context, InteractiveElement, IntoElement, ParentElement, Styled, div, uniform_list};
+use gpui::prelude::*;
+use gpui::{Context, IntoElement, ParentElement, Styled, div, px, uniform_list};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::Input;
-use gpui_component::{ActiveTheme, Disableable, Selectable, h_flex, v_flex};
+use gpui_component::{Disableable, Selectable, h_flex, v_flex};
 use porter_model::{IssueKind, Resolution, Severity};
 
-use super::overview::{error, severity_tone, tone_color};
+use super::overview::error;
 use crate::project_window::ProjectWindow;
+use crate::theme::{space, text, tokens};
+use crate::ui::table::{self, Col, toggle};
 use crate::vm::issues::{Choice, Status, kind_name};
 
 const KINDS: [IssueKind; 12] = [
@@ -42,9 +45,9 @@ fn resolution_text(r: &Resolution) -> String {
 }
 
 pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoElement {
-    let theme = cx.theme();
+    let t = tokens(cx);
     let s = &w.issues;
-    let status = h_flex().gap_1().items_center().children(
+    let status = h_flex().gap(space::S2).children(
         [
             (Status::Open, "Open"),
             (Status::Closed, "Resolved"),
@@ -52,56 +55,58 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
         ]
         .into_iter()
         .map(|(v, label)| {
-            Button::new(label)
-                .ghost()
-                .label(label)
-                .selected(s.status == v)
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.issues_filters(|i| i.status = v, cx)),
-                )
+            toggle(label, label, None, s.status == v, None, cx).on_click(
+                cx.listener(move |this, _, _, cx| this.issues_filters(|i| i.status = v, cx)),
+            )
         }),
     );
-    let severity = h_flex().gap_1().items_center().children(
+    // Every chip's number is the number of rows it filters to.
+    let severity = h_flex().gap(space::S2).children(
         [
-            (None, "Any severity"),
-            (Some(Severity::Error), "Errors"),
-            (Some(Severity::Warning), "Warnings"),
-            (Some(Severity::Info), "Info"),
+            (Severity::Error, "Errors"),
+            (Severity::Warning, "Warnings"),
+            (Severity::Info, "Info"),
         ]
         .into_iter()
         .map(|(v, label)| {
-            Button::new(label)
-                .ghost()
-                .label(label)
-                .selected(s.severity == v)
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.issues_filters(|i| i.severity = v, cx)),
-                )
+            let n = s.severity_count(v);
+            let on = s.severity == Some(v);
+            toggle(
+                label,
+                label,
+                Some(n.to_string()),
+                on,
+                (n > 0).then_some(v),
+                cx,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.issues_filters(|i| i.severity = if on { None } else { Some(v) }, cx)
+            }))
         }),
     );
     let kinds = h_flex()
-        .gap_1()
+        .gap(space::S2)
         .flex_wrap()
-        .child(
-            Button::new("kind-any")
-                .ghost()
-                .label("Any kind")
-                .selected(s.kind.is_none())
-                .on_click(cx.listener(|this, _, _, cx| this.issues_filters(|i| i.kind = None, cx))),
-        )
-        .children(KINDS.into_iter().map(|k| {
-            Button::new(("kind", k as usize))
-                .ghost()
-                .label(kind_name(k))
-                .selected(s.kind == Some(k))
-                .on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        this.issues_filters(|i| i.kind = Some(k), cx)
-                    }),
+        .children(KINDS.into_iter().filter_map(|k| {
+            let n = s.kind_count(k);
+            let on = s.kind == Some(k);
+            // A kind with nothing in it is left out, unless it is the one being filtered to.
+            (n > 0 || on).then(|| {
+                toggle(
+                    ("kind", k as usize),
+                    kind_name(k),
+                    Some(n.to_string()),
+                    on,
+                    None,
+                    cx,
                 )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.issues_filters(|i| i.kind = if on { None } else { Some(k) }, cx)
+                }))
+            })
         }));
     let resolve = h_flex()
-        .gap_2()
+        .gap(space::S2)
         .items_center()
         .child(
             Button::new("select-all")
@@ -127,37 +132,13 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
                 .disabled(s.selected_count() == 0)
                 .on_click(cx.listener(|this, _, _, cx| this.issues_resolve(cx))),
         );
-    let header = h_flex()
-        .w_full()
-        .gap_2()
-        .px_2()
-        .py_1()
-        .text_sm()
-        .text_color(theme.muted_foreground)
-        .border_b_1()
-        .border_color(theme.border)
-        .child(div().w_8())
-        .child(div().w_4())
-        .child(div().w_40().child("Kind"))
-        .child(div().flex_1().child("Message"))
-        .child(div().w_48().child("Status"))
-        .child(div().w_24());
     let n = s.visible().len();
     let body: gpui::AnyElement = if let Some(e) = s.error() {
         error(e, cx).into_any_element()
     } else if !s.loaded() {
-        div().p_2().child("Loading…").into_any_element()
-    } else if n == 0 {
-        div()
-            .p_2()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child(if s.all().is_empty() {
-                "No issues."
-            } else {
-                "No issue matches these filters."
-            })
-            .into_any_element()
+        table::loading("Reading issues\u{2026}", cx).into_any_element()
+    } else if let Some((title, why)) = s.empty() {
+        table::empty(title, why, cx).into_any_element()
     } else {
         // ponytail: filters the whole list per paint; cache the visible ids if a project
         // holds 100k+ issues.
@@ -165,56 +146,48 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
             "issues-table",
             n,
             cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                let theme = cx.theme();
+                let t = tokens(cx);
                 let visible = this.issues.visible();
                 range
                     .filter_map(|i| {
                         let it = *visible.get(i)?;
                         let (id, item) = (it.id, it.item);
                         let picked = this.issues.is_selected(id);
+                        let open = it.resolution == Resolution::Open;
                         Some(
-                            h_flex()
-                                .id(("issue-row", i))
-                                .w_full()
-                                .gap_2()
-                                .px_2()
-                                .items_center()
-                                .text_sm()
-                                .whitespace_nowrap()
-                                .child(
-                                    div().w_8().child(
-                                        Button::new(("pick", i))
-                                            .ghost()
-                                            .label(if picked { "☑" } else { "☐" })
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.issues_filters(|s| s.toggle(id), cx)
-                                            })),
-                                    ),
-                                )
+                            table::row(("issue-row", i), open.then_some(it.severity), false, cx)
                                 .child(
                                     div()
-                                        .w_4()
-                                        .text_color(tone_color(severity_tone(it.severity), theme))
-                                        .child("●"),
+                                        .id(("pick", i))
+                                        .w(px(24.))
+                                        .flex_none()
+                                        .cursor_pointer()
+                                        .child(if picked { "\u{2611}" } else { "\u{2610}" })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.issues_filters(|s| s.toggle(id), cx)
+                                        })),
                                 )
-                                .child(div().w_40().child(kind_name(it.kind)))
+                                .child(table::mark(it.severity, cx))
+                                .child(table::cell(
+                                    ("issue-kind", i),
+                                    kind_name(it.kind),
+                                    Col::Fixed(150.),
+                                ))
+                                .child(table::cell(("issue-msg", i), it.message.clone(), Col::Flex))
                                 .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .overflow_hidden()
-                                        .child(it.message.clone()),
+                                    table::cell(
+                                        ("issue-res", i),
+                                        resolution_text(&it.resolution),
+                                        Col::Fixed(150.),
+                                    )
+                                    .text_color(t.muted),
                                 )
-                                .child(
+                                .child(div().w(px(80.)).flex_none().children(item.map(|item| {
                                     div()
-                                        .w_48()
-                                        .overflow_hidden()
-                                        .child(resolution_text(&it.resolution)),
-                                )
-                                .child(div().w_24().children(item.map(|item| {
-                                    Button::new(("jump", i))
-                                        .ghost()
-                                        .label("Go to item")
+                                        .id(("jump", i))
+                                        .text_color(t.accent)
+                                        .cursor_pointer()
+                                        .child("Go to item")
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.issues_jump(item, cx)
                                         }))
@@ -229,25 +202,35 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
     };
     v_flex()
         .size_full()
-        .p_2()
-        .gap_2()
+        .p(space::S4)
+        .gap(space::S3)
+        .child(table::page_head("Issues", s.summary(), cx))
         .child(
             h_flex()
-                .gap_3()
+                .gap(space::S3)
                 .items_center()
+                .flex_wrap()
                 .child(status)
                 .child(severity)
-                .child(div().w_64().child(Input::new(&w.issues_filter)))
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child(s.summary()),
-                ),
+                .child(div().w_64().child(Input::new(&w.issues_filter))),
         )
         .child(kinds)
         .child(resolve)
-        .children(s.note.clone().map(|n| div().text_sm().child(n)))
-        .child(header)
+        .children(
+            s.note
+                .clone()
+                .map(|n| div().text_size(text::DENSE).text_color(t.muted).child(n)),
+        )
+        .child(table::header(
+            &[
+                ("", Col::Fixed(24.)),
+                ("", Col::Fixed(14.)),
+                ("Kind", Col::Fixed(150.)),
+                ("Message", Col::Flex),
+                ("Status", Col::Fixed(150.)),
+                ("", Col::Fixed(80.)),
+            ],
+            cx,
+        ))
         .child(div().flex_1().min_h_0().child(body))
 }

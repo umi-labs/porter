@@ -210,6 +210,16 @@ impl Media {
         self.has_more() && row + 3 >= self.grid_rows(cols)
     }
 
+    /// Nothing to show yet because the first page is still being read.
+    pub fn loading(&self) -> bool {
+        !self.asked || (self.loading && self.rows.is_empty() && self.error.is_none())
+    }
+
+    /// The first page came back and the project has no media.
+    pub fn is_empty(&self) -> bool {
+        self.asked && !self.loading && self.error.is_none() && self.total == 0
+    }
+
     /// "200 of 4,311 loaded", honestly, or why there is nothing.
     pub fn summary(&self) -> String {
         if !self.asked || (self.loading && self.rows.is_empty()) {
@@ -309,6 +319,20 @@ mod tests {
         assert_eq!(q.len(), 1);
         m.land(0, page(0, 200, 450));
         assert_eq!(m.grid_rows(5), 0);
+    }
+
+    #[test]
+    fn media_says_loading_then_empty_never_both() {
+        let mut m = Media::default();
+        assert!(m.loading() && !m.is_empty());
+        m.open();
+        assert!(m.loading() && !m.is_empty());
+        m.land(0, page(0, 0, 0));
+        assert!(!m.loading() && m.is_empty());
+        let mut m = Media::default();
+        m.open();
+        m.land(0, page(0, 3, 3));
+        assert!(!m.loading() && !m.is_empty());
     }
 
     #[test]

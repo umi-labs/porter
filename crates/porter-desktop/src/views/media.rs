@@ -11,7 +11,10 @@ use gpui_component::{ActiveTheme, h_flex, v_flex};
 use super::content::issues_list;
 use super::overview::error;
 use crate::project_window::ProjectWindow;
+use crate::theme::{radius, text, tokens};
 use crate::thumbs::Thumb;
+use crate::ui::path_label::PathLabel;
+use crate::ui::table;
 use crate::vm::media::usage_line;
 
 /// Grid columns.
@@ -33,11 +36,28 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
         }),
     )
     .size_full();
+    // Nothing to put in the grid: the pane says why.
+    let state: Option<gpui::AnyElement> = if let Some(e) = w.media.error() {
+        Some(error(e, cx).into_any_element())
+    } else if w.media.loading() {
+        Some(table::loading("Reading media\u{2026}", cx).into_any_element())
+    } else if w.media.is_empty() {
+        Some(
+            table::empty(
+                "No media yet",
+                "Extract finds the files and normalise links them. Run both and they appear here.",
+                cx,
+            )
+            .into_any_element(),
+        )
+    } else {
+        None
+    };
     let footer = match w.media.error() {
         Some(e) => error(e, cx).into_any_element(),
         None => div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
+            .text_size(text::DENSE)
+            .text_color(tokens(cx).muted)
             .child(w.media.summary())
             .into_any_element(),
     };
@@ -50,7 +70,10 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
                 .h_full()
                 .p_2()
                 .gap_2()
-                .child(div().flex_1().min_h_0().child(grid))
+                .child(div().flex_1().min_h_0().child(match state {
+                    Some(s) => s,
+                    None => grid.into_any_element(),
+                }))
                 .child(footer),
         )
         .child(
@@ -75,7 +98,7 @@ fn grid_row(w: &mut ProjectWindow, r: usize, cx: &mut Context<ProjectWindow>) ->
         .enumerate()
         .map(|(c, row)| {
             let thumb = w.thumb(&row);
-            let theme = cx.theme();
+            let t = tokens(cx);
             let id = row.id;
             let picture = match thumb {
                 Some(Thumb::Ready(image)) => img(image)
@@ -84,14 +107,14 @@ fn grid_row(w: &mut ProjectWindow, r: usize, cx: &mut Context<ProjectWindow>) ->
                     .into_any_element(),
                 Some(Thumb::Placeholder(why)) => div()
                     .p_1()
-                    .text_xs()
+                    .text_size(text::MICRO)
                     .text_center()
-                    .text_color(theme.muted_foreground)
+                    .text_color(t.muted)
                     .child(why)
                     .into_any_element(),
                 None => div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
+                    .text_size(text::MICRO)
+                    .text_color(t.muted)
                     .child("…")
                     .into_any_element(),
             };
@@ -102,12 +125,17 @@ fn grid_row(w: &mut ProjectWindow, r: usize, cx: &mut Context<ProjectWindow>) ->
                 .p_1()
                 .gap_1()
                 .border_1()
+                .rounded(radius::SM)
                 .border_color(if selected == Some(id) {
-                    theme.accent_foreground
+                    t.accent
                 } else {
-                    theme.border
+                    t.border
                 })
-                .when(selected == Some(id), |d| d.bg(theme.accent))
+                .bg(if selected == Some(id) {
+                    t.accent_bg
+                } else {
+                    t.surface
+                })
                 .child(
                     div()
                         .h(px(CELL - 40.0))
@@ -119,11 +147,8 @@ fn grid_row(w: &mut ProjectWindow, r: usize, cx: &mut Context<ProjectWindow>) ->
                         .child(picture),
                 )
                 .child(
-                    div()
-                        .text_xs()
-                        .whitespace_nowrap()
-                        .overflow_hidden()
-                        .child(row.filename),
+                    table::cell(("media-name", r * COLS + c), row.filename, table::Col::Flex)
+                        .text_size(text::MICRO),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| this.media_select(id, cx)))
                 .into_any_element()
@@ -147,9 +172,14 @@ fn detail(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> gpui::AnyElemen
     };
     let d = match w.media.detail() {
         None if w.media.selected().is_none() => {
-            return muted("Select a media item to see where it is used.").into_any_element();
+            return table::empty(
+                "No item selected",
+                "Select one to see where it is used.",
+                cx,
+            )
+            .into_any_element();
         }
-        None => return muted("Loading…").into_any_element(),
+        None => return table::loading("Reading the item\u{2026}", cx).into_any_element(),
         Some(Err(e)) => return error(e, cx).into_any_element(),
         Some(Ok(d)) => d,
     };
@@ -175,7 +205,12 @@ fn detail(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> gpui::AnyElemen
                 _ => "unknown".into(),
             };
             out = out
-                .child(div().text_xl().child(m.filename.clone()))
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_size(text::TITLE)
+                        .child(m.filename.clone()),
+                )
                 .child(
                     v_flex()
                         .gap_1()
@@ -194,7 +229,12 @@ fn detail(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> gpui::AnyElemen
                 } else {
                     v_flex()
                         .gap_1()
-                        .children(m.variants.iter().map(|v| div().text_sm().child(v.clone())))
+                        .children(
+                            m.variants
+                                .iter()
+                                .enumerate()
+                                .map(|(i, v)| PathLabel::new(("media-variant", i), v.clone())),
+                        )
                         .into_any_element()
                 })
                 .child(heading("Used by"))

@@ -15,22 +15,15 @@ use crate::theme::{radius, text, tokens};
 use crate::ui::buttons::{Kind, button};
 use crate::ui::chip::{Chip, ChipState, STALE_OPACITY};
 use crate::ui::severity::SeverityChip;
+use crate::ui::table::{self, toggle};
+use crate::vm::nav::{Link, kind_from_name};
 use crate::vm::pipeline::{CardAction, StageRow, Tone, relative_time};
 
 pub fn tone_color(t: Tone, theme: &Theme) -> Hsla {
     match t {
-        Tone::Muted => theme.muted_foreground,
         Tone::Success => theme.success,
         Tone::Warning => theme.warning,
         Tone::Danger => theme.danger,
-    }
-}
-
-pub fn severity_tone(s: Severity) -> Tone {
-    match s {
-        Severity::Error => Tone::Danger,
-        Severity::Warning => Tone::Warning,
-        Severity::Info => Tone::Muted,
     }
 }
 
@@ -245,41 +238,67 @@ fn coverage(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> gpui::AnyElem
 }
 
 fn issues(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> gpui::AnyElement {
+    // Each count opens Issues on the rows it counts.
     let totals = w.pipeline.overview.as_ref().map(|o| {
-        format!(
-            "{} errors · {} warnings · {} info",
-            o.open_errors, o.open_warnings, o.open_infos
+        h_flex().gap_2().children(
+            [
+                (Severity::Error, o.open_errors, "errors"),
+                (Severity::Warning, o.open_warnings, "warnings"),
+                (Severity::Info, o.open_infos, "info"),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (sev, n, word))| {
+                toggle(
+                    ("sev", i),
+                    word,
+                    Some(n.to_string()),
+                    false,
+                    (n > 0).then_some(sev),
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.follow(Link::severity(sev), window, cx)
+                }))
+            }),
         )
     });
     let kinds = match &w.kinds {
-        None => return muted("Loading…", cx).into_any_element(),
+        None => return table::loading("Reading issues…", cx).into_any_element(),
         Some(Err(e)) => return error(e, cx).into_any_element(),
         Some(Ok(k)) if k.is_empty() => {
             return muted("No open issues.", cx).into_any_element();
         }
         Some(Ok(k)) => k,
     };
-    let theme = cx.theme();
-    let rows = kinds.iter().map(|k| {
-        h_flex()
-            .gap_4()
-            .py_1()
+    let rows = kinds.iter().enumerate().map(|(i, k)| {
+        let link = kind_from_name(&k.kind).map(Link::kind);
+        let row = table::row(("kind", i), None, false, cx)
             .border_b_1()
-            .border_color(theme.border)
-            .child(div().w_24().child(SeverityChip(k.worst)))
-            .child(div().w_48().child(k.kind.clone()))
-            .child(div().child(k.total.to_string()))
+            .border_color(tokens(cx).border)
+            .child(div().w(px(90.)).flex_none().child(SeverityChip(k.worst)))
+            .child(table::cell(
+                ("kind-name", i),
+                k.kind.clone(),
+                table::Col::Fixed(200.),
+            ))
+            .child(div().child(k.total.to_string()));
+        match link {
+            Some(l) => row
+                .cursor_pointer()
+                .hover(|d| d.bg(tokens(cx).hover))
+                .on_click(cx.listener(move |this, _, window, cx| this.follow(l, window, cx))),
+            None => row,
+        }
     });
     v_flex()
-        .gap_1()
-        .children(totals.map(|t| muted(t, cx)))
-        .children(rows)
+        .gap_2()
+        .children(totals)
+        .child(v_flex().children(rows))
         .into_any_element()
 }
 
+/// An engine error, whole and verbatim.
 pub fn error(e: &str, cx: &Context<ProjectWindow>) -> gpui::Div {
-    div()
-        .text_sm()
-        .text_color(cx.theme().danger)
-        .child(format!("error: {e}"))
+    table::failure(e, cx)
 }

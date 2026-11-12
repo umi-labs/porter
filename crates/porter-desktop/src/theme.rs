@@ -119,15 +119,12 @@ pub mod radius {
     pub const XL: Pixels = px(14.); // sheets
 }
 
-// Not used by a view yet (D3: mapping, URLs).
-#[allow(dead_code)]
 pub mod space {
     use super::*;
     pub const S1: Pixels = px(4.);
     pub const S2: Pixels = px(8.);
     pub const S3: Pixels = px(12.);
     pub const S4: Pixels = px(16.);
-    pub const S6: Pixels = px(24.);
     pub const S8: Pixels = px(32.);
 }
 
@@ -140,10 +137,7 @@ pub mod text {
     pub const MICRO: Pixels = px(11.);
 }
 
-// For the tables and sidebar restyle (D3).
-#[allow(dead_code)]
 pub const ROW_TABLE: Pixels = px(28.);
-#[allow(dead_code)]
 pub const ROW_SIDEBAR: Pixels = px(32.);
 
 // Dry run: dashed `dry_border` + `dry_bg`, plus gpui::pattern_slash(dry_hatch, ...)

@@ -2,18 +2,44 @@
 //! selected document's detail. Links that point nowhere are red and say so.
 
 use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
-    div, prelude::FluentBuilder, px, uniform_list,
+    Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{ActiveTheme, h_flex, v_flex};
 
-use super::overview::{error, severity_tone, tone_color};
+use super::overview::{error, tone_color};
 use crate::project_window::ProjectWindow;
+use crate::theme::{ROW_TABLE, text, tokens};
+use crate::ui::path_label::PathLabel;
+use crate::ui::table::{self, Col};
 use crate::vm::content::{Detail, Line, Mark, NodeKey, Row, RowKind, status_text, status_tone};
 
 pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoElement {
     let theme = cx.theme();
-    let n = w.content.rows().len();
+    let rows = w.content.rows();
+    let n = rows.len();
+    // Nothing to list yet: the whole pane says why, not a lone row.
+    let whole: Option<gpui::AnyElement> = match rows.as_slice() {
+        [
+            Row {
+                kind: RowKind::Loading,
+                ..
+            },
+        ] => Some(table::loading("Reading documents\u{2026}", cx).into_any_element()),
+        [
+            Row {
+                kind: RowKind::Error(e),
+                ..
+            },
+        ] => Some(error(e, cx).into_any_element()),
+        [
+            Row {
+                kind: RowKind::Empty(why),
+                ..
+            },
+        ] => Some(table::empty("No documents yet", *why, cx).into_any_element()),
+        _ => None,
+    };
     let tree = uniform_list(
         "content-tree",
         n,
@@ -34,7 +60,10 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
                 .p_2()
                 .border_r_1()
                 .border_color(theme.border)
-                .child(tree),
+                .child(match whole {
+                    Some(w) => w,
+                    None => tree.into_any_element(),
+                }),
         )
         .child(
             v_flex()
@@ -50,16 +79,21 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
 }
 
 fn tree_row(i: usize, row: Row, cx: &mut Context<ProjectWindow>) -> gpui::AnyElement {
-    let theme = cx.theme();
+    let t = tokens(cx);
     let base = h_flex()
         .id(("content-row", i))
         .w_full()
+        .h(ROW_TABLE)
+        .flex_none()
+        .items_center()
         .gap_1()
-        .pl(px(row.depth as f32 * 16.0))
-        .text_sm()
+        .pl(px(4.0 + row.depth as f32 * 16.0))
+        .pr(px(4.))
+        .text_size(text::DENSE)
+        .text_color(t.text)
         .whitespace_nowrap()
         .overflow_hidden();
-    let arrow = |open: bool| if open { "▾" } else { "▸" };
+    let arrow = |open: bool| if open { "\u{25be}" } else { "\u{25b8}" };
     match row.kind {
         RowKind::Type {
             name,
@@ -67,7 +101,8 @@ fn tree_row(i: usize, row: Row, cx: &mut Context<ProjectWindow>) -> gpui::AnyEle
             expanded,
         } => {
             let key = NodeKey::Type(name.clone());
-            base.child(format!("{} {name} ({count})", arrow(expanded)))
+            base.font_weight(FontWeight::SEMIBOLD)
+                .child(format!("{} {name} ({count})", arrow(expanded)))
                 .on_click(cx.listener(move |this, _, _, cx| this.content_toggle(key.clone(), cx)))
                 .into_any_element()
         }
@@ -78,14 +113,16 @@ fn tree_row(i: usize, row: Row, cx: &mut Context<ProjectWindow>) -> gpui::AnyEle
         } => {
             let id = node.id;
             let key = NodeKey::Doc(id);
-            let toggle = div()
-                .id(("content-toggle", i))
-                .w_4()
-                .child(if node.has_children {
-                    arrow(expanded)
-                } else {
-                    ""
-                });
+            let toggle =
+                div()
+                    .id(("content-toggle", i))
+                    .w_4()
+                    .flex_none()
+                    .child(if node.has_children {
+                        arrow(expanded)
+                    } else {
+                        ""
+                    });
             let toggle = if node.has_children {
                 toggle.on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
@@ -94,21 +131,28 @@ fn tree_row(i: usize, row: Row, cx: &mut Context<ProjectWindow>) -> gpui::AnyEle
             } else {
                 toggle
             };
+            // A glyph and a colour: a dot alone would be colour alone.
             let dot = node.worst_status.as_ref().map(|s| {
                 div()
-                    .text_color(tone_color(status_tone(s), theme))
-                    .child("●")
+                    .flex_none()
+                    .text_color(tone_color(status_tone(s), cx.theme()))
+                    .child("\u{25cf}")
             });
             let title = if node.title.is_empty() {
                 node.path.clone()
             } else {
                 node.title.clone()
             };
-            base.when(selected, |b| b.bg(theme.accent))
+            base.when(selected, |b| b.bg(t.accent_bg))
                 .child(toggle)
                 .children(dot)
-                .child(title)
-                .child(div().text_color(theme.muted_foreground).child(node.path))
+                .child(table::cell(("content-title", i), title, Col::Flex))
+                .child(
+                    div()
+                        .w(px(130.))
+                        .flex_none()
+                        .child(PathLabel::new(("content-path", i), node.path)),
+                )
                 .on_click(cx.listener(move |this, _, _, cx| this.content_select(id, cx)))
                 .into_any_element()
         }
@@ -117,24 +161,25 @@ fn tree_row(i: usize, row: Row, cx: &mut Context<ProjectWindow>) -> gpui::AnyEle
             shown,
             total,
         } => base
-            .text_color(theme.info)
+            .text_color(t.accent)
+            .cursor_pointer()
             .child(format!("Load more ({shown} of {total} shown)"))
             .on_click(cx.listener(move |this, _, _, cx| this.content_more(parent.clone(), cx)))
             .into_any_element(),
         RowKind::Loading => base
-            .text_color(theme.muted_foreground)
-            .child("Loading…")
+            .text_color(t.muted)
+            .child("Loading\u{2026}")
             .into_any_element(),
-        RowKind::Error(e) => base.text_color(theme.danger).child(e).into_any_element(),
-        RowKind::Empty(why) => base
-            .text_color(theme.muted_foreground)
-            .child(why)
-            .into_any_element(),
+        RowKind::Error(e) => base.text_color(t.err).child(e).into_any_element(),
+        RowKind::Empty(why) => base.text_color(t.muted).child(why).into_any_element(),
     }
 }
 
 fn heading(t: &'static str) -> impl IntoElement {
-    div().text_lg().child(t)
+    div()
+        .text_size(text::HEADING)
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(t)
 }
 
 fn detail(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> gpui::AnyElement {
@@ -147,10 +192,14 @@ fn detail(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> gpui::AnyElemen
     };
     let d: &Detail = match w.content.detail() {
         None if w.content.selected().is_none() => {
-            return muted("Select a document to see where it came from and where it went.")
-                .into_any_element();
+            return table::empty(
+                "No document selected",
+                "Select one to see where it came from and where it went.",
+                cx,
+            )
+            .into_any_element();
         }
-        None => return muted("Loading…").into_any_element(),
+        None => return table::loading("Reading the document\u{2026}", cx).into_any_element(),
         Some(Err(e)) => return error(e, cx).into_any_element(),
         Some(Ok(d)) => d,
     };
@@ -162,30 +211,50 @@ fn detail(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> gpui::AnyElemen
             .child(
                 div()
                     .w_32()
+                    .flex_none()
                     .text_color(theme.muted_foreground)
                     .child(k.to_string()),
             )
-            .child(v)
+            .child(div().min_w_0().child(v))
+    };
+    // A path or URL: cut in the middle with its last two segments kept, whole on hover.
+    let path_kv = |id: &'static str, k: &str, v: String| {
+        h_flex()
+            .gap_2()
+            .text_sm()
+            .child(
+                div()
+                    .w_32()
+                    .flex_none()
+                    .text_color(theme.muted_foreground)
+                    .child(k.to_string()),
+            )
+            .child(div().flex_1().min_w_0().child(PathLabel::new(id, v)))
     };
     let mut out = v_flex().gap_4();
     let src = &d.item.source;
     let mut head = v_flex().gap_1().child(
-        div().text_xl().child(
-            d.item
-                .row
-                .title
-                .clone()
-                .unwrap_or_else(|| "(untitled)".into()),
-        ),
+        div()
+            .text_size(text::TITLE)
+            .font_weight(FontWeight::SEMIBOLD)
+            .min_w_0()
+            .child(
+                d.item
+                    .row
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| "(untitled)".into()),
+            ),
     );
-    head = head.child(kv(
+    head = head.child(path_kv(
+        "content-old-url",
         "Old URL",
         src.url.clone().unwrap_or_else(|| "(none)".into()),
     ));
     match &d.doc {
         Ok(doc) => {
             head = head
-                .child(kv("New path", doc.path.clone()))
+                .child(path_kv("content-new-path", "New path", doc.path.clone()))
                 .child(kv("Type", doc.doc_type.clone()))
                 .child(kv("Status", format!("{:?}", doc.status).to_lowercase()));
             if let Some(p) = doc.parent {
@@ -315,16 +384,16 @@ fn rt_line(l: Line, cx: &Context<ProjectWindow>) -> impl IntoElement {
     }))
 }
 
-/// An item's issues, or that it has none.
+/// An item's issues, or that it has none. Each says what it is, in words, beside its mark.
 pub fn issues_list(
     issues: &[porter_model::Issue],
     cx: &Context<ProjectWindow>,
 ) -> gpui::AnyElement {
-    let theme = cx.theme();
+    let t = tokens(cx);
     if issues.is_empty() {
         return div()
             .text_sm()
-            .text_color(theme.muted_foreground)
+            .text_color(t.muted)
             .child("No issues.")
             .into_any_element();
     }
@@ -337,17 +406,21 @@ pub fn issues_list(
                 .unwrap_or_default();
             h_flex()
                 .gap_2()
+                .items_start()
                 .text_sm()
+                .child(table::mark(i.severity, cx))
                 .child(
                     div()
                         .w_32()
-                        .text_color(tone_color(severity_tone(i.severity), theme))
+                        .flex_none()
+                        .font_weight(FontWeight::MEDIUM)
                         .child(kind),
                 )
-                .child(div().min_w_0().child(i.message.clone()))
+                .child(div().flex_1().min_w_0().child(i.message.clone()))
                 .child(
                     div()
-                        .text_color(theme.muted_foreground)
+                        .flex_none()
+                        .text_color(t.muted)
                         .child(format!("{:?}", i.resolution).to_lowercase()),
                 )
         }))

@@ -2,20 +2,28 @@
 //! with the schema check's issues under it, and an editor for the selected row. Every
 //! change saves at once (comments kept) and the check re-runs in the background.
 
+use gpui::prelude::*;
 use gpui::{
-    AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, Window, div,
+    AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputState};
-use gpui_component::{ActiveTheme, Disableable, Selectable, h_flex, v_flex};
+use gpui_component::{ActiveTheme, Disableable, h_flex, v_flex};
 use porter_engine::mapping::KeyType;
 use porter_engine::mapping::edit::{BlockEdit, FieldMapEdit, MappingDoc};
 
+use porter_engine::session::RunPlan;
+use porter_model::{Severity, Stage};
+
 use super::overview::error;
-use crate::project_window::ProjectWindow;
+use crate::project_window::{ProjectWindow, dry};
+use crate::theme::{ROW_TABLE, radius, space, text, tokens};
+use crate::ui::buttons::{Kind, button};
+use crate::ui::chip::{Chip, ChipState};
+use crate::ui::table::{self, Col};
 use crate::vm::mapping::{
-    Mapping, Picker, RowIssue, move_transform, parse_pairs, parse_transform, transform_label,
+    self, Mapping, Picker, RowIssue, move_transform, parse_pairs, parse_transform, transform_label,
 };
 
 /// The editor's text boxes, refilled when the selection changes or a save lands.
@@ -111,74 +119,262 @@ fn edit(
 
 pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoElement {
     let m = &w.mapping;
-    let theme = cx.theme();
     if let Some(e) = m.error() {
         return v_flex()
-            .p_4()
-            .gap_2()
+            .p(space::S4)
+            .gap(space::S2)
             .child(error(e, cx))
             .child(reload_button(cx))
             .into_any_element();
     }
     if m.loading() {
-        return div()
-            .p_4()
-            .text_color(theme.muted_foreground)
-            .child("Reading porter.toml…")
+        return table::loading("Reading porter.toml…", cx).into_any_element();
+    }
+    if m.type_rows().is_empty() {
+        return v_flex()
+            .size_full()
+            .justify_center()
+            .child(
+                table::empty(
+                    "Nothing to map yet",
+                    "Analyse finds the source types and fields, then seeds [mapping] in \
+                     porter.toml with defaults for you to edit here.",
+                    cx,
+                )
+                .child(
+                    button("map-analyse", Kind::Primary, "Run analyse", cx).on_click(cx.listener(
+                        |this, _, _, cx| this.start(RunPlan::Stage(Stage::Analyse, dry()), cx),
+                    )),
+                ),
+            )
             .into_any_element();
     }
-    let mut page = v_flex()
-        .id("mapping")
-        .size_full()
-        .overflow_y_scroll()
-        .p_4()
-        .gap_4();
+    let t = tokens(cx);
+    let (errors, warnings) = m.counts();
     let status = if m.saving() {
         "Saving and checking…"
     } else {
-        "Every change is saved to porter.toml at once; your comments are kept."
+        "Saved to porter.toml as you edit; your comments are kept."
     };
-    page = page.child(
-        div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child(status),
-    );
+    let problems = h_flex()
+        .gap(space::S3)
+        .items_center()
+        .text_size(text::DENSE)
+        .when(errors + warnings == 0, |d| {
+            d.child(div().text_color(t.muted).child("No problems"))
+        })
+        .when(errors > 0, |d| {
+            d.child(
+                h_flex()
+                    .gap(px(6.))
+                    .items_center()
+                    .text_color(t.err)
+                    .child(table::mark(Severity::Error, cx))
+                    .child(format!("{errors} error{}", plural(errors))),
+            )
+        })
+        .when(warnings > 0, |d| {
+            d.child(
+                h_flex()
+                    .gap(px(6.))
+                    .items_center()
+                    .text_color(t.warn)
+                    .child(table::mark(Severity::Warning, cx))
+                    .child(format!("{warnings} warning{}", plural(warnings))),
+            )
+        });
+    let head = h_flex()
+        .w_full()
+        .flex_none()
+        .gap(space::S3)
+        .items_center()
+        .px(space::S4)
+        .pt(space::S3)
+        .child(
+            div()
+                .text_size(text::HEADING)
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Mapping"),
+        )
+        .child(problems)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(text::DENSE)
+                .text_color(t.muted)
+                .child(status),
+        )
+        .children(w.pipeline.load_stale().map(|why| {
+            // The mapping is what the dry run was of: say it no longer holds, and why.
+            h_flex()
+                .flex_none()
+                .gap(space::S2)
+                .items_center()
+                .text_size(text::DENSE)
+                .text_color(t.muted)
+                .child(Chip::new(ChipState::Stale).large())
+                .child(format!("Load dry run: {why}"))
+        }))
+        .child(
+            button("map-next", Kind::Secondary, "Next problem", cx)
+                .opacity(if errors + warnings == 0 { 0.5 } else { 1.0 })
+                .on_click(cx.listener(|this, _, window, cx| this.mapping_next_problem(window, cx))),
+        );
+    let mut notes = v_flex().gap(space::S2).px(space::S4);
     if !m.messages().is_empty() {
         let mut box_ = v_flex()
             .gap_1()
-            .child(div().text_color(theme.danger).child("Not saved:"))
-            .children(
-                m.messages()
-                    .iter()
-                    .map(|s| div().text_sm().text_color(theme.danger).child(s.clone())),
-            );
+            .child(
+                div()
+                    .text_color(t.err)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Not saved:"),
+            )
+            .children(m.messages().iter().map(|s| {
+                div()
+                    .text_size(text::DENSE)
+                    .text_color(t.err)
+                    .child(s.clone())
+            }));
         if m.needs_reload() {
             box_ = box_.child(reload_button(cx));
         }
-        page = page.child(box_);
+        notes = notes.child(box_);
     }
+    notes = notes.children(blocked(m, cx));
     if !m.general_issues().is_empty() {
-        page = page
+        notes = notes
             .child(heading("Schema check"))
             .child(issue_list(m.general_issues(), cx));
     }
-    page = page.child(heading("Types")).child(types_table(m, cx));
+    let mut right = v_flex()
+        .id("mapping-detail")
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .overflow_y_scroll()
+        .p(space::S4)
+        .gap(space::S4);
     if let Some(ty) = m.selected_type.clone() {
-        page = page
+        right = right
             .child(type_editor(w, &ty, cx))
             .child(heading(format!("Fields of {ty}")))
             .child(fields_table(m, &ty, cx));
         if let Some(f) = m.selected_field.clone() {
-            page = page.child(field_editor(w, &ty, &f, cx));
+            right = right.child(field_editor(w, &ty, &f, cx));
         }
+    } else {
+        right = right.child(table::empty(
+            "Select a type",
+            "Its fields, and what is wrong with them, show here.",
+            cx,
+        ));
     }
-    page = page.child(heading("Blocks")).child(blocks_table(m, cx));
+    right = right.child(heading("Blocks")).child(blocks_table(m, cx));
     if let Some(i) = m.selected_block {
-        page = page.child(block_editor(w, i, cx));
+        right = right.child(block_editor(w, i, cx));
     }
-    page.child(raw_block_editor(w, cx)).into_any_element()
+    right = right.child(raw_block_editor(w, cx));
+    let left = v_flex()
+        .id("mapping-types")
+        .w(px(300.))
+        .flex_none()
+        .h_full()
+        .overflow_y_scroll()
+        .border_r_1()
+        .border_color(t.border)
+        .child(table::header(
+            &[("Source type \u{2192} collection", Col::Flex)],
+            cx,
+        ))
+        .child(types_table(m, cx));
+    v_flex()
+        .size_full()
+        .gap(space::S3)
+        .child(head)
+        .child(notes)
+        .child(h_flex().flex_1().min_h_0().child(left).child(right))
+        .into_any_element()
 }
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
+/// Why Apply cannot go ahead: every error that sits on a row, each a link to its row.
+fn blocked(m: &Mapping, cx: &mut Context<ProjectWindow>) -> Option<gpui::Div> {
+    let errors: Vec<_> = m.problems().into_iter().filter(|p| p.error).collect();
+    if errors.is_empty() {
+        return None;
+    }
+    let t = tokens(cx);
+    let more = errors.len().saturating_sub(MAX_BLOCKED);
+    Some(
+        v_flex()
+            .gap(px(2.))
+            .p(space::S3)
+            .rounded(radius::MD)
+            .border_1()
+            .border_color(t.err)
+            .bg(t.err_bg)
+            .child(
+                h_flex()
+                    .gap(space::S2)
+                    .items_center()
+                    .pb(px(4.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(t.err)
+                    .child(table::mark(Severity::Error, cx))
+                    .child(format!(
+                        "Apply is blocked: {} mapping error{}",
+                        errors.len(),
+                        plural(errors.len())
+                    )),
+            )
+            .children(
+                errors
+                    .into_iter()
+                    .take(MAX_BLOCKED)
+                    .enumerate()
+                    .map(|(i, p)| {
+                        let to = p.target.clone();
+                        h_flex()
+                            .id(("blocked", i))
+                            .h(ROW_TABLE)
+                            .items_center()
+                            .gap(space::S3)
+                            .text_size(text::DENSE)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(t.hover))
+                            .child(table::cell(("blocked-what", i), p.what, Col::Fixed(180.)))
+                            .child(
+                                table::cell(("blocked-why", i), p.why, Col::Flex)
+                                    .text_color(t.muted),
+                            )
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.mapping_goto(to.clone(), window, cx)
+                            }))
+                    }),
+            )
+            .children((more > 0).then(|| {
+                div()
+                    .text_size(text::DENSE)
+                    .text_color(t.muted)
+                    .child(format!("and {more} more. Next problem steps through them."))
+            }))
+            .child(
+                div()
+                    .text_size(text::DENSE)
+                    .text_color(t.muted)
+                    .child("Each line jumps to its row."),
+            ),
+    )
+}
+
+/// Longest list of blocking errors shown at once.
+const MAX_BLOCKED: usize = 8;
 
 fn reload_button(cx: &mut Context<ProjectWindow>) -> impl IntoElement {
     Button::new("mapping-reload")
@@ -187,135 +383,136 @@ fn reload_button(cx: &mut Context<ProjectWindow>) -> impl IntoElement {
 }
 
 fn heading(t: impl Into<gpui::SharedString>) -> impl IntoElement {
-    div().text_lg().child(t.into())
+    div()
+        .text_size(text::HEADING)
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(t.into())
 }
 
+/// The reasons under a row: each in its own line, in the row's colours.
 fn issue_list(issues: &[RowIssue], cx: &Context<ProjectWindow>) -> gpui::Div {
-    let theme = cx.theme();
-    v_flex().pl_4().children(issues.iter().map(|i| {
-        div()
-            .text_sm()
-            .text_color(if i.error { theme.danger } else { theme.warning })
-            .child(format!("{} {}", if i.error { "✕" } else { "!" }, i.message))
+    v_flex().children(issues.iter().map(|i| {
+        table::reason(
+            if i.error {
+                Severity::Error
+            } else {
+                Severity::Warning
+            },
+            i.message.clone(),
+            cx,
+        )
     }))
 }
 
-fn header(cols: &[(&'static str, bool)], cx: &Context<ProjectWindow>) -> gpui::Div {
-    let theme = cx.theme();
-    h_flex()
-        .w_full()
-        .gap_2()
-        .px_2()
-        .text_sm()
-        .text_color(theme.muted_foreground)
-        .border_b_1()
-        .border_color(theme.border)
-        .children(cols.iter().map(|(c, wide)| cell(*c, *wide)))
-}
-
-fn cell(t: impl Into<gpui::SharedString>, wide: bool) -> gpui::Div {
-    let d = div().min_w_0().overflow_hidden().whitespace_nowrap();
-    if wide { d.flex_1() } else { d.w_32() }.child(t.into())
-}
-
 fn types_table(m: &Mapping, cx: &mut Context<ProjectWindow>) -> impl IntoElement {
-    let mut t = v_flex().child(header(
-        &[
-            ("Source type", false),
-            ("Docs", false),
-            ("To", false),
-            ("Path", true),
-            ("Key", false),
-            ("Status rules", true),
-        ],
-        cx,
-    ));
+    let t = tokens(cx);
+    let mut list = v_flex();
     for (i, r) in m.type_rows().into_iter().enumerate() {
-        let to = match (&r.to, &r.drop_reason, r.unmapped) {
-            (_, _, true) => "(unmapped)".to_string(),
-            (Some(to), _, _) => to.clone(),
-            (None, Some(why), _) => format!("dropped: {why}"),
-            (None, None, _) => "dropped".into(),
+        let (to, to_color) = match (&r.to, &r.drop_reason, r.unmapped) {
+            (_, _, true) => ("(unmapped)".to_string(), t.muted),
+            (Some(to), _, _) => (to.clone(), t.text),
+            (None, _, _) => ("dropped".into(), t.muted),
+        };
+        // What the row says besides its problems: the path pattern, or why it is dropped.
+        let note = match (&r.to, &r.drop_reason, &r.path) {
+            (None, Some(why), _) if !r.unmapped => Some(format!("Reason: {why}")),
+            (None, None, _) if !r.unmapped => Some("Dropped with no reason recorded".to_string()),
+            (Some(_), _, Some(p)) => Some(p.clone()),
+            _ => None,
         };
         let selected = m.selected_type.as_deref() == Some(&r.name);
         let name = r.name.clone();
-        t = t.child(
+        list = list.child(
             v_flex()
                 .child(
-                    Button::new(("map-type", i))
-                        .ghost()
-                        .w_full()
-                        .selected(selected)
+                    table::row(("map-type", i), mapping::level(&r.issues), selected, cx)
+                        .child(table::cell(("map-type-name", i), r.name.clone(), Col::Flex))
+                        .child(div().flex_none().text_color(t.faint).child("\u{2192}"))
                         .child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .text_sm()
-                                .child(cell(r.name.clone(), false))
-                                .child(cell(r.count.to_string(), false))
-                                .child(cell(to, false))
-                                .child(cell(r.path.clone().unwrap_or_default(), true))
-                                .child(cell(r.key.clone(), false))
-                                .child(cell(r.status.clone(), true)),
+                            table::cell(("map-type-to", i), to, Col::Fixed(110.))
+                                .text_color(to_color),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(px(44.))
+                                .text_right()
+                                .text_color(t.muted)
+                                .child(r.count.to_string()),
                         )
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.mapping_select(Some(name.clone()), None, None, window, cx)
                         })),
                 )
+                .children(note.map(|n| {
+                    table::cell(("map-type-note", i), n, Col::Flex)
+                        .pl(px(11.))
+                        .pb(px(3.))
+                        .text_size(text::MICRO)
+                        .text_color(t.muted)
+                }))
                 .child(issue_list(&r.issues, cx)),
         );
     }
-    t
+    list
 }
 
 fn fields_table(m: &Mapping, ty: &str, cx: &mut Context<ProjectWindow>) -> impl IntoElement {
-    let mut t = v_flex().child(header(
+    let mut t = v_flex().child(table::header(
         &[
-            ("Field", false),
-            ("Samples", true),
-            ("Filled", false),
-            ("To", false),
-            ("Transforms", true),
+            ("Source field", Col::Fixed(170.)),
+            ("Sample values", Col::Flex),
+            ("Filled", Col::Fixed(48.)),
+            ("Target field", Col::Fixed(150.)),
+            ("Transforms", Col::Fixed(150.)),
         ],
         cx,
     ));
+    let tk = tokens(cx);
     for (i, r) in m.field_rows(ty).into_iter().enumerate() {
-        let to = if r.unmapped {
-            "(unmapped)".to_string()
+        let (to, to_color) = if r.unmapped {
+            ("(not mapped)".to_string(), tk.muted)
         } else if r.drop {
-            match &r.reason {
-                Some(why) => format!("dropped: {why}"),
-                None => "dropped".into(),
-            }
+            ("(dropped)".to_string(), tk.muted)
         } else {
-            r.to.clone()
+            (r.to.clone(), tk.text)
         };
+        // A dropped field says why it was dropped, right under it.
+        let dropped_why = r.drop.then(|| r.reason.clone().unwrap_or_default());
         let transforms = r
             .transforms
             .iter()
             .map(transform_label)
             .collect::<Vec<_>>()
-            .join(" → ");
+            .join(" \u{2192} ");
         let selected = m.selected_field.as_deref() == Some(&r.path);
         let (ty, path) = (ty.to_string(), r.path.clone());
         t = t.child(
             v_flex()
                 .child(
-                    Button::new(("map-field", i))
-                        .ghost()
-                        .w_full()
-                        .selected(selected)
+                    table::row(("map-field", i), mapping::level(&r.issues), selected, cx)
                         .child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .text_sm()
-                                .child(cell(r.path.clone(), false))
-                                .child(cell(r.samples.clone(), true))
-                                .child(cell(r.fill.clone(), false))
-                                .child(cell(to, false))
-                                .child(cell(transforms, true)),
+                            table::cell(("map-field-path", i), r.path.clone(), Col::Fixed(170.))
+                                .when(r.drop, |d| d.line_through().text_color(tk.muted)),
                         )
+                        .child(
+                            table::cell(("map-field-samples", i), r.samples.clone(), Col::Flex)
+                                .text_color(tk.muted),
+                        )
+                        .child(table::cell(
+                            ("map-field-fill", i),
+                            r.fill.clone(),
+                            Col::Fixed(48.),
+                        ))
+                        .child(
+                            table::cell(("map-field-to", i), to, Col::Fixed(150.))
+                                .text_color(to_color),
+                        )
+                        .child(table::cell(
+                            ("map-field-tx", i),
+                            transforms,
+                            Col::Fixed(150.),
+                        ))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.mapping_select(
                                 Some(ty.clone()),
@@ -326,6 +523,18 @@ fn fields_table(m: &Mapping, ty: &str, cx: &mut Context<ProjectWindow>) -> impl 
                             )
                         })),
                 )
+                .children(dropped_why.map(|why| {
+                    div()
+                        .pl(px(11.))
+                        .pb(px(3.))
+                        .text_size(text::MICRO)
+                        .text_color(tk.muted)
+                        .child(if why.is_empty() {
+                            "Dropped with no reason recorded".to_string()
+                        } else {
+                            format!("Dropped: {why}")
+                        })
+                }))
                 .child(issue_list(&r.issues, cx)),
         );
     }
@@ -333,50 +542,60 @@ fn fields_table(m: &Mapping, ty: &str, cx: &mut Context<ProjectWindow>) -> impl 
 }
 
 fn blocks_table(m: &Mapping, cx: &mut Context<ProjectWindow>) -> impl IntoElement {
-    let mut t = v_flex().child(header(
+    let mut t = v_flex().child(table::header(
         &[
-            ("Kind", false),
-            ("Module", false),
-            ("Seen", false),
-            ("To", false),
-            ("Fields", true),
+            ("Kind", Col::Fixed(140.)),
+            ("Module", Col::Fixed(140.)),
+            ("Seen", Col::Fixed(48.)),
+            ("Block", Col::Fixed(130.)),
+            ("Fields", Col::Flex),
         ],
         cx,
     ));
+    let tk = tokens(cx);
     let rows = m.block_rows();
     if rows.is_empty() {
-        t = t.child(
-            div()
-                .p_2()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child("No layout blocks seen yet (run normalise).".to_string()),
-        );
+        t = t.child(table::empty(
+            "No layout blocks seen yet",
+            "Normalise finds them. Run it and they are listed here.",
+            cx,
+        ));
     }
     for (i, r) in rows.into_iter().enumerate() {
         let selected = m.selected_block == Some(i);
         let ty = m.selected_type.clone();
+        let (to, to_color) = match &r.to {
+            Some(to) => (to.clone(), tk.text),
+            None => ("(raw block)".to_string(), tk.muted),
+        };
         t = t.child(
             v_flex()
                 .child(
-                    Button::new(("map-block", i))
-                        .ghost()
-                        .w_full()
-                        .selected(selected)
+                    table::row(("map-block", i), mapping::level(&r.issues), selected, cx)
+                        .child(table::cell(
+                            ("map-block-kind", i),
+                            r.kind.clone(),
+                            Col::Fixed(140.),
+                        ))
+                        .child(table::cell(
+                            ("map-block-mod", i),
+                            r.module.clone().unwrap_or_default(),
+                            Col::Fixed(140.),
+                        ))
+                        .child(table::cell(
+                            ("map-block-n", i),
+                            r.count.to_string(),
+                            Col::Fixed(48.),
+                        ))
                         .child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .text_sm()
-                                .child(cell(r.kind.clone(), false))
-                                .child(cell(r.module.clone().unwrap_or_default(), false))
-                                .child(cell(r.count.to_string(), false))
-                                .child(cell(
-                                    r.to.clone().unwrap_or_else(|| "(raw block)".into()),
-                                    false,
-                                ))
-                                .child(cell(r.fields.clone(), true)),
+                            table::cell(("map-block-to", i), to, Col::Fixed(130.))
+                                .text_color(to_color),
                         )
+                        .child(table::cell(
+                            ("map-block-fields", i),
+                            r.fields.clone(),
+                            Col::Flex,
+                        ))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.mapping_select(ty.clone(), None, Some(i), window, cx)
                         })),

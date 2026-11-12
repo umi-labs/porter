@@ -21,9 +21,8 @@ pub enum ChipState {
     /// Could not run (exit 1).
     Failed,
     Interrupted,
-    /// An upstream stage or the mapping changed since. Prefer `Look::stale` on the
-    /// previous result; this is the bare chip for when there is none.
-    #[allow(dead_code)]
+    /// A result that no longer holds, as a bare chip; the overview dims the previous
+    /// result instead and the mapping header uses this one.
     Stale,
     DryRun,
     Skipped,
@@ -89,18 +88,6 @@ pub struct Look {
     pub dashed: bool,
     /// Drawn at 62%: a previous result that no longer holds.
     pub dimmed: bool,
-}
-
-impl Look {
-    /// Stale is a modifier on the previous result, not a replacement: the same chip at 62%.
-    /// The overview dims the whole result block instead (chip and counts together).
-    #[allow(dead_code)]
-    pub fn stale(self) -> Self {
-        Self {
-            dimmed: true,
-            ..self
-        }
-    }
 }
 
 pub const STALE_OPACITY: f32 = 0.62;
@@ -224,7 +211,6 @@ impl Chip {
         self
     }
 
-    #[allow(dead_code)] // for headers (D3)
     pub fn large(mut self) -> Self {
         self.large = true;
         self
@@ -350,15 +336,11 @@ mod tests {
     }
 
     #[test]
-    fn stale_dims_the_previous_result_and_only_dims() {
+    fn stale_is_a_chip_of_its_own_and_dims_nothing() {
         for s in ALL {
-            let l = stage_look(s);
-            assert!(!l.dimmed);
-            let stale = l.stale();
-            assert!(stale.dimmed);
-            assert_eq!(
-                (stale.glyph, stale.word, stale.tone),
-                (l.glyph, l.word, l.tone)
+            assert!(
+                !stage_look(s).dimmed,
+                "{s:?}: the overview dims, not the chip"
             );
         }
         assert_eq!(stage_look(ChipState::Stale).glyph, "↻");

@@ -31,8 +31,9 @@ use crate::vm::apply::{ApplySheet, age};
 use crate::vm::content::{Content, NodeKey, Query};
 use crate::vm::destination::Mode;
 use crate::vm::issues::{Choice, Issues, Jump, jump_target};
-use crate::vm::mapping::Mapping;
+use crate::vm::mapping::{Mapping, Target};
 use crate::vm::media::{self, Media};
+use crate::vm::nav::Link;
 use crate::vm::pipeline::{CLOSE_WAIT, CloseStep, KindCount, Pipeline, name};
 use crate::vm::runs::Runs;
 use crate::vm::urls::{self, Urls};
@@ -229,6 +230,31 @@ impl ProjectWindow {
         self.mapping.selected_block = block;
         self.mapping_inputs.fill(&self.mapping, window, cx);
         cx.notify();
+    }
+
+    /// Follows a count to the rows it counts: the section opens with the filter set.
+    pub(crate) fn follow(&mut self, link: Link, window: &mut Window, cx: &mut Context<Self>) {
+        self.issues.focus(link.kind, link.severity);
+        self.issues_filter
+            .update(cx, |s, cx| s.set_value("", window, cx));
+        self.select(Section::Issues, cx);
+    }
+
+    /// Jumps to the mapping row a problem sits on.
+    pub(crate) fn mapping_goto(&mut self, to: Target, window: &mut Window, cx: &mut Context<Self>) {
+        let (ty, field, block) = match to {
+            Target::Type(t) => (Some(t), None, None),
+            Target::Field(t, f) => (Some(t), Some(f), None),
+            Target::Block(i) => (self.mapping.selected_type.clone(), None, Some(i)),
+        };
+        self.mapping_select(ty, field, block, window, cx);
+    }
+
+    /// "Next problem": from the row the editor is on, to the next row with one.
+    pub(crate) fn mapping_next_problem(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(p) = self.mapping.next_problem(self.mapping.selection().as_ref()) {
+            self.mapping_goto(p.target, window, cx);
+        }
     }
 
     /// Reads the issues: the first time the section is shown, or again after the store
@@ -1049,7 +1075,7 @@ impl Render for ProjectWindow {
                 h_flex()
                     .flex_1()
                     .min_h_0()
-                    .child(sidebar::render(self.section, cx))
+                    .child(sidebar::render(self, cx))
                     .child(div().flex_1().h_full().min_w_0().child(main)),
             )
             .children(sheet)

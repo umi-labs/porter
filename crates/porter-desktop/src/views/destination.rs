@@ -1,27 +1,33 @@
 //! Destination: the schema check's results grouped by collection, and the schema modes.
 //! Generate, Prompt and Spec run as normal runs and then open the folder they wrote to.
+//! A collection's counts open Issues filtered to the schema checks.
 
-use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
-    div,
-};
+use gpui::prelude::*;
+use gpui::{Context, FontWeight, IntoElement, ParentElement, Styled, div, px};
 use gpui_component::button::Button;
-use gpui_component::{ActiveTheme, Disableable, h_flex, v_flex};
+use gpui_component::{Disableable, h_flex, v_flex};
+use porter_model::{IssueKind, Severity};
 
-use super::overview::{error, severity_tone, tone_color};
+use super::overview::error;
 use crate::project_window::ProjectWindow;
+use crate::theme::{space, text, tokens};
+use crate::ui::table::{self, toggle};
 use crate::vm::destination::{Mode, groups};
+use crate::vm::nav::Link;
 
 pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoElement {
-    let theme = cx.theme();
+    let t = tokens(cx);
     let busy = w.pipeline.busy();
-    let buttons = h_flex().gap_2().children(Mode::ALL.into_iter().map(|m| {
-        Button::new(m.label())
-            .label(m.label())
-            .disabled(busy)
-            .on_click(cx.listener(move |this, _, _, cx| this.run_schema(m, cx)))
-    }));
-    let help = div().text_sm().text_color(theme.muted_foreground).child(
+    let buttons = h_flex()
+        .gap_2()
+        .flex_wrap()
+        .children(Mode::ALL.into_iter().map(|m| {
+            Button::new(m.label())
+                .label(m.label())
+                .disabled(busy)
+                .on_click(cx.listener(move |this, _, _, cx| this.run_schema(m, cx)))
+        }));
+    let help = div().text_size(text::DENSE).text_color(t.muted).child(
         "Check compares the mapping with the Payload config. Generate writes collection \
              files to generated/payload/; Prompt and Spec write reports/schema-prompt.md and \
              reports/schema-spec.{md,html}. Nothing is written to the Payload site.",
@@ -29,43 +35,70 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
     let body: gpui::AnyElement = if let Some(e) = w.issues.error() {
         error(e, cx).into_any_element()
     } else if !w.issues.loaded() {
-        div().child("Loading…").into_any_element()
+        table::loading("Reading the schema check\u{2026}", cx).into_any_element()
     } else {
         let g = groups(w.issues.all());
         if g.is_empty() {
-            div()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child("No open schema check issues. Run Check schema to compare again.")
-                .into_any_element()
+            table::empty(
+                "No open schema check issues",
+                "Run Check schema to compare the mapping with the Payload config again.",
+                cx,
+            )
+            .into_any_element()
         } else {
             v_flex()
-                .gap_4()
-                .children(g.into_iter().map(|g| {
+                .gap(space::S4)
+                .children(g.into_iter().enumerate().map(|(gi, g)| {
+                    // Each count opens the issues it counts.
+                    let counts = [
+                        (Severity::Error, g.errors, "errors"),
+                        (Severity::Warning, g.warnings, "warnings"),
+                        (Severity::Info, g.infos, "info"),
+                    ];
                     v_flex()
-                        .gap_1()
+                        .gap(px(2.))
                         .child(
                             h_flex()
-                                .gap_3()
-                                .child(div().text_lg().child(g.collection))
-                                .child(div().text_sm().text_color(theme.muted_foreground).child(
-                                    format!(
-                                        "{} errors · {} warnings · {} info",
-                                        g.errors, g.warnings, g.infos
-                                    ),
-                                )),
-                        )
-                        .children(g.messages.into_iter().map(|(sev, m)| {
-                            h_flex()
-                                .gap_2()
-                                .text_sm()
+                                .gap(space::S3)
+                                .items_center()
+                                .pb(space::S1)
                                 .child(
                                     div()
-                                        .text_color(tone_color(severity_tone(sev), theme))
-                                        .child("●"),
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(text::HEADING)
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(g.collection.clone()),
                                 )
-                                .child(div().min_w_0().child(m))
-                        }))
+                                .children(
+                                    counts.into_iter().enumerate().filter(|(_, c)| c.1 > 0).map(
+                                        |(i, (sev, n, word))| {
+                                            toggle(
+                                                ("dest-count", gi * 3 + i),
+                                                word,
+                                                Some(n.to_string()),
+                                                false,
+                                                Some(sev),
+                                                cx,
+                                            )
+                                            .on_click(
+                                                cx.listener(move |this, _, window, cx| {
+                                                    let link = Link {
+                                                        kind: Some(IssueKind::SchemaMismatch),
+                                                        severity: Some(sev),
+                                                    };
+                                                    this.follow(link, window, cx)
+                                                }),
+                                            )
+                                        },
+                                    ),
+                                ),
+                        )
+                        .children(
+                            g.messages
+                                .into_iter()
+                                .map(|(sev, m)| table::reason(sev, m, cx)),
+                        )
                 }))
                 .into_any_element()
         }
@@ -74,11 +107,25 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
         .id("destination")
         .size_full()
         .overflow_y_scroll()
-        .p_4()
-        .gap_4()
+        .p(space::S4)
+        .gap(space::S4)
+        .child(table::page_head(
+            "Destination",
+            "schema check and schema files",
+            cx,
+        ))
         .child(buttons)
         .child(help)
-        .children(w.dest_note.clone().map(|n| div().text_sm().child(n)))
-        .child(div().text_lg().child("Schema check results"))
+        .children(
+            w.dest_note
+                .clone()
+                .map(|n| div().text_size(text::BODY).child(n)),
+        )
+        .child(
+            div()
+                .text_size(text::HEADING)
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Schema check results"),
+        )
         .child(body)
 }
