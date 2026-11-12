@@ -5,6 +5,7 @@ use porter_model::{ItemId, ItemKind, Media, SourceRef};
 use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 /// Result of storing a file.
@@ -15,6 +16,8 @@ pub struct MediaHandle {
     pub path: PathBuf,
     /// False when these exact bytes were already stored.
     pub is_new: bool,
+    /// Set when this URL previously pointed at a different media item (its id).
+    pub replaced: Option<ItemId>,
 }
 
 impl Store {
@@ -41,10 +44,13 @@ impl Store {
         if is_new {
             let dir = path.parent().ok_or_else(|| anyhow!("no parent dir"))?;
             fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-            // Temp file then rename: an interrupted write never leaves a partial hash-named file.
-            let tmp = dir.join(format!(".{hash}.{}.tmp", std::process::id()));
-            fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
-            fs::rename(&tmp, &path).with_context(|| format!("renaming to {}", path.display()))?;
+            // Synced temp file then rename: an interrupted write never leaves a partial
+            // hash-named file, and a failure drops the temp file.
+            let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+            tmp.write_all(bytes)?;
+            tmp.as_file().sync_all()?;
+            tmp.persist(&path)
+                .with_context(|| format!("renaming to {}", path.display()))?;
         }
         let src = SourceRef {
             connector: "media".into(),
@@ -71,18 +77,19 @@ impl Store {
             };
             self.put_item(ItemKind::Media, id, &src, &media)?;
         }
-        self.add_media_variant(id, url)?;
+        let replaced = self.add_media_variant(id, url)?;
         Ok(MediaHandle {
             id,
             hash,
             path,
             is_new,
+            replaced,
         })
     }
 
     /// Records `url` as a variant of `id`. If the URL key already maps to another media,
     /// the latest call wins for the mapping; nothing is deleted.
-    pub fn add_media_variant(&self, id: ItemId, url: &str) -> Result<()> {
+    pub fn add_media_variant(&self, id: ItemId, url: &str) -> Result<Option<ItemId>> {
         let mut media: Media = self
             .get_item(id)?
             .ok_or_else(|| anyhow!("no media item {id}"))?;
@@ -95,8 +102,20 @@ impl Store {
             };
             self.put_item(ItemKind::Media, id, &src, &media)?;
         }
+        let mut replaced = None;
         if let Some(key) = normalise_url(url, None) {
-            self.conn().execute(
+            let conn = self.conn();
+            let prev: Option<String> = conn
+                .query_row(
+                    "SELECT media_id FROM media_variants WHERE url_key = ?1 AND deleted_at IS NULL",
+                    [&key.0],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(p) = prev.filter(|p| *p != id.to_string()) {
+                replaced = Some(p.parse()?);
+            }
+            conn.execute(
                 &format!(
                     "INSERT INTO media_variants (url_key, url, media_id) VALUES (?1, ?2, ?3)
                      ON CONFLICT(url_key) DO UPDATE SET url = excluded.url,
@@ -105,22 +124,35 @@ impl Store {
                 params![key.0, url, id.to_string()],
             )?;
         }
-        Ok(())
+        Ok(replaced)
     }
 
     pub fn media_by_url(&self, url: &str) -> Result<Option<ItemId>> {
         let Some(key) = normalise_url(url, None) else {
             return Ok(None);
         };
-        let id: Option<String> = self
-            .conn()
+        let conn = self.conn();
+        let exact: Option<String> = conn
             .query_row(
                 "SELECT media_id FROM media_variants WHERE url_key = ?1 AND deleted_at IS NULL",
-                [key.0],
+                [&key.0],
                 |r| r.get(0),
             )
             .optional()?;
-        Ok(id.map(|s| s.parse()).transpose()?)
+        if let Some(id) = exact {
+            return Ok(Some(id.parse()?));
+        }
+        // Case-insensitive fallback, only when it is unambiguous.
+        let mut stmt = conn.prepare(
+            "SELECT media_id FROM media_variants WHERE lower(url_key) = lower(?1) AND deleted_at IS NULL LIMIT 2",
+        )?;
+        let ids: Vec<String> = stmt
+            .query_map([&key.0], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        match ids.as_slice() {
+            [one] => Ok(Some(one.parse()?)),
+            _ => Ok(None),
+        }
     }
 
     pub fn media_path(&self, id: ItemId) -> Result<PathBuf> {

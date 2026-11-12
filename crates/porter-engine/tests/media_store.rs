@@ -42,6 +42,53 @@ fn case_collision_kept_apart() {
     assert_ne!(a.id, b.id);
     assert_eq!(fs::read(&a.path).unwrap(), b"one");
     assert_eq!(fs::read(&b.path).unwrap(), b"two");
+    assert_eq!(
+        s.media_by_url("https://x.com/Photo.jpg").unwrap(),
+        Some(a.id)
+    );
+    assert_eq!(
+        s.media_by_url("https://x.com/photo.jpg").unwrap(),
+        Some(b.id)
+    );
+}
+
+#[test]
+fn case_insensitive_fallback_when_unique() {
+    let (_d, p) = project();
+    let s = p.store();
+    let a = s
+        .put_media_bytes(b"one", "https://x.com/Photo.jpg", "Photo.jpg")
+        .unwrap();
+    assert_eq!(
+        s.media_by_url("https://x.com/photo.jpg").unwrap(),
+        Some(a.id)
+    );
+}
+
+#[test]
+fn ambiguous_case_lookup_is_none() {
+    let (_d, p) = project();
+    let s = p.store();
+    s.put_media_bytes(b"one", "https://x.com/Photo.jpg", "Photo.jpg")
+        .unwrap();
+    s.put_media_bytes(b"two", "https://x.com/photo.jpg", "photo.jpg")
+        .unwrap();
+    assert_eq!(s.media_by_url("https://x.com/PHOTO.JPG").unwrap(), None);
+}
+
+#[test]
+fn replaced_variant_reported() {
+    let (_d, p) = project();
+    let s = p.store();
+    let a = s
+        .put_media_bytes(b"one", "https://x.com/a.jpg", "a.jpg")
+        .unwrap();
+    assert_eq!(a.replaced, None);
+    let b = s
+        .put_media_bytes(b"two", "https://x.com/a.jpg", "a.jpg")
+        .unwrap();
+    assert_eq!(b.replaced, Some(a.id));
+    assert_eq!(s.media_by_url("https://x.com/a.jpg").unwrap(), Some(b.id));
 }
 
 #[test]

@@ -37,21 +37,26 @@ pub fn normalise_url(raw: &str, base: Option<&Url>) -> Option<UrlKey> {
         key.push_str(&format!(":{port}"));
     }
 
-    let segments: Vec<String> = url
+    let decoded: Vec<String> = url
         .path()
         .split('/')
         .filter(|s| !s.is_empty())
+        .map(|s| percent_decode_str(s).decode_utf8_lossy().into_owned())
+        .collect();
+    let has_ext = decoded
+        .last()
+        .and_then(|s| s.rsplit_once('.'))
+        .is_some_and(|(stem, ext)| !stem.is_empty() && !ext.is_empty());
+    // File paths (last segment has an extension) are case-sensitive; page paths are not.
+    let segments: Vec<String> = decoded
+        .iter()
         .map(|s| {
-            let decoded = percent_decode_str(s).decode_utf8_lossy().to_lowercase();
-            utf8_percent_encode(&decoded, SEGMENT).to_string()
+            let s = if has_ext { s.clone() } else { s.to_lowercase() };
+            utf8_percent_encode(&s, SEGMENT).to_string()
         })
         .collect();
     key.push('/');
     key.push_str(&segments.join("/"));
-    let has_ext = segments
-        .last()
-        .and_then(|s| s.rsplit_once('.'))
-        .is_some_and(|(stem, ext)| !stem.is_empty() && !ext.is_empty());
     if !segments.is_empty() && !has_ext {
         key.push('/');
     }
@@ -82,6 +87,15 @@ mod tests {
 
     fn key(s: &str) -> UrlKey {
         normalise_url(s, None).unwrap()
+    }
+
+    #[test]
+    fn file_paths_keep_case() {
+        assert_ne!(
+            key("https://x.com/Photo.jpg"),
+            key("https://x.com/photo.jpg")
+        );
+        assert_eq!(key("https://x.com/About/"), key("https://x.com/about"));
     }
 
     #[test]
