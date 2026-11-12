@@ -40,3 +40,4 @@ Collected from the build ledger on 2026-11-12. Decisions Claude made while Isaac
 - OSC 52 copy inside tmux; resize while running; 80x24 with a real project
 - The apply prompt with many collections; pasting into the setup form; o on Linux
 - An injected run panic, kill -TERM mid-run, double Ctrl-C from the filter box
+- Follow-up after final review: RunDone ordering race (found by desktop bridge tests) fixed in d34d0df, reviewed approved.
