@@ -67,6 +67,7 @@ struct Env {
     config: Arc<ProjectConfig>,
     events: EventSink,
     cancel: CancellationToken,
+    refresh: bool,
 }
 
 /// Exit code precedence: 1 (could not run) > 3 (interrupted) > 2 (issues) > 0.
@@ -117,7 +118,9 @@ async fn exec(env: &Env, cmd: StageCmd) -> Result<Summary> {
             );
         };
         let (p, c, e, k, s) = go(stage);
-        return run_stage(p, c, e, k, s, |ctx| async move {
+        let refresh = env.refresh;
+        return run_stage(p, c, e, k, s, |mut ctx| async move {
+            ctx.refresh = refresh;
             match cmd {
                 StageCmd::Normalise => src.normalise(&ctx),
                 _ => {
@@ -182,6 +185,7 @@ fn env(dir: &Path, printer: &Printer) -> Result<Env> {
         config,
         events: printer.sink(),
         cancel,
+        refresh: false,
     })
 }
 
@@ -248,15 +252,22 @@ where
     worst
 }
 
-async fn drive(dir: &Path, json: bool, cmds: &[StageCmd], keep_going: bool) -> Result<i32> {
+async fn drive(
+    dir: &Path,
+    json: bool,
+    cmds: &[StageCmd],
+    keep_going: bool,
+    refresh: bool,
+) -> Result<i32> {
     let printer = Printer::start(json);
-    let env = match env(dir, &printer) {
+    let mut env = match env(dir, &printer) {
         Ok(e) => e,
         Err(e) => {
             printer.finish().await;
             return Err(e);
         }
     };
+    env.refresh = refresh;
     let rows = RefCell::new(Vec::new());
     let worst = run_loop(&env.cancel, cmds, keep_going, |cmd| {
         code_of(&env, cmd, &rows)
@@ -271,8 +282,8 @@ async fn drive(dir: &Path, json: bool, cmds: &[StageCmd], keep_going: bool) -> R
     Ok(worst)
 }
 
-pub async fn run(dir: &Path, json: bool, cmd: StageCmd) -> Result<i32> {
-    drive(dir, json, &[cmd], false).await
+pub async fn run(dir: &Path, json: bool, cmd: StageCmd, refresh: bool) -> Result<i32> {
+    drive(dir, json, &[cmd], false, refresh).await
 }
 
 pub async fn run_all(dir: &Path, json: bool, keep_going: bool, apply: bool) -> Result<i32> {
@@ -284,7 +295,7 @@ pub async fn run_all(dir: &Path, json: bool, keep_going: bool, apply: bool) -> R
         StageCmd::Load(apply),
         StageCmd::Verify,
     ];
-    drive(dir, json, &steps, keep_going).await
+    drive(dir, json, &steps, keep_going, false).await
 }
 
 #[cfg(test)]

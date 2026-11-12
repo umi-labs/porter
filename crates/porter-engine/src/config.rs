@@ -35,8 +35,17 @@ pub struct SourceConfig {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ConnectorConfig {
     Crawl {
-        #[serde(flatten)]
-        extra: toml::Table,
+        url: String,
+        #[serde(default = "default_concurrency")]
+        concurrency: usize,
+        #[serde(default = "default_delay_ms")]
+        delay_ms: u64,
+        #[serde(default)]
+        include: Vec<String>,
+        #[serde(default)]
+        exclude: Vec<String>,
+        #[serde(default)]
+        max_pages: Option<usize>,
     },
     WpRest {
         #[serde(flatten)]
@@ -85,6 +94,14 @@ pub struct ManualRedirect {
     pub to: String,
     #[serde(default = "default_code")]
     pub code: u16,
+}
+
+fn default_concurrency() -> usize {
+    4
+}
+
+fn default_delay_ms() -> u64 {
+    250
 }
 
 fn default_code() -> u16 {

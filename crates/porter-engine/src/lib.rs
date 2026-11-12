@@ -2,6 +2,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 pub mod config;
+pub mod connectors;
 pub mod events;
 pub mod http;
 pub mod mapping;

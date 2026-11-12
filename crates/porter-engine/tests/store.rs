@@ -223,7 +223,7 @@ adapter = "example-src"
 
 [[connectors]]
 kind = "crawl"
-start = "https://example.com/"
+url = "https://example.com/"
 
 [destination]
 adapter = "example-dest"

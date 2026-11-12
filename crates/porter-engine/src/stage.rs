@@ -49,6 +49,8 @@ pub struct StageCtx {
     pub cancel: CancellationToken,
     pub run: RunId,
     pub stage: Stage,
+    /// `--refresh`: redo work whose output already exists.
+    pub refresh: bool,
 }
 
 impl StageCtx {
@@ -124,6 +126,7 @@ where
         cancel: cancel.clone(),
         run,
         stage,
+        refresh: false,
     };
     let outcome = f(ctx).await;
     let mut summary = project.store().run_tally(run, stage)?;

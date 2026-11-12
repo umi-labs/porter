@@ -141,12 +141,14 @@ async fn dispatch(cli: Cli) -> Result<i32> {
         Command::Clean => clean::run(&dir, json),
         Command::Report => report::run(&dir, json),
         Command::Export { file } => export::run(&dir, json, &file),
-        Command::Analyse { .. } => stage::run(&dir, json, StageCmd::Analyse).await,
-        Command::Extract { .. } => stage::run(&dir, json, StageCmd::Extract).await,
-        Command::Normalise { .. } => stage::run(&dir, json, StageCmd::Normalise).await,
-        Command::Schema { mode } => stage::run(&dir, json, StageCmd::Schema(mode)).await,
-        Command::Load { apply } => stage::run(&dir, json, StageCmd::Load(apply)).await,
-        Command::Verify => stage::run(&dir, json, StageCmd::Verify).await,
+        Command::Analyse { refresh } => stage::run(&dir, json, StageCmd::Analyse, refresh).await,
+        Command::Extract { refresh } => stage::run(&dir, json, StageCmd::Extract, refresh).await,
+        Command::Normalise { refresh } => {
+            stage::run(&dir, json, StageCmd::Normalise, refresh).await
+        }
+        Command::Schema { mode } => stage::run(&dir, json, StageCmd::Schema(mode), false).await,
+        Command::Load { apply } => stage::run(&dir, json, StageCmd::Load(apply), false).await,
+        Command::Verify => stage::run(&dir, json, StageCmd::Verify, false).await,
         Command::Run { keep_going, apply } => stage::run_all(&dir, json, keep_going, apply).await,
     }
 }
