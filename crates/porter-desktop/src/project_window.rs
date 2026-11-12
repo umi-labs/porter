@@ -1,19 +1,29 @@
 //! The project window: top bar, sidebar, and the selected section. All engine work goes
-//! through the `Bridge`; this view only drains its channel and redraws.
+//! through the `Bridge`; this view drains its channel, feeds the view models and redraws.
 
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-use gpui::{Context, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window, div};
+use gpui::{
+    AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Subscription, Task,
+    Window, div, hsla,
+};
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{ActiveTheme, Disableable, Root, h_flex, v_flex};
-use porter_engine::session::{Overview, RunOutcome, RunPlan, Session, StageOpts};
+use porter_engine::events::Event;
+use porter_engine::report::Coverage;
+use porter_engine::session::{RunPlan, Session, StageOpts};
 use porter_engine::stage::SchemaMode;
 use porter_model::Stage;
 
 use crate::bridge::{Bridge, DataResult, UiEvent, coalesce};
 use crate::sidebar::{self, Section, View};
+use crate::views;
+use crate::vm::apply::{ApplySheet, age};
+use crate::vm::pipeline::{KindCount, Pipeline, name};
+use crate::vm::runs::Runs;
 
 /// How often the window drains engine events: at most 20 redraws a second.
 const POLL: Duration = Duration::from_millis(50);
@@ -21,24 +31,38 @@ const POLL: Duration = Duration::from_millis(50);
 pub struct ProjectWindow {
     pub(crate) bridge: Bridge,
     pub(crate) section: Section,
-    pub(crate) overview: Option<Result<Overview, String>>,
-    pub(crate) running: bool,
-    pub(crate) log: Vec<String>,
+    pub(crate) pipeline: Pipeline,
+    pub(crate) runs: Runs,
+    pub(crate) coverage: Option<Result<Option<Coverage>, String>>,
+    pub(crate) kinds: Option<Result<Vec<KindCount>, String>>,
+    /// The apply confirmation sheet, while open.
+    apply: Option<ApplySheet>,
+    apply_input: Entity<InputState>,
+    _subs: Vec<Subscription>,
     _poll: Task<()>,
 }
 
 impl ProjectWindow {
-    pub fn new(session: Arc<Session>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(session: Arc<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (bridge, rx) = Bridge::new(session);
-        bridge.refresh();
-        ProjectWindow {
+        let apply_input = cx.new(|cx| InputState::new(window, cx));
+        // Redraw on typing so the Apply button follows the box. Enter does nothing:
+        // applying always takes a click.
+        let subs = vec![cx.subscribe(&apply_input, |_, _, _: &InputEvent, cx| cx.notify())];
+        let mut this = ProjectWindow {
             bridge,
             section: Section::default(),
-            overview: None,
-            running: false,
-            log: vec![],
-            _poll: poll(rx, cx),
-        }
+            pipeline: Pipeline::default(),
+            runs: Runs::default(),
+            coverage: None,
+            kinds: None,
+            apply: None,
+            apply_input,
+            _subs: subs,
+            _poll: poll(rx, window, cx),
+        };
+        this.refresh();
+        this
     }
 
     pub fn select(&mut self, s: Section, cx: &mut Context<Self>) {
@@ -46,39 +70,123 @@ impl ProjectWindow {
         cx.notify();
     }
 
-    fn handle(&mut self, e: UiEvent) {
-        match e {
-            UiEvent::Engine(porter_engine::events::Event::StageFinished { .. }) => {
-                self.bridge.refresh()
-            }
-            UiEvent::Engine(_) => {}
-            UiEvent::Lagged(n) => {
-                self.log.push(format!("dropped {n} events"));
-                self.bridge.refresh();
-            }
-            UiEvent::Data(DataResult::Overview(o)) => self.overview = Some(o),
-            UiEvent::RunDone(o) => self.run_done(o),
-        }
-    }
-
-    fn run_done(&mut self, o: RunOutcome) {
-        self.running = false;
-        self.log.extend(o.messages);
+    fn refresh(&mut self) {
+        self.pipeline.refresh_requested();
         self.bridge.refresh();
     }
 
-    pub(crate) fn start(&mut self, plan: RunPlan, cx: &mut Context<Self>) {
-        if self.running {
-            self.log.push("a stage is already running".into());
-        } else {
-            self.running = true;
-            self.bridge.run(plan);
+    fn handle(&mut self, e: UiEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match e {
+            UiEvent::Engine(e) => {
+                let finished = matches!(e, Event::StageFinished { .. });
+                self.pipeline.on_event(&e);
+                self.runs.on_event(&e);
+                if finished {
+                    self.refresh();
+                }
+            }
+            UiEvent::Lagged(n) => {
+                self.runs.push(format!("dropped {n} events"));
+                // A dropped event may have been a stage ending: re-read everything.
+                self.refresh();
+            }
+            UiEvent::RunDone(o) => {
+                for line in self.pipeline.on_run_done(o) {
+                    self.runs.push(line);
+                }
+                self.refresh();
+            }
+            UiEvent::Data(d) => self.on_data(d, window, cx),
         }
+    }
+
+    fn on_data(&mut self, d: DataResult, window: &mut Window, cx: &mut Context<Self>) {
+        match d {
+            DataResult::Overview(o) => {
+                if let Some(e) = self.pipeline.overview_landed(o) {
+                    self.runs.push(e);
+                }
+            }
+            DataResult::IssueKinds(k) => self.kinds = Some(k),
+            DataResult::Coverage(c) => self.coverage = Some(c),
+            DataResult::History(h) => self.runs.history = Some(h),
+            DataResult::Preview {
+                confirm: false,
+                url,
+                preview,
+            } => {
+                self.apply_input
+                    .update(cx, |s, cx| s.set_value("", window, cx));
+                self.apply = Some(ApplySheet::new(url, preview));
+            }
+            // The recheck after Apply was pressed: only acts while the sheet is open.
+            DataResult::Preview {
+                confirm: true,
+                preview,
+                ..
+            } => {
+                let Some(sheet) = &mut self.apply else {
+                    return;
+                };
+                match sheet.finish(preview) {
+                    Ok(plan) => {
+                        self.apply = None;
+                        self.start(plan, cx);
+                    }
+                    Err(why) => self.runs.push(format!("apply refused: {why}")),
+                }
+            }
+        }
+    }
+
+    pub(crate) fn start(&mut self, plan: RunPlan, cx: &mut Context<Self>) {
+        match self.pipeline.start(&plan) {
+            Ok(()) => {
+                self.runs.start_run(describe(&plan));
+                self.bridge.run(plan);
+            }
+            Err(e) => self.runs.push(e),
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn cancel(&mut self, cx: &mut Context<Self>) {
+        if self.pipeline.cancel() {
+            self.runs.push("cancelling…".into());
+            self.bridge.cancel();
+        }
+        cx.notify();
+    }
+
+    fn open_apply(&mut self, cx: &mut Context<Self>) {
+        if !self.pipeline.busy() {
+            self.bridge.preview(false);
+        }
+        cx.notify();
+    }
+
+    fn confirm_apply(&mut self, cx: &mut Context<Self>) {
+        let typed = self.apply_input.read(cx).value();
+        if self.pipeline.busy() {
+            return;
+        }
+        if let Some(sheet) = &mut self.apply
+            && sheet.begin_confirm(&typed).is_ok()
+        {
+            // Freshness is read again now; the sheet may have been open a while.
+            self.bridge.preview(true);
+        }
+        cx.notify();
+    }
+
+    fn close_apply(&mut self, cx: &mut Context<Self>) {
+        self.apply = None;
         cx.notify();
     }
 
     fn top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let busy = self.pipeline.busy();
         let session = self.bridge.session();
         let config = session.config();
         let name = if config.project.name.is_empty() {
@@ -110,7 +218,7 @@ impl ProjectWindow {
                     .child(
                         Button::new("run-all")
                             .label("Run all")
-                            .disabled(self.running)
+                            .disabled(busy)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.start(
                                     RunPlan::All {
@@ -124,19 +232,105 @@ impl ProjectWindow {
                     .child(
                         Button::new("dry-load")
                             .label("Load (dry run)")
-                            .disabled(self.running)
+                            .disabled(busy)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.start(RunPlan::Stage(Stage::Load, dry()), cx)
                             })),
                     )
                     .child(
-                        // The apply gate lands with the Overview (task 3); never the default.
                         Button::new("apply-load")
                             .danger()
                             .label("Apply load…")
-                            .disabled(true),
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.open_apply(cx))),
                     ),
             )
+    }
+
+    fn apply_sheet(&self, sheet: &ApplySheet, cx: &mut Context<Self>) -> impl IntoElement {
+        let typed = self.apply_input.read(cx).value();
+        let ok = sheet.check(&typed).is_ok() && !sheet.confirming() && !self.pipeline.busy();
+        let theme = cx.theme();
+        let url = if sheet.url.is_empty() {
+            "(no destination.url set)".to_string()
+        } else {
+            sheet.url.clone()
+        };
+        let mut lines = vec![];
+        match &sheet.preview {
+            None => lines.push("No dry run yet: run Load (dry run) first.".to_string()),
+            Some(p) => {
+                let when = format!("Dry run from {}", age(p.at, SystemTime::now()));
+                match &p.stale {
+                    Some(why) => lines.push(format!("{when}; {why}. Run Load (dry run) again.")),
+                    None => {
+                        let total: u64 = p.counts.values().sum();
+                        lines.push(format!("{when}. Items the load would send ({total}):"));
+                        lines.extend(p.counts.iter().map(|(k, n)| format!("  {k}: {n}")));
+                    }
+                }
+            }
+        }
+        let prompt = match sheet.host() {
+            Some(h) => format!("Type {h} to confirm"),
+            None => "destination.url has no host; apply is not possible".into(),
+        };
+        let card = v_flex()
+            .w_128()
+            .max_h_full()
+            .p_6()
+            .gap_3()
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_lg()
+            .child(div().text_lg().child("Apply load"))
+            .child(
+                div()
+                    .text_color(theme.danger)
+                    .child("This writes to a live CMS."),
+            )
+            .child(div().child(format!("Destination: {url}")))
+            .children(lines.into_iter().map(|l| div().text_sm().child(l)))
+            .child(div().text_sm().child(prompt))
+            .child(Input::new(&self.apply_input))
+            .children(
+                sheet
+                    .error
+                    .clone()
+                    .map(|e| div().text_sm().text_color(theme.danger).child(e)),
+            )
+            .child(
+                h_flex()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        Button::new("apply-cancel")
+                            .label("Cancel")
+                            .on_click(cx.listener(|this, _, _, cx| this.close_apply(cx))),
+                    )
+                    .child(
+                        Button::new("apply-confirm")
+                            .danger()
+                            .label(if sheet.confirming() {
+                                "Checking…"
+                            } else {
+                                "Apply"
+                            })
+                            .disabled(!ok)
+                            .on_click(cx.listener(|this, _, _, cx| this.confirm_apply(cx))),
+                    ),
+            );
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(hsla(0., 0., 0., 0.45))
+            .child(card)
     }
 }
 
@@ -149,19 +343,29 @@ pub(crate) fn dry() -> StageOpts {
     }
 }
 
+fn describe(plan: &RunPlan) -> String {
+    match plan {
+        RunPlan::Stage(Stage::Load, o) if o.apply => "load started (apply)".into(),
+        RunPlan::Stage(Stage::Load, _) => "load started (dry run)".into(),
+        RunPlan::Stage(s, _) => format!("{} requested", name(*s)),
+        RunPlan::All { apply: true, .. } => "run all requested (apply)".into(),
+        RunPlan::All { .. } => "run all requested (dry-run load)".into(),
+    }
+}
+
 /// Drains the bridge every `POLL`, coalescing progress, so a busy engine costs one redraw
 /// per tick. The task dies with the window (it is stored in the view).
-fn poll(rx: Receiver<UiEvent>, cx: &mut Context<ProjectWindow>) -> Task<()> {
-    cx.spawn(async move |this, cx| {
+fn poll(rx: Receiver<UiEvent>, window: &mut Window, cx: &mut Context<ProjectWindow>) -> Task<()> {
+    cx.spawn_in(window, async move |this, cx| {
         loop {
             cx.background_executor().timer(POLL).await;
             let batch: Vec<UiEvent> = rx.try_iter().collect();
             if batch.is_empty() {
                 continue;
             }
-            let applied = this.update(cx, |this, cx| {
+            let applied = this.update_in(cx, |this, window, cx| {
                 for e in coalesce(batch) {
-                    this.handle(e);
+                    this.handle(e, window, cx);
                 }
                 cx.notify();
             });
@@ -176,23 +380,16 @@ impl Render for ProjectWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let main: gpui::AnyElement = match self.section.view() {
             View::NotBuilt(name) => not_built(name, cx).into_any_element(),
-            View::Overview | View::Runs => {
-                let text: SharedString = match &self.overview {
-                    None => "Loading…".into(),
-                    Some(Err(e)) => format!("error: {e}").into(),
-                    Some(Ok(o)) => format!(
-                        "{} stages run · {} open errors · {} warnings",
-                        o.last_runs.len(),
-                        o.open_errors,
-                        o.open_warnings
-                    )
-                    .into(),
-                };
-                div().p_4().child(text).into_any_element()
-            }
+            View::Overview => views::overview::render(self, cx).into_any_element(),
+            View::Runs => views::runs::render(self, cx).into_any_element(),
         };
+        let sheet = self
+            .apply
+            .as_ref()
+            .map(|s| self.apply_sheet(s, cx).into_any_element());
         let theme = cx.theme();
         v_flex()
+            .relative()
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
@@ -204,6 +401,7 @@ impl Render for ProjectWindow {
                     .child(sidebar::render(self.section, cx))
                     .child(div().flex_1().h_full().min_w_0().child(main)),
             )
+            .children(sheet)
             .children(Root::render_dialog_layer(window, cx))
     }
 }

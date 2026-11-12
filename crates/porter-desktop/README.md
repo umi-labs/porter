@@ -48,3 +48,13 @@ To upgrade:
 - `cargo run -p porter-desktop` shows the launcher with recent projects.
 - *Open folder…* on a porter project opens a project window and adds it to the recent list.
 - *Open folder…* on a folder that is not a project shows the error verbatim in a dialog.
+- The project window shows the sidebar (eight sections; those not built yet say so), the top
+  bar (project name, source → destination, *Run all*, *Load (dry run)*, *Apply load…*) and the
+  Overview: six stage cards, coverage, open issues by kind.
+- *Run* on a stage flips its card to running, shows progress, and ends in the true state (a
+  run with error issues is red, never green). *Cancel* stops it; it ends interrupted.
+- *Runs* shows the live log (newest first, the last 2,000 lines) and the history per stage;
+  a dry-run load is labelled "(dry run)".
+- *Apply load…* without a dry run, or after editing `porter.toml` or re-running normalise,
+  refuses. After a fresh *Load (dry run)* it lists the counts, and *Apply* stays disabled until
+  the destination host is typed; Enter never applies.

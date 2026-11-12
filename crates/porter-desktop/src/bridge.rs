@@ -6,10 +6,16 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, OnceLock};
 
 use porter_engine::events::Event;
-use porter_engine::session::{Overview, RunOutcome, RunPlan, Session};
+use porter_engine::report::{Coverage, read_coverage};
+use porter_engine::session::{IssueQuery, Overview, Page, RunOutcome, RunPlan, STAGES, Session};
+use porter_model::Resolution;
 use tokio::runtime::Runtime;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio_util::sync::CancellationToken;
+
+use crate::vm::apply::{PreviewInfo, preview_info};
+use crate::vm::pipeline::{KindCount, issues_by_kind};
+use crate::vm::runs::History;
 
 pub enum UiEvent {
     Engine(Event),
@@ -22,6 +28,20 @@ pub enum UiEvent {
 /// Store and file queries, run off the UI thread. Errors are kept verbatim.
 pub enum DataResult {
     Overview(Result<Overview, String>),
+    /// Open issues per kind.
+    IssueKinds(Result<Vec<KindCount>, String>),
+    /// What analyse found per connector; None before analyse has run.
+    Coverage(Result<Option<Coverage>, String>),
+    /// Runs per stage, newest first.
+    History(Result<History, String>),
+    /// The last dry run, for the apply sheet: to open it, or (`confirm`) the recheck
+    /// when Apply was pressed.
+    Preview {
+        confirm: bool,
+        /// `destination.url` as porter.toml says now.
+        url: String,
+        preview: Option<PreviewInfo>,
+    },
 }
 
 /// The app's one tokio runtime (multi-thread), created on first use.
@@ -132,14 +152,83 @@ impl Bridge {
         }
     }
 
-    /// Re-reads what the window shows.
+    /// Re-reads what the window shows: overview, issues by kind, coverage, run history.
     pub fn refresh(&self) {
         let (session, tx) = (self.session.clone(), self.tx.clone());
         runtime().spawn(async move {
-            let o = session.overview().await.map_err(|e| format!("{e:#}"));
-            let _ = tx.send(UiEvent::Data(DataResult::Overview(o)));
+            let send = |d| {
+                let _ = tx.send(UiEvent::Data(d));
+            };
+            send(DataResult::Overview(
+                session.overview().await.map_err(|e| format!("{e:#}")),
+            ));
+            // ponytail: loads every open issue to group them, as overview() does to count
+            // them; a GROUP BY in the store when projects get huge.
+            let open = IssueQuery {
+                resolution: Some(Resolution::Open),
+                ..Default::default()
+            };
+            let all = Page {
+                offset: 0,
+                limit: u64::MAX,
+            };
+            send(DataResult::IssueKinds(
+                session
+                    .issues(open, all)
+                    .await
+                    .map(|p| issues_by_kind(&p.rows))
+                    .map_err(|e| format!("{e:#}")),
+            ));
+            let project = session.project().clone();
+            let (coverage, history) = blocking(move || {
+                let coverage = read_coverage(&project).map_err(|e| format!("{e:#}"));
+                let history = STAGES
+                    .iter()
+                    .map(|&s| {
+                        let mut runs = project.store().runs(s)?;
+                        runs.reverse();
+                        Ok((s, runs))
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()
+                    .map_err(|e| format!("{e:#}"));
+                (coverage, history)
+            })
+            .await
+            .unwrap_or_else(|e| (Err(e.clone()), Err(e)));
+            send(DataResult::Coverage(coverage));
+            send(DataResult::History(history));
         });
     }
+
+    /// Reads the last dry run and whether it is still fresh.
+    pub fn preview(&self, confirm: bool) {
+        let (session, tx) = (self.session.clone(), self.tx.clone());
+        runtime().spawn(async move {
+            // Re-read porter.toml so the sheet names the destination the load would use.
+            let (url, preview) = blocking(move || {
+                session.reload_config();
+                (
+                    session.config().destination.url.clone(),
+                    preview_info(&session),
+                )
+            })
+            .await
+            .unwrap_or_default();
+            let _ = tx.send(UiEvent::Data(DataResult::Preview {
+                confirm,
+                url,
+                preview,
+            }));
+        });
+    }
+}
+
+/// Runs blocking file/SQLite work on tokio's blocking pool; a panic there comes back as
+/// an error message.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// A closed window stops its run: the engine ends it at a safe point, resumable.

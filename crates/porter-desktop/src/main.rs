@@ -7,6 +7,8 @@ mod launcher;
 mod project_window;
 mod recent;
 mod sidebar;
+mod views;
+mod vm;
 
 fn main() {
     gpui::Application::new().run(|cx| {
