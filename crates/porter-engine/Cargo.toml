@@ -23,6 +23,7 @@ async-trait.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 reqwest.workspace = true
+maud.workspace = true
 
 [dev-dependencies]
 wiremock.workspace = true

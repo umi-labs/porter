@@ -148,3 +148,39 @@ impl Store {
         Ok(json!({"stages": stages, "open_issues": open, "last_runs": last}))
     }
 }
+
+/// One row of the run history.
+#[derive(Clone, Debug)]
+pub struct RunRow {
+    pub id: String,
+    pub porter_version: String,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub summary: Option<Summary>,
+}
+
+impl Store {
+    /// Runs of `stage`, oldest first (UUIDv7 order).
+    pub fn runs(&self, stage: Stage) -> Result<Vec<RunRow>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, porter_version, started_at, ended_at, summary FROM runs
+             WHERE stage = ?1 AND deleted_at IS NULL ORDER BY id",
+        )?;
+        let rows = stmt.query_map([wire(&stage)?], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, Option<String>>(4)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, porter_version, started_at, ended_at, summary) = row?;
+            out.push(RunRow {
+                id,
+                porter_version,
+                started_at,
+                ended_at,
+                summary: summary.map(|s| serde_json::from_str(&s)).transpose()?,
+            });
+        }
+        Ok(out)
+    }
+}

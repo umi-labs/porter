@@ -1,36 +1,18 @@
-use crate::output::{print_json, wire};
-use anyhow::{Context, Result};
-use porter_engine::store::IssueFilter;
-use std::fmt::Write;
+use crate::output::print_json;
+use anyhow::Result;
 use std::path::Path;
 
 pub fn run(dir: &Path, json: bool) -> Result<i32> {
     let project = super::open(dir)?;
-    let issues = project.store().issues(&IssueFilter::default())?;
-    let mut md = String::from("# Porter report\n\n## Issues\n\n");
-    for i in &issues {
-        let _ = writeln!(
-            md,
-            "- [{}] {} ({}, {}): {}",
-            wire(&i.severity),
-            wire(&i.kind),
-            wire(&i.stage),
-            wire(&i.resolution),
-            i.message
-        );
-    }
-    if issues.is_empty() {
-        md.push_str("None.\n");
-    }
-    std::fs::create_dir_all(project.reports_dir())?;
-    let path = project.reports_dir().join("report.md");
-    std::fs::write(&path, md).with_context(|| format!("writing {}", path.display()))?;
+    let paths = porter_engine::report::write_all(&project)?;
     if json {
-        print_json(
-            &serde_json::json!({"v": 1, "event": "report", "path": path, "issues": issues.len()}),
-        );
+        print_json(&serde_json::json!({"v": 1, "event": "report", "paths": paths}));
+    } else if paths.is_empty() {
+        eprintln!("no finished analyse, extract or verify run to report on");
     } else {
-        println!("wrote {}", path.display());
+        for p in &paths {
+            println!("wrote {}", p.display());
+        }
     }
     Ok(0)
 }

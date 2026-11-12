@@ -105,4 +105,34 @@ impl Store {
             .optional()?;
         Ok(s.map(|s| serde_json::from_str(&s)).transpose()?)
     }
+
+    /// Every status written for `stage`.
+    pub fn statuses(&self, stage: Stage) -> Result<Vec<(ItemId, ItemStatus)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT item_id, status FROM statuses WHERE stage = ?1 AND deleted_at IS NULL ORDER BY item_id",
+        )?;
+        let rows = stmt.query_map([wire(&stage)?], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, status) = row?;
+            out.push((id.parse()?, serde_json::from_str(&status)?));
+        }
+        Ok(out)
+    }
+
+    /// `(id, kind, connector)` of every live item, for reports.
+    pub fn item_rows(&self) -> Result<Vec<(ItemId, String, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, kind, connector FROM items WHERE deleted_at IS NULL ORDER BY rowid",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, kind, connector) = row?;
+            out.push((id.parse()?, kind, connector));
+        }
+        Ok(out)
+    }
 }

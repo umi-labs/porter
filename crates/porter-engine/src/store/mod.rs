@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 pub use issues::IssueFilter;
 pub use media::MediaHandle;
+pub use runs::RunRow;
 
 const SCHEMA: &str = include_str!("schema.sql");
 const SCHEMA_V2: &str = include_str!("schema_v2.sql");
