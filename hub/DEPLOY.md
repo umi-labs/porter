@@ -347,6 +347,10 @@ several replicas starting at once take turns. `worker` gets SIGTERM, interrupts 
 their results as versions (runs end `failed: interrupted`), with up to 60 s to finish (`stop_grace_period`).
 Re-run them after the upgrade.
 
+**Keep the worker's porter current.** A project opened by a newer porter can't be read by an older one (project
+schema v6 onwards). Keep the worker's porter at least as new as any client porter that pushes, and upgrade
+clients' porter before they pull a worker result.
+
 **Rollback:** redeploy the previous commit (Dokploy → Deployments, or reset the branch). Migrations only go
 forward. An older image runs against a newer schema as long as the migrations it skips only _added_ things, which
 is the rule for this repo. If a release notes a destructive migration, take a database backup first and restore it

@@ -9,8 +9,8 @@ Live canvas: https://claude.ai/artifact/MRP5fJu6xixb7wyUcJaoq4 (private; share f
 | Path | What |
 | --- | --- |
 | `tokens/tokens.json` | Source of truth: colours (light, dark), type, spacing, radii, row heights, stage states |
-| `tokens/theme.rs` | GPUI port of the tokens, ready to drop into `porter-desktop` |
-| `tokens/tailwind-theme.css` | Tailwind v4 `@theme` port for the hub |
+| `tokens/theme.rs` | GPUI port of the tokens; reference copy (live: `crates/porter-desktop/src/theme.rs`) |
+| `tokens/tailwind-theme.css` | Tailwind v4 `@theme` port; reference copy (live, with dark: `hub/apps/web/app/theme.css`) |
 | `canvas/` | Source of every mockup board (`.dc.html`) and the canvas layout (`canvas.json`). They render in the Claude Design canvas, not standalone. |
 
 ## The rules

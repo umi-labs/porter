@@ -81,9 +81,11 @@ To upgrade:
   run with error issues is red, never green). *Cancel* stops it; it ends interrupted.
 - *Runs* shows the live log (newest first, the last 2,000 lines) and the history per stage;
   a dry-run load is labelled "(dry run)".
-- *Apply load…* without a dry run, or after editing `porter.toml` or re-running normalise,
-  refuses. After a fresh *Load (dry run)* it lists the counts, and *Apply* stays disabled until
-  the destination host is typed; Enter never applies.
+- *Apply load…* checks three gates: a fresh dry run (no porter.toml section load reads changed,
+  and no earlier stage re-ran since), no open errors, and warnings acknowledged. A stale or
+  missing dry run offers *Run dry run now*. It lists what will be written and what will not, and
+  *Apply* stays disabled until the destination host is typed (paste disabled); Cancel has focus
+  and Enter never applies.
 - *Media* lists the files with thumbnails and which items use them; *URLs* lists the routes
   and filters them (unresolved, chains, not found); *Issues* lists open issues and bulk
   actions say what actually happened; *Destination* shows the mode and opens the output folder.

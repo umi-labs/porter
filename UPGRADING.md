@@ -52,6 +52,14 @@ The `_variants` locale handling is kept. WordPress is now reached through the `c
 4. `porter analyse`; it seeds `[mapping]` with defaults. Carry your old decisions across by hand.
 5. `porter run`: load is a dry run (would-be writes go to `raw/load-preview/`) and verify is skipped, since nothing reached the destination. It stops at the first stage with error issues or failed items; `--continue` runs on. Read `porter issues --open`, then `porter run --apply` to load and verify.
 
+## Upgrading within 2.x: project schema v6
+
+Porter now records which `porter.toml` settings each stage ran with, so it can tell when a result no longer holds. Projects are migrated to schema v6 the first time a newer porter opens them. After that:
+
+- Every stage reads stale ("ran before settings were recorded") until it runs again, everywhere: `porter status`, the TUI, the desktop app and the hub.
+- `porter load --apply` is refused on any project that has a dry run on record until you run `porter load` (a dry run) again.
+- An older porter can't open the project any more. Upgrade every porter that touches it, including teammates' and the hub worker's, before you `porter hub pull` a version a newer porter pushed or the worker produced.
+
 ## Not built yet
 
-2.0 ships the engine and CLI. The terminal UI, desktop app, hub, the Sanity, Webflow, Squarespace and Gatsby adapters, and the Elementor and WPBakery converters are not part of it. Targets other than Payload that 1.x listed (such as Strapi) are not supported.
+2.0 ships the engine, the CLI, the terminal UI, the desktop app and the hub. The Sanity, Webflow, Squarespace and Gatsby adapters, and the Elementor and WPBakery converters are not part of it. Targets other than Payload that 1.x listed (such as Strapi) are not supported.
