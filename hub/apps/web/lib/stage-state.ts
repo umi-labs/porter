@@ -1,9 +1,11 @@
-import type { State } from "../components/ui/chip";
+import { STATES, type State } from "../components/ui/chip";
 
-// A port of porter-engine's `stage_view` (crates/porter-engine/src/session.rs) for a pushed snapshot's runs table.
-// Only what the table can show: "running" never (a snapshot is a still), "failed" (exit 1) never (the engine
-// leaves no row for a stage that could not run), and stale only from upstream re-runs (porter.toml edits since
-// a run aren't in the snapshot).
+// A version pushed by a current porter carries porter's own stage views (`porter --json status`'s `stage_views`,
+// from the engine's `stage_view`), so the hub shows what the desktop and TUI show: `storedViews`. Older versions
+// fall back to `stageViews`, a port for what the snapshot's runs table can show: "running" never (a snapshot is a
+// still), "failed" (exit 1) never (the engine leaves no row for a stage that could not run), stale from upstream
+// re-runs, and stale for a run with no recorded settings fingerprint. A recorded fingerprint isn't re-checked
+// here (that needs porter's hashing), so such a run only goes stale from upstream.
 
 export const PIPELINE = ["analyse", "extract", "normalise", "schema", "load", "verify"] as const;
 export type Summary = {
@@ -24,6 +26,8 @@ export type RunRow = {
   summary: Summary | null;
   /** null: an older snapshot without the dry_run column, so a load can't be told apart from a dry run. */
   dryRun: boolean | null;
+  /** The run's settings fingerprint; null or undefined (no column): none recorded, so stale. */
+  configFp?: string | null;
 };
 export type StageView = {
   stage: (typeof PIPELINE)[number];
@@ -62,8 +66,31 @@ export function stageViews(last: RunRow[]): StageView[] {
         break;
       }
     }
+    // Same as the engine: a run from before porter recorded settings can't be shown to still hold.
+    if (!stale && !run.configFp) stale = "ran before settings were recorded";
     return { stage, state: runState(run), stale, run };
   });
+}
+
+/**
+ * porter's own views stored with the version (`summary.stage_views`), each with its run row for the counts.
+ * null when the version doesn't carry them (pushed by an older porter): use `stageViews`.
+ */
+export function storedViews(summary: unknown, last: RunRow[]): StageView[] | null {
+  const sv = (summary as { stage_views?: unknown } | null)?.stage_views;
+  if (!sv || typeof sv !== "object") return null;
+  const out: StageView[] = [];
+  for (const stage of PIPELINE) {
+    const v = (sv as Record<string, { state?: unknown; stale?: unknown } | undefined>)[stage];
+    if (!v || !STATES.includes(v.state as State)) return null;
+    out.push({
+      stage,
+      state: v.state as State,
+      stale: typeof v.stale === "string" ? v.stale : null,
+      run: last.find((r) => r.stage === stage) ?? null,
+    });
+  }
+  return out;
 }
 
 export function parseSummary(json: unknown): Summary | null {

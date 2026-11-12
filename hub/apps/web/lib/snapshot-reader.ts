@@ -8,7 +8,7 @@ import { projectVersion } from "@porter-hub/db";
 import { extractTarZst } from "@porter-hub/storage/tar";
 import { desc, eq } from "drizzle-orm";
 import type { Db } from "./permissions";
-import { parseSummary, stageViews } from "./stage-state";
+import { parseSummary, type RunRow, runState, stageViews, storedViews } from "./stage-state";
 import { getStream } from "./storage";
 
 // node:sqlite (built in, no native build) and zlib's zstd both need Node >= 22.15; the Dockerfile must use at least that.
@@ -38,6 +38,8 @@ export async function latestSnapshot(db: Db, projectId: string) {
       createdAt: v.createdAt,
       message: v.message,
       porterVersion: v.porterVersion,
+      /** `porter --json status` as stored with the version; its `stage_views` are porter's own. */
+      summary: v.summary as unknown,
     },
   };
 }
@@ -108,12 +110,24 @@ export const pageNum = (s: unknown) => {
   return Number.isInteger(n) && n >= 1 && n <= 1e6 ? n : 1;
 };
 
-export function overview(dir: string) {
+const runRow = (r: Row): RunRow => ({
+  id: String(r.id),
+  stage: String(r.stage),
+  startedAt: String(r.started_at),
+  endedAt: r.ended_at == null ? null : String(r.ended_at),
+  summary: parseSummary(r.summary),
+  dryRun: "dry_run" in r ? r.dry_run === 1 : null,
+  configFp: r.config_fp == null ? null : String(r.config_fp),
+});
+
+/** `summary`: the version's stored `porter --json status`, whose stage views win over the hub's own derivation. */
+export function overview(dir: string, summary?: unknown) {
   const last = withDb(dir, (q) => {
     const m = new Map<string, Row>();
     for (const r of q("SELECT * FROM runs WHERE deleted_at IS NULL ORDER BY id")) m.set(String(r.stage), r);
     return [...m.values()];
   });
+  const rows = last?.map(runRow) ?? null;
   return {
     stages:
       last?.map((r) => ({
@@ -122,19 +136,22 @@ export function overview(dir: string) {
         endedAt: r.ended_at == null ? null : String(r.ended_at),
         dryRun: r.dry_run === 1,
       })) ?? null,
-    /** Each pipeline stage's state, derived like porter does (lib/stage-state.ts). */
-    views:
-      last &&
-      stageViews(
-        last.map((r) => ({
-          id: String(r.id),
-          stage: String(r.stage),
-          startedAt: String(r.started_at),
-          endedAt: r.ended_at == null ? null : String(r.ended_at),
-          summary: parseSummary(r.summary),
-          dryRun: "dry_run" in r ? r.dry_run === 1 : null,
-        })),
-      ),
+    /** Each pipeline stage's state: porter's own when stored, else derived like porter does (lib/stage-state.ts). */
+    views: rows && (storedViews(summary, rows) ?? stageViews(rows)),
+    /**
+     * What has reached the site, whatever the last load was. `everWritten`: a load that was not a dry run finished
+     * (the engine's `ever_written`). `lastReal`: the state of the latest load that was not a dry run, or null.
+     * null for an older snapshot that doesn't record dry runs.
+     */
+    writes: withDb(dir, (q) => {
+      const ever = q(
+        `SELECT 1 FROM runs WHERE stage = 'load' AND dry_run = 0 AND summary IS NOT NULL AND deleted_at IS NULL LIMIT 1`,
+      );
+      const [real] = q(
+        `SELECT * FROM runs WHERE stage = 'load' AND dry_run = 0 AND deleted_at IS NULL ORDER BY id DESC LIMIT 1`,
+      );
+      return { everWritten: ever.length > 0, lastReal: real ? runState(runRow(real)) : null };
+    }),
     issueCounts: withDb(dir, (q) =>
       q(
         `SELECT kind, severity, count(*) AS n FROM issues

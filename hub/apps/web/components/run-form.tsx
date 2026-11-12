@@ -4,7 +4,10 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { buttonClass } from "./ui/button";
 
-/** Queues a remote run. Apply is never the default and needs the destination host typed out. */
+/**
+ * Queues a remote run. Apply is never the default and needs the destination host typed out. Apply runs load on
+ * its own (the hub refuses "all" with apply), so ticking it switches the form to load only.
+ */
 export function RunForm({ slug, host }: { slug: string; host: string | null }) {
   const router = useRouter();
   const [all, setAll] = useState(true);
@@ -14,6 +17,15 @@ export function RunForm({ slug, host }: { slug: string; host: string | null }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const loads = all || stages.includes("load");
+  const hostOk = !!host && confirm.trim().toLowerCase() === host.toLowerCase();
+
+  function toggleApply(on: boolean) {
+    setApply(on);
+    if (on) {
+      setAll(false);
+      setStages(["load"]);
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -39,8 +51,15 @@ export function RunForm({ slug, host }: { slug: string; host: string | null }) {
       <fieldset className="m-0 flex flex-col gap-3 border-0 p-0">
         <legend className="mb-2 p-0 text-[14px] font-semibold">Run on the hub (latest version)</legend>
         <label className="flex min-h-11 items-center gap-2">
-          <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> All stages (
-          <code>porter run</code>)
+          <input
+            type="checkbox"
+            checked={all}
+            onChange={(e) => {
+              setAll(e.target.checked);
+              if (e.target.checked) setApply(false);
+            }}
+          />{" "}
+          All stages (<code>porter run</code>)
         </label>
         {!all && (
           <div className="flex flex-wrap gap-x-4">
@@ -61,7 +80,7 @@ export function RunForm({ slug, host }: { slug: string; host: string | null }) {
         {loads && (
           <div className="flex flex-col gap-2 rounded-md border border-dashed border-border-strong p-3">
             <label className="flex min-h-11 items-center gap-2">
-              <input type="checkbox" checked={apply} onChange={(e) => setApply(e.target.checked)} />
+              <input type="checkbox" checked={apply} onChange={(e) => toggleApply(e.target.checked)} />
               <svg
                 width="14"
                 height="14"
@@ -77,6 +96,11 @@ export function RunForm({ slug, host }: { slug: string; host: string | null }) {
               </svg>{" "}
               Apply: write to the destination. Otherwise load is a dry run.
             </label>
+            {apply && (
+              <small className="text-small text-muted">
+                Apply runs load on its own, after a dry run. Open errors in this version block it.
+              </small>
+            )}
             {apply &&
               (host ? (
                 <label className="flex flex-col gap-1.5 text-[14px]">
@@ -103,7 +127,7 @@ export function RunForm({ slug, host }: { slug: string; host: string | null }) {
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="submit"
-            disabled={busy || (!all && !stages.length)}
+            disabled={busy || (!all && !stages.length) || (loads && apply && !hostOk)}
             className={buttonClass(loads && apply ? "danger" : "primary")}
           >
             {busy

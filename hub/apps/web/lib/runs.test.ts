@@ -44,6 +44,7 @@ const req = (as: string | null, body?: unknown, method = body === undefined ? "G
 const slug = { slug: "acme" };
 // biome-ignore lint/suspicious/noExplicitAny: test JSON
 const json = async (r: Response) => (await r.json()) as Record<string, any>;
+let openErrors: number | null = 0;
 const clearRuns = () => conn.db.delete(run).where(eq(run.projectId, pid));
 const notify = (id: string) => conn.db.execute(sql`select pg_notify(${`run_${id}`}, 'x')`);
 
@@ -83,6 +84,7 @@ beforeAll(async () => {
     {
       listener: () => listener,
       readToml: async () => TOML,
+      openErrors: async () => openErrors,
     },
   );
 });
@@ -219,32 +221,67 @@ describe("run requests", () => {
     expect(ok.status).toBe(201);
     expect((await json(ok)).apply).toBe(true);
     await clearRuns();
-    expect((await go({ stages: "all", apply: true, confirm_host: "CMS.EXAMPLE.COM:8443" })).status).toBe(201);
-    await clearRuns();
     const noDest = makeApi(conn.db, async (r) => ({ id: r.headers.get("x-user") as string }), {
       readToml: async () => `[project]\nname = "x"\n`,
     });
     expect(
-      (await noDest.createRun(req("dev", { stages: "all", apply: true, confirm_host: "x" }), slug)).status,
+      (await noDest.createRun(req("dev", { stages: ["load"], apply: true, confirm_host: "x" }), slug)).status,
     ).toBe(409);
     // Without apply, load is a dry run and needs no host.
     expect((await go({ stages: ["load"] })).status).toBe(201);
   });
 
-  test("apply with a stage before load is refused up front; load (+ verify) alone or all is accepted", async () => {
+  test("apply with all stages is refused: porter run --apply skips the dry-run check", async () => {
+    const r = await api.createRun(
+      req("dev", { stages: "all", apply: true, confirm_host: "CMS.EXAMPLE.COM:8443" }),
+      slug,
+    );
+    expect(r.status).toBe(400);
+    expect((await json(r)).error).toBe("Apply load on its own after a dry run");
+    expect(await conn.db.select().from(run).where(eq(run.projectId, pid))).toHaveLength(0);
+    // All stages without apply is still fine (load runs as a dry run).
+    expect((await api.createRun(req("dev", { stages: "all" }), slug)).status).toBe(201);
+  });
+
+  test("apply is refused while the version has open errors, giving the count", async () => {
+    const go = () =>
+      api.createRun(
+        req("dev", { stages: ["load"], apply: true, confirm_host: "cms.example.com:8443" }),
+        slug,
+      );
+    try {
+      for (const [n, msg] of [
+        [1, "v1 has 1 open error; fix them and push before applying"],
+        [3, "v1 has 3 open errors; fix them and push before applying"],
+      ] as const) {
+        openErrors = n;
+        const r = await go();
+        expect(r.status).toBe(400);
+        expect((await json(r)).error).toBe(msg);
+      }
+      expect(await conn.db.select().from(run).where(eq(run.projectId, pid))).toHaveLength(0);
+      // A dry run is not gated: it is how the errors get found.
+      expect((await api.createRun(req("dev", { stages: ["load"] }), slug)).status).toBe(201);
+      await clearRuns();
+      openErrors = null; // an older snapshot without an issues table
+      expect((await go()).status).toBe(201);
+    } finally {
+      openErrors = 0;
+    }
+  });
+
+  test("apply with a stage before load is refused up front; load (+ verify) alone is accepted", async () => {
     const go = (stages: string[] | "all") =>
       api.createRun(req("dev", { stages, apply: true, confirm_host: "cms.example.com:8443" }), slug);
     for (const up of ["analyse", "extract", "normalise", "schema-check"]) {
       const r = await go([up, "load"]);
       expect(r.status).toBe(400);
       expect((await json(r)).error).toBe(
-        "apply with upstream stages would be refused at load (they re-run after the dry run); run them as a dry run first, then apply load alone, or use all",
+        "apply with upstream stages would be refused at load (they re-run after the dry run); run them as a dry run first, then apply load alone",
       );
     }
     expect(await conn.db.select().from(run).where(eq(run.projectId, pid))).toHaveLength(0);
     expect((await go(["load", "verify"])).status).toBe(201);
-    await clearRuns();
-    expect((await go("all")).status).toBe(201);
     await clearRuns();
   });
 

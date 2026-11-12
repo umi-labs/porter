@@ -216,6 +216,17 @@ describe("worker", () => {
     expect(existsSync(join(dir, "raw"))).toBe(true);
     expect(existsSync(join(dir, "media"))).toBe(false);
     expect((v.summary as { event?: string }).event).toBe("status");
+    // porter's own stage views, which the hub shows instead of deriving them.
+    const views = (v.summary as { stage_views?: Record<string, { state: string; stale: string | null }> })
+      .stage_views;
+    expect(Object.keys(views ?? {}).sort()).toEqual([
+      "analyse",
+      "extract",
+      "load",
+      "normalise",
+      "schema",
+      "verify",
+    ]);
     const media = await conn.db.select().from(versionMedia).where(eq(versionMedia.versionId, v.id));
     expect(media.map((x) => x.sha256)).toEqual([MEDIA_SHA]);
     // The scratch dir is gone.

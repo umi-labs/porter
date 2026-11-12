@@ -150,9 +150,15 @@ function stageText(v: StageView, plain: boolean): { label?: string; sub: string 
       };
     case "errors": {
       const n = (s?.errors ?? 0) + (s?.failed ?? 0);
+      // A dry run's counts are what it would write: never "done".
+      const did = v.run?.dryRun
+        ? plain
+          ? "Rehearsed, nothing moved yet"
+          : `Would write ${done} · nothing written`
+        : `${done} done`;
       return {
         label: plain ? `${fmtNum(n)} to fix` : `${fmtNum(n)} error${n === 1 ? "" : "s"}`,
-        sub: plain ? `${done} done` : `${done} done${s?.failed ? ` · ${fmtNum(s.failed)} failed` : ""}`,
+        sub: plain ? did : `${did}${s?.failed ? ` · ${fmtNum(s.failed)} failed` : ""}`,
       };
     }
     case "warnings":
@@ -164,22 +170,39 @@ function stageText(v: StageView, plain: boolean): { label?: string; sub: string 
   }
 }
 
-function statusBanner(views: StageView[], errors: number, n: number, plain: boolean) {
+type Writes = { everWritten: boolean; lastReal: State | null } | null;
+
+/**
+ * The site-level claim. It comes from every load on record, not the last row: a dry run after an apply doesn't
+ * unwrite the site, and an apply that stopped or failed part-way has not "moved" anything cleanly.
+ */
+function statusBanner(views: StageView[], writes: Writes, errors: number, n: number, plain: boolean) {
   const load = views.find((v) => v.stage === "load");
   const verify = views.find((v) => v.stage === "verify");
-  const written = load?.run?.dryRun === false;
   const dry = load?.run?.dryRun === true;
-  const verified = verify?.state === "clean" && !verify.stale;
+  const real = writes?.lastReal ?? null; // the latest load that was not a dry run
+  const unfinished = real === "interrupted" || real === "errors";
+  const written = !!writes?.everWritten && (real === "clean" || real === "warnings");
+  // Verify ran after the last real load (a real load since would make it stale) and finished without errors.
+  const checked = (verify?.state === "clean" || verify?.state === "warnings") && !verify.stale;
   const things = `${fmtNum(errors)} ${plain ? "thing" : "open error"}${errors === 1 ? "" : "s"}`;
   let tone: Tone;
   let title: string;
   let body: string;
   if (plain) {
-    if (!written) {
+    if (unfinished) {
+      tone = "err";
+      title = "Moving your content to the new site didn’t finish.";
+      body = `Some of it may already be there. Your Umi team is on it.${errors ? ` ${things} need fixing.` : ""}`;
+    } else if (written && dry) {
+      tone = errors ? "err" : "info";
+      title = "Your content is on the new site. We’re rehearsing the next update.";
+      body = errors ? `${things} need fixing before we move it for real.` : "";
+    } else if (!written) {
       tone = errors ? "err" : "info";
       title = "In progress. Nothing has moved to your new site yet.";
       body = `${dry ? "We’ve copied and converted your content and rehearsed the move." : "We’re copying and converting your content."}${errors ? ` ${things} need fixing before we move it for real.` : ""}`;
-    } else if (verified && !errors) {
+    } else if (checked && !errors) {
       tone = "ok";
       title = "Your content is on the new site and has been checked.";
       body = "";
@@ -188,6 +211,14 @@ function statusBanner(views: StageView[], errors: number, n: number, plain: bool
       title = "Your content has moved to the new site.";
       body = errors ? `${things} still need fixing.` : "We’re checking it now.";
     }
+  } else if (unfinished) {
+    tone = "err";
+    title = "An apply did not finish.";
+    body = `The last load that wrote to the site ${real === "interrupted" ? "stopped part-way" : "ended with errors"}, so the new site may be partly written.${dry ? " A dry run has run since." : ""}${errors ? ` ${things} in v${n}.` : ""}`;
+  } else if (written && dry) {
+    tone = errors ? "err" : "dry";
+    title = "Last load was a dry run; an earlier load wrote to the site.";
+    body = errors ? `${things} in v${n}.` : `No open errors in v${n}.`;
   } else if (errors) {
     tone = "err";
     title = written
@@ -198,9 +229,9 @@ function statusBanner(views: StageView[], errors: number, n: number, plain: bool
     tone = dry ? "dry" : "info";
     title = "Nothing has been written to the new site.";
     body = dry ? `Load ran as a dry run with no open errors in v${n}.` : `Load hasn’t run in v${n}.`;
-  } else if (verified) {
-    tone = "ok";
-    title = "Loaded and verified.";
+  } else if (checked) {
+    tone = verify?.state === "clean" ? "ok" : "warn";
+    title = verify?.state === "clean" ? "Loaded and verified." : "Loaded and verified, with warnings.";
     body = `No open errors in v${n}.`;
   } else {
     tone = "info";
@@ -235,7 +266,7 @@ export function Overview({
   issuesHref?: string;
 }) {
   const plain = audience === "client";
-  const o = overview(snap.dir);
+  const o = overview(snap.dir, snap.version.summary);
   const reports = listReports(snap.dir);
   const n = snap.version.number;
   const sev = (s: string) =>
@@ -263,7 +294,7 @@ export function Overview({
         </span>
       </div>
 
-      {o.views && statusBanner(o.views, sev("error"), n, plain)}
+      {o.views && statusBanner(o.views, o.writes, sev("error"), n, plain)}
 
       <Card title="Pipeline" aside="Six stages, left to right. Only a green stage has written its result.">
         {o.views === null ? (
@@ -281,7 +312,7 @@ export function Overview({
                   <span className="text-small text-muted">
                     {i + 1} · <b className="font-semibold text-ink">{NAMES[v.stage]}</b>
                   </span>
-                  <Stale reason={plain ? null : v.stale}>
+                  <Stale reason={v.stale} plain={plain}>
                     {v.state && <Chip state={v.state as State} label={t.label} />}
                     <span className="text-small text-muted">{t.sub}</span>
                   </Stale>

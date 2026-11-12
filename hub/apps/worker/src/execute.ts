@@ -522,6 +522,9 @@ async function commitResult(
     (x) => x.stdout.trim().replace(/^porter\s+/, ""),
     () => "unknown",
   );
+  // The stored stage views (`stage_views`) are judged against the porter.toml the snapshot carries, so they match
+  // what porter shows after a pull (a stage run without wp-db reads stale there too).
+  await writeFile(join(dir, "porter.toml"), originalToml, { mode: 0o600 });
   const summary = await execFileP(bin, ["--json", "--project", dir, "status"], quiet).then(
     (x) => {
       try {

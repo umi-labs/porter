@@ -97,13 +97,23 @@ export function Chip({ state, label, title }: { state: State; label?: ReactNode;
  * Stale is a modifier on the previous result, not a replacement: the result stays (dimmed to 62%) and the reason
  * is shown beside it, undimmed.
  */
-export function Stale({ reason, children }: { reason: string | null; children: ReactNode }) {
+export function Stale({
+  reason,
+  plain,
+  children,
+}: {
+  reason: string | null;
+  /** Client copy: the dim stays, the reason is just "Being redone". */
+  plain?: boolean;
+  children: ReactNode;
+}) {
   if (!reason) return <>{children}</>;
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <div className="flex min-w-0 flex-col gap-1.5 opacity-[.62]">{children}</div>
       <span className="text-small text-muted">
-        <span aria-hidden="true">↻ </span>Stale: {reason}
+        <span aria-hidden="true">↻ </span>
+        {plain ? "Being redone" : `Stale: ${reason}`}
       </span>
     </div>
   );

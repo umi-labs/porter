@@ -8,7 +8,7 @@ import { z } from "zod";
 import type { Listener } from "./listen";
 import type { Db } from "./permissions";
 import { type Actor, access, audit, HttpError, parse } from "./projects";
-import { versionDir } from "./snapshot-reader";
+import { versionDir, withDb } from "./snapshot-reader";
 
 const ACTIVE = ["queued", "running"] as const;
 const TERMINAL = new Set(["finished", "failed", "cancelled"]);
@@ -28,6 +28,16 @@ const schemas = {
 /** The version's porter.toml (from the cached extracted snapshot). */
 export type ReadToml = (v: typeof projectVersion.$inferSelect) => Promise<string>;
 const readToml: ReadToml = async (v) => readFile(join(await versionDir(v), "porter.toml"), "utf8");
+/** Open error-severity issues in the version's project.db; null when the snapshot has no issues table. */
+export type OpenErrors = (v: typeof projectVersion.$inferSelect) => Promise<number | null>;
+const openErrors: OpenErrors = async (v) =>
+  withDb(await versionDir(v), (q) =>
+    Number(
+      q(
+        "SELECT count(*) AS n FROM issues WHERE resolution = 'open' AND severity = 'error' AND deleted_at IS NULL",
+      )[0].n,
+    ),
+  );
 
 const base = alias(projectVersion, "base");
 const result = alias(projectVersion, "result");
@@ -71,17 +81,27 @@ const isActiveConflict = (e: unknown) => {
 const UPSTREAM_OF_LOAD: readonly string[] = ["analyse", "extract", "normalise", "schema-check"];
 
 /** Queues a run on the latest version. Apply needs `confirm_host` equal to that version's destination host. */
-export async function createRun(db: Db, actor: Actor, slug: string, input: unknown, toml = readToml) {
+export async function createRun(
+  db: Db,
+  actor: Actor,
+  slug: string,
+  input: unknown,
+  toml = readToml,
+  errors = openErrors,
+) {
   const { project: p } = await access(db, actor, slug, "run");
   const body = parse(schemas.create, input);
-  if (body.apply && body.stages !== "all" && !body.stages.includes("load"))
-    throw new HttpError(400, "apply: only meaningful with the load stage (or all)");
-  // The engine refuses a load --apply whose dry run predates an upstream re-run, so this always fails late.
-  if (body.apply && body.stages !== "all" && body.stages.some((s) => UPSTREAM_OF_LOAD.includes(s)))
-    throw new HttpError(
-      400,
-      "apply with upstream stages would be refused at load (they re-run after the dry run); run them as a dry run first, then apply load alone, or use all",
-    );
+  if (body.apply) {
+    // `porter run --apply` skips the engine's dry-run check; every remote write goes through `porter load --apply`.
+    if (body.stages === "all") throw new HttpError(400, "Apply load on its own after a dry run");
+    if (!body.stages.includes("load")) throw new HttpError(400, "apply: only meaningful with the load stage");
+    // The engine refuses a load --apply whose dry run predates an upstream re-run, so this always fails late.
+    if (body.stages.some((s) => UPSTREAM_OF_LOAD.includes(s)))
+      throw new HttpError(
+        400,
+        "apply with upstream stages would be refused at load (they re-run after the dry run); run them as a dry run first, then apply load alone",
+      );
+  }
   const [v] = await db
     .select()
     .from(projectVersion)
@@ -94,6 +114,14 @@ export async function createRun(db: Db, actor: Actor, slug: string, input: unkno
     if (!host) throw new HttpError(409, "porter.toml has no [destination] url to apply to");
     if ((body.confirm_host ?? "").toLowerCase() !== host.toLowerCase())
       throw new HttpError(400, "confirm_host: does not match the destination host in porter.toml");
+    // Open errors block Apply (docs/design/README.md), here as on the desktop. ponytail: no table (an older
+    // snapshot) reads as none; the engine's own dry-run check still applies.
+    const n = (await errors(v)) ?? 0;
+    if (n > 0)
+      throw new HttpError(
+        400,
+        `v${v.number} has ${n} open error${n === 1 ? "" : "s"}; fix them and push before applying`,
+      );
   }
   const [busy] = await db
     .select({ id: run.id })
