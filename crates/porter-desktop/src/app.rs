@@ -15,7 +15,7 @@ use crate::launcher::Launcher;
 use crate::project_window::ProjectWindow;
 
 pub fn open_launcher(cx: &mut App) {
-    open_window(cx, "Porter", 520., 560., |_, cx| {
+    open_window(cx, "Porter", 880., 560., |_, cx| {
         cx.new(|_| Launcher::new()).into()
     });
 }
@@ -70,7 +70,7 @@ pub fn activate_project_window(path: &Path, cx: &mut App) -> bool {
 
 pub fn open_project_window(session: Arc<Session>, cx: &mut App) {
     let dir = session.project().dir().to_path_buf();
-    let title = dir.display().to_string();
+    let title = crate::ui::path_label::middle_truncate(&dir.display().to_string(), 80);
     let handle = open_window(cx, &title, 1200., 800., move |window, cx| {
         let session = session.clone();
         cx.new(|cx| ProjectWindow::new(session, window, cx)).into()
@@ -101,6 +101,10 @@ fn open_window(
         ..Default::default()
     };
     match cx.open_window(options, |window, cx| {
+        // Follow the system light/dark setting while the window is open.
+        window
+            .observe_window_appearance(|window, cx| crate::theme::sync(Some(window), cx))
+            .detach();
         let view = view(window, cx);
         cx.new(|cx| Root::new(view, window, cx))
     }) {

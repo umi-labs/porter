@@ -3,24 +3,39 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use gpui::prelude::*;
 use gpui::{
-    AppContext, Context, InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render,
-    SharedString, StatefulInteractiveElement, Styled, Window, div,
+    Context, FontWeight, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
+    Styled, Window, div, px,
 };
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{ActiveTheme, Root, WindowExt, h_flex, v_flex};
+use gpui_component::{Root, WindowExt, h_flex, v_flex};
 use porter_engine::session::Session;
 
 use crate::recent::{self, RecentProject};
+use crate::theme::{self, radius, text};
+use crate::ui::buttons::{Kind, button};
+use crate::ui::chip::{Chip, ChipState};
+use crate::ui::path_label::PathLabel;
 
 pub struct Launcher {
-    recent: Vec<RecentProject>,
+    /// Each recent project and whether its folder is gone.
+    recent: Vec<(RecentProject, bool)>,
+}
+
+fn load_recent() -> Vec<(RecentProject, bool)> {
+    recent::load()
+        .into_iter()
+        .map(|r| {
+            let missing = !r.path.exists();
+            (r, missing)
+        })
+        .collect()
 }
 
 impl Launcher {
     pub fn new() -> Self {
         Self {
-            recent: recent::load(),
+            recent: load_recent(),
         }
     }
 
@@ -60,7 +75,7 @@ impl Launcher {
             let _ = this.update_in(cx, |this, window, cx| match result {
                 Ok(session) => {
                     recent::push(&path);
-                    this.recent = recent::load();
+                    this.recent = load_recent();
                     cx.notify();
                     // A second click can finish opening while the first window is up.
                     if !crate::app::activate_project_window(&path, cx) {
@@ -84,66 +99,170 @@ impl Launcher {
 
 impl Render for Launcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let rows = self.recent.iter().enumerate().map(|(i, r)| {
+        let t = theme::tokens(cx);
+        let count = self.recent.len();
+        let rows = self.recent.iter().enumerate().map(|(i, (r, missing))| {
             let path = r.path.clone();
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| path.display().to_string());
+            let initial = name
+                .chars()
+                .next()
+                .unwrap_or('?')
+                .to_uppercase()
+                .to_string();
             // A plain row, not a Button: a Button has a fixed height that clips two lines.
-            v_flex()
+            h_flex()
                 .id(("recent", i))
                 .w_full()
                 .min_w_0()
                 .overflow_hidden()
+                .items_center()
+                .gap_3()
                 .px_3()
                 .py_2()
-                .gap_1()
-                .rounded_md()
+                .when(i + 1 < count, |d| d.border_b_1().border_color(t.border))
                 .cursor_pointer()
-                .hover(|s| s.bg(theme.secondary_hover))
-                .child(div().w_full().truncate().child(name))
+                .hover(|s| s.bg(t.hover))
                 .child(
                     div()
-                        .w_full()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .truncate()
-                        .child(path.display().to_string()),
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .size(px(28.))
+                        .rounded(radius::SM)
+                        .bg(t.panel)
+                        .text_size(text::DENSE)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(t.muted)
+                        .child(initial),
                 )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .w_full()
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(name),
+                        )
+                        .child(
+                            PathLabel::new(("recent-path", i), path.display().to_string())
+                                .missing(*missing),
+                        ),
+                )
+                .when(*missing, |d| {
+                    d.child(Chip::new(ChipState::Failed).label("Folder not found"))
+                })
                 .on_click(
                     cx.listener(move |this, _, window, cx| this.open(path.clone(), window, cx)),
                 )
         });
 
-        v_flex()
-            .size_full()
+        let sidebar = v_flex()
+            .flex_none()
+            .w(px(260.))
+            .h_full()
             .p_6()
-            .gap_4()
-            .bg(theme.background)
-            .text_color(theme.foreground)
+            .gap_5()
+            .bg(t.surface)
+            .border_r_1()
+            .border_color(t.border)
             .child(
                 h_flex()
-                    .justify_between()
-                    .child(div().text_xl().child("Porter"))
+                    .items_center()
+                    .gap(px(10.))
                     .child(
-                        Button::new("open-folder")
-                            .primary()
-                            .label("Open folder…")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.pick_folder(window, cx)),
+                        div()
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(36.))
+                            .rounded(px(9.))
+                            .bg(t.text)
+                            .text_color(t.bg)
+                            .text_size(text::HEADING)
+                            .font_weight(FontWeight::BOLD)
+                            .child("P"),
+                    )
+                    .child(
+                        v_flex()
+                            .child(
+                                div()
+                                    .text_size(text::HEADING)
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Porter"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(text::MICRO)
+                                    .text_color(t.muted)
+                                    .child(env!("CARGO_PKG_VERSION")),
                             ),
                     ),
             )
-            .child(div().text_sm().text_color(theme.muted_foreground).child(
-                if self.recent.is_empty() {
-                    "No recent projects"
-                } else {
-                    "Recent projects"
-                },
-            ))
-            .child(v_flex().w_full().min_w_0().gap_1().children(rows))
+            .child(
+                button("open-folder", Kind::Primary, "Open folder…", cx)
+                    .on_click(cx.listener(|this, _, window, cx| this.pick_folder(window, cx))),
+            )
+            .child(
+                div()
+                    .mt_auto()
+                    .text_size(text::DENSE)
+                    .text_color(t.muted)
+                    .child("Each project is a folder with porter.toml and project.db."),
+            );
+
+        let list = v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .px_6()
+            .py_5()
+            .gap_3()
+            .child(
+                div()
+                    .text_size(text::HEADING)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Recent projects"),
+            )
+            .child(if self.recent.is_empty() {
+                div()
+                    .text_color(t.muted)
+                    .child("No recent projects. Open a folder to start.")
+                    .into_any_element()
+            } else {
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(t.border)
+                    .rounded(radius::MD)
+                    .children(rows)
+                    .into_any_element()
+            })
+            .child(
+                div()
+                    .text_size(text::MICRO)
+                    .text_color(t.muted)
+                    .child("Paths truncate in the middle; hover for the full path."),
+            );
+
+        h_flex()
+            .size_full()
+            .bg(t.bg)
+            .text_color(t.text)
+            .text_size(text::BODY)
+            .child(sidebar)
+            .child(list)
             .children(Root::render_dialog_layer(window, cx))
     }
 }
