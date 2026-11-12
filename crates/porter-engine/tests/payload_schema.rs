@@ -688,3 +688,46 @@ fn dropped_field_is_not_unmapped_and_pii_is_masked() {
         "on 2024-01-02"
     );
 }
+
+#[test]
+fn round2_tabs_groups_relation_to_never_pass_silently() {
+    let d = tempfile::tempdir().unwrap();
+    write(
+        d.path(),
+        "Pages.ts",
+        r#"
+import { seoTab, OTHER } from 'some-pkg'
+export const Pages = { slug: 'pages', admin: {}, fields: [
+  { name: 'legacyId', type: 'text' },
+  { type: 'tabs', tabs: [seoTab, { label: 'Empty' }] },
+  { name: 'meta', type: 'group', fields: [{ name: 'keywords', type: 'text', required: true }] },
+  { name: 'link', type: 'relationship', relationTo: ['media', OTHER] },
+  { name: 'one', type: 'relationship', relationTo: ['posts'] },
+] }
+"#,
+    );
+    let s = read_payload_config(d.path()).unwrap();
+    let w = s.warnings.join("\n");
+    assert!(w.contains("could not resolve tab `seoTab`"), "{w}");
+    assert!(w.contains("tab 1 of pages[1] has no fields"), "{w}");
+    assert!(
+        w.contains("could not resolve every `relationTo` entry of pages.link (got media)"),
+        "{w}"
+    );
+    let f = &s.collections["pages"].fields;
+    let link = field(f, "link");
+    assert_eq!(link.relation_to, ["media"]);
+    assert!(link.polymorphic);
+    assert!(field(f, "one").polymorphic);
+
+    let errs = errors(&schema_check::check(
+        &TypeSummary::default(),
+        &mapping("post", "pages", &[]),
+        &s,
+    ));
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("pages.meta.keywords") && e.contains("required")),
+        "{errs:?}"
+    );
+}

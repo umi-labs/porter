@@ -46,8 +46,10 @@ pub struct DestField {
     pub required_unknown: bool,
     /// `hasMany`.
     pub many: bool,
-    /// More than one entry = a polymorphic relation (`{relationTo, value}` on write).
     pub relation_to: Vec<String>,
+    /// `relationTo` was an array: Payload stores `{relationTo, value}`, even with one entry.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub polymorphic: bool,
     pub fields: Vec<DestField>,
 }
 
@@ -892,7 +894,16 @@ impl Reader {
                     if let Some(what) = unres(&f["tabs"]) {
                         self.warn_at(format!("could not resolve the tabs of {label} (`{what}`)"));
                     }
-                    for tab in arr(&f["tabs"]) {
+                    for (i, tab) in arr(&f["tabs"]).iter().enumerate() {
+                        if let Some(what) = unres(tab) {
+                            self.warn_at(format!("could not resolve tab `{what}` in {label}"));
+                            if tab["fields"].is_null() {
+                                continue;
+                            }
+                        }
+                        if tab["fields"].is_null() {
+                            self.warn_at(format!("tab {i} of {label} has no fields"));
+                        }
                         if let Some(what) = unres(&tab["name"]) {
                             self.warn_at(format!(
                                 "could not resolve a tab name in {ctx} (`{what}`)"
@@ -945,20 +956,31 @@ impl Reader {
                         }
                         _ => vec![],
                     };
-                    let relation_to = match &f["relationTo"] {
-                        Value::String(s) => vec![s.clone()],
-                        Value::Array(a) => a
-                            .iter()
-                            .filter_map(|s| s.as_str().map(String::from))
-                            .collect(),
-                        _ => vec![],
-                    };
+                    let relation_to: Vec<String> =
+                        match &f["relationTo"] {
+                            Value::String(s) => vec![s.clone()],
+                            Value::Array(a) => {
+                                let ok: Vec<String> = a
+                                    .iter()
+                                    .filter_map(|s| s.as_str().map(String::from))
+                                    .collect();
+                                if ok.len() < a.len() {
+                                    self.warn_at(format!(
+                                    "could not resolve every `relationTo` entry of {path} (got {})",
+                                    if ok.is_empty() { "none".into() } else { ok.join(", ") }
+                                ));
+                                }
+                                ok
+                            }
+                            _ => vec![],
+                        };
+                    let polymorphic = f["relationTo"].is_array();
                     let required = flag(&f["required"]);
                     let many = flag(&f["hasMany"]);
                     if many.is_none() {
                         self.warn_at(format!("could not determine if {path} has many values (`hasMany` is an expression)"));
                     }
-                    if !f["relationTo"].is_null() && relation_to.is_empty() {
+                    if !f["relationTo"].is_null() && !polymorphic && relation_to.is_empty() {
                         self.warn_at(format!("could not resolve `relationTo` of {path}"));
                     }
                     if let Some(what) = unres(&f["blocks"]) {
@@ -971,6 +993,7 @@ impl Reader {
                         required_unknown: required.is_none(),
                         many: many.unwrap_or(false),
                         relation_to,
+                        polymorphic,
                         fields,
                     });
                 }

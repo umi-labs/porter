@@ -296,6 +296,9 @@ impl Gaps {
                 self.walk(&f.fields, &inside, mapped);
             } else if whole {
                 required_under(&f.fields, &inside, &mut self.unverifiable);
+            } else if f.kind == "group" {
+                // Payload still enforces required fields inside an unmapped optional group.
+                self.walk(&f.fields, &inside, mapped);
             }
         }
     }
