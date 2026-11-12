@@ -94,3 +94,57 @@ impl Store {
         Ok(s)
     }
 }
+
+impl Store {
+    /// Snapshot for `porter status`: item status counts per stage, open issues by
+    /// severity, and the latest run per stage.
+    pub fn overview(&self) -> Result<serde_json::Value> {
+        use serde_json::{Map, Value, json};
+        let conn = self.conn();
+        let mut stages: Map<String, Value> = Map::new();
+        let mut stmt = conn.prepare(
+            "SELECT stage, status FROM statuses WHERE deleted_at IS NULL ORDER BY stage",
+        )?;
+        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let (stage, status) = row?;
+            let tag = wire(&serde_json::from_str::<ItemStatus>(&status)?)?;
+            let e = stages.entry(stage).or_insert_with(|| json!({}));
+            let n = e[&tag].as_u64().unwrap_or(0) + 1;
+            e[&tag] = json!(n);
+        }
+        let mut open: Map<String, Value> = Map::new();
+        let mut stmt = conn.prepare(
+            "SELECT severity, COUNT(*) FROM issues WHERE resolution = ?1 AND deleted_at IS NULL GROUP BY severity",
+        )?;
+        for row in stmt.query_map([wire(&Resolution::Open)?], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })? {
+            let (sev, n) = row?;
+            open.insert(sev, json!(n));
+        }
+        let mut last: Map<String, Value> = Map::new();
+        let mut stmt = conn.prepare(
+            "SELECT stage, id, started_at, ended_at, summary FROM runs WHERE deleted_at IS NULL ORDER BY id",
+        )?;
+        for row in stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+            ))
+        })? {
+            let (stage, id, started, ended, summary) = row?;
+            let summary = summary
+                .map(|s| serde_json::from_str::<Value>(&s))
+                .transpose()?;
+            // ORDER BY id (UUIDv7) so the last row per stage wins.
+            last.insert(
+                stage,
+                json!({"run": id, "started_at": started, "ended_at": ended, "summary": summary}),
+            );
+        }
+        Ok(json!({"stages": stages, "open_issues": open, "last_runs": last}))
+    }
+}

@@ -1,0 +1,274 @@
+use crate::output::{Printer, wire};
+use anyhow::{Result, bail};
+use clap::ValueEnum;
+use porter_engine::config::ProjectConfig;
+use porter_engine::events::{EventSink, Summary, exit_code};
+use porter_engine::project::Project;
+use porter_engine::registry;
+use porter_engine::stage::{SchemaMode, run_stage};
+use porter_model::Stage;
+use std::path::Path;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum Mode {
+    Check,
+    Generate,
+    Prompt,
+    Spec,
+}
+
+impl From<Mode> for SchemaMode {
+    fn from(m: Mode) -> SchemaMode {
+        match m {
+            Mode::Check => SchemaMode::Check,
+            Mode::Generate => SchemaMode::Generate,
+            Mode::Prompt => SchemaMode::Prompt,
+            Mode::Spec => SchemaMode::Spec,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum StageCmd {
+    Analyse,
+    Extract,
+    Normalise,
+    Schema(Mode),
+    Load(bool),
+    Verify,
+}
+
+impl StageCmd {
+    fn stage(self) -> Stage {
+        match self {
+            StageCmd::Analyse => Stage::Analyse,
+            StageCmd::Extract => Stage::Extract,
+            StageCmd::Normalise => Stage::Normalise,
+            StageCmd::Schema(_) => Stage::Schema,
+            StageCmd::Load(_) => Stage::Load,
+            StageCmd::Verify => Stage::Verify,
+        }
+    }
+
+    fn needs_destination(self) -> bool {
+        matches!(
+            self,
+            StageCmd::Schema(_) | StageCmd::Load(_) | StageCmd::Verify
+        )
+    }
+}
+
+struct Env {
+    project: Arc<Project>,
+    config: Arc<ProjectConfig>,
+    events: EventSink,
+    cancel: CancellationToken,
+}
+
+/// Exit code precedence: 1 (could not run) > 3 (interrupted) > 2 (issues) > 0.
+fn worse(a: i32, b: i32) -> i32 {
+    let rank = |c: i32| match c {
+        1 => 3,
+        3 => 2,
+        2 => 1,
+        _ => 0,
+    };
+    if rank(b) > rank(a) { b } else { a }
+}
+
+fn validate(env: &Env, cmd: StageCmd) -> Result<()> {
+    let errs: Vec<String> = env
+        .config
+        .validate()
+        .into_iter()
+        .filter(|e| cmd.needs_destination() || !e.starts_with("destination."))
+        .collect();
+    if !errs.is_empty() {
+        bail!("porter.toml: {}", errs.join("; "));
+    }
+    Ok(())
+}
+
+async fn exec(env: &Env, cmd: StageCmd) -> Result<Summary> {
+    validate(env, cmd)?;
+    let cfg = &env.config;
+    let go = |stage| {
+        (
+            env.project.clone(),
+            cfg.clone(),
+            env.events.clone(),
+            env.cancel.clone(),
+            stage,
+        )
+    };
+    let stage = cmd.stage();
+    if matches!(
+        cmd,
+        StageCmd::Analyse | StageCmd::Extract | StageCmd::Normalise
+    ) {
+        let Some(src) = registry::source(&cfg.source.adapter) else {
+            bail!(
+                "no source adapter named \"{}\" (available: none)",
+                cfg.source.adapter
+            );
+        };
+        let (p, c, e, k, s) = go(stage);
+        return run_stage(p, c, e, k, s, |ctx| async move {
+            match cmd {
+                StageCmd::Normalise => src.normalise(&ctx),
+                _ => {
+                    for conn in src.connectors(&ctx.config)? {
+                        if ctx.cancel.is_cancelled() {
+                            break;
+                        }
+                        if matches!(cmd, StageCmd::Analyse) {
+                            conn.analyse(&ctx).await?;
+                        } else {
+                            conn.extract(&ctx).await?;
+                        }
+                    }
+                    Ok(())
+                }
+            }
+        })
+        .await;
+    }
+    let Some(dest) = registry::destination(&cfg.destination.adapter, cfg) else {
+        bail!(
+            "no destination adapter named \"{}\" (available: none)",
+            cfg.destination.adapter
+        );
+    };
+    let (p, c, e, k, s) = go(stage);
+    match cmd {
+        StageCmd::Schema(m) => {
+            run_stage(p, c, e, k, s, |ctx| async move {
+                dest.schema(m.into(), &ctx).await
+            })
+            .await
+        }
+        StageCmd::Load(apply) => {
+            run_stage(
+                p,
+                c,
+                e,
+                k,
+                s,
+                |ctx| async move { dest.load(&ctx, apply).await },
+            )
+            .await
+        }
+        // ponytail: Task 22 swaps this for porter_engine::verify::run.
+        _ => bail!("verify not available in this build"),
+    }
+}
+
+fn env(dir: &Path, printer: &Printer) -> Result<Env> {
+    let project = super::open(dir)?;
+    let config = Arc::new(project.config().clone());
+    let cancel = CancellationToken::new();
+    let token = cancel.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            token.cancel();
+        }
+    });
+    Ok(Env {
+        project: Arc::new(project),
+        config,
+        events: printer.sink(),
+        cancel,
+    })
+}
+
+fn table(rows: &[(Stage, Summary)]) {
+    println!(
+        "{:<10} {:>6} {:>8} {:>8} {:>7} {:>7}",
+        "stage", "done", "partial", "skipped", "failed", "errors"
+    );
+    for (s, m) in rows {
+        println!(
+            "{:<10} {:>6} {:>8} {:>8} {:>7} {:>7}",
+            wire(s),
+            m.done,
+            m.partial,
+            m.skipped,
+            m.failed,
+            m.errors
+        );
+    }
+}
+
+/// One stage's exit code. A stage that errors, or is cancelled, maps to 1 / 3.
+async fn code_of(env: &Env, cmd: StageCmd, rows: &mut Vec<(Stage, Summary)>) -> i32 {
+    match exec(env, cmd).await {
+        Ok(s) => {
+            let c = exit_code(&s);
+            rows.push((cmd.stage(), s));
+            c
+        }
+        Err(_) if env.cancel.is_cancelled() => 3,
+        Err(e) => {
+            eprintln!("error: {e:#}");
+            1
+        }
+    }
+}
+
+async fn drive(dir: &Path, json: bool, cmds: &[StageCmd], keep_going: bool) -> Result<i32> {
+    let printer = Printer::start(json);
+    let env = match env(dir, &printer) {
+        Ok(e) => e,
+        Err(e) => {
+            printer.finish().await;
+            return Err(e);
+        }
+    };
+    let (mut worst, mut rows) = (0, Vec::new());
+    for &cmd in cmds {
+        let c = code_of(&env, cmd, &mut rows).await;
+        worst = worse(worst, c);
+        if c != 0 && !keep_going {
+            break;
+        }
+    }
+    drop(env);
+    printer.finish().await;
+    if !json && !rows.is_empty() {
+        table(&rows);
+    }
+    Ok(worst)
+}
+
+pub async fn run(dir: &Path, json: bool, cmd: StageCmd) -> Result<i32> {
+    drive(dir, json, &[cmd], false).await
+}
+
+pub async fn run_all(dir: &Path, json: bool, keep_going: bool, apply: bool) -> Result<i32> {
+    let steps = [
+        StageCmd::Analyse,
+        StageCmd::Extract,
+        StageCmd::Normalise,
+        StageCmd::Schema(Mode::Check),
+        StageCmd::Load(apply),
+        StageCmd::Verify,
+    ];
+    drive(dir, json, &steps, keep_going).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::worse;
+
+    #[test]
+    fn exit_precedence_is_1_3_2_0() {
+        assert_eq!(worse(2, 3), 3);
+        assert_eq!(worse(3, 2), 3);
+        assert_eq!(worse(3, 1), 1);
+        assert_eq!(worse(1, 2), 1);
+        assert_eq!(worse(0, 2), 2);
+        assert_eq!(worse(2, 0), 2);
+    }
+}
