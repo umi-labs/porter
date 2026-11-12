@@ -1308,15 +1308,22 @@ pub enum Php {
 pub fn php_decode(raw: &str) -> Php {
     let b = raw.trim_end().as_bytes();
     let mut pos = 0;
-    match php_value(b, &mut pos) {
+    match php_value(b, &mut pos, 0) {
         Ok(v) if pos == b.len() => Php::Value(v),
         Err(true) => Php::Object,
         _ => Php::Plain,
     }
 }
 
-/// `Err(true)`: an object or reference was found; `Err(false)`: not serialized.
-fn php_value(b: &[u8], pos: &mut usize) -> std::result::Result<Value, bool> {
+/// Nesting deeper than this is treated as not decodable (kept raw), so hostile input cannot
+/// overflow the stack.
+const PHP_MAX_DEPTH: usize = 64;
+
+/// `Err(true)`: an object or reference was found; `Err(false)`: not serialized (or too deep).
+fn php_value(b: &[u8], pos: &mut usize, depth: usize) -> std::result::Result<Value, bool> {
+    if depth > PHP_MAX_DEPTH {
+        return Err(false);
+    }
     let tag = *b.get(*pos).ok_or(false)?;
     if matches!(tag, b'O' | b'C' | b'r' | b'R' | b'E') && b.get(*pos + 1) == Some(&b':') {
         return Err(true);
@@ -1344,8 +1351,9 @@ fn php_value(b: &[u8], pos: &mut usize) -> std::result::Result<Value, bool> {
         b's' => {
             let len: usize = until(b, pos, b':')?.parse().map_err(|_| false)?;
             expect(b, pos, b"\"")?;
-            let bytes = b.get(*pos..*pos + len).ok_or(false)?;
-            *pos += len;
+            let end = pos.checked_add(len).ok_or(false)?;
+            let bytes = b.get(*pos..end).ok_or(false)?;
+            *pos = end;
             expect(b, pos, b"\";")?;
             Ok(Value::String(String::from_utf8_lossy(bytes).into_owned()))
         }
@@ -1354,12 +1362,12 @@ fn php_value(b: &[u8], pos: &mut usize) -> std::result::Result<Value, bool> {
             expect(b, pos, b"{")?;
             let mut pairs = Vec::with_capacity(n.min(1024));
             for _ in 0..n {
-                let k = match php_value(b, pos)? {
+                let k = match php_value(b, pos, depth + 1)? {
                     Value::String(s) => s,
                     Value::Number(n) => n.to_string(),
                     _ => return Err(false),
                 };
-                pairs.push((k, php_value(b, pos)?));
+                pairs.push((k, php_value(b, pos, depth + 1)?));
             }
             expect(b, pos, b"}")?;
             let is_list = pairs
@@ -1377,8 +1385,9 @@ fn php_value(b: &[u8], pos: &mut usize) -> std::result::Result<Value, bool> {
 }
 
 fn expect(b: &[u8], pos: &mut usize, lit: &[u8]) -> std::result::Result<(), bool> {
-    if b.get(*pos..*pos + lit.len()) == Some(lit) {
-        *pos += lit.len();
+    let end = pos.checked_add(lit.len()).ok_or(false)?;
+    if b.get(*pos..end) == Some(lit) {
+        *pos = end;
         Ok(())
     } else {
         Err(false)
@@ -1554,6 +1563,36 @@ mod tests {
         assert_eq!(php_decode("hello"), Php::Plain);
         assert_eq!(php_decode("s:5:\"abc\";"), Php::Plain);
         assert_eq!(php_decode("i:1;junk"), Php::Plain);
+    }
+
+    #[test]
+    fn php_decoder_deep_nesting_is_raw() {
+        // Runs on a tokio-worker-sized stack: without the depth cap this overflows.
+        let r = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let n = 20_000;
+                let s = format!("{}N;{}", "a:1:{i:0;".repeat(n), "}".repeat(n));
+                php_decode(&s)
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(r, Php::Plain);
+        let mut objects = false;
+        let deep = format!("{}N;{}", "a:1:{i:0;".repeat(100), "}".repeat(100));
+        let m = fold_meta(&json!([["k", deep.clone()]]), &mut objects);
+        assert_eq!(m["k"], json!(deep), "kept as the raw string");
+        // Within the cap still decodes.
+        let ok = format!("{}N;{}", "a:1:{i:0;".repeat(10), "}".repeat(10));
+        assert!(matches!(php_decode(&ok), Php::Value(_)));
+    }
+
+    #[test]
+    fn php_decoder_huge_length_is_raw() {
+        assert_eq!(php_decode("s:18446744073709551615:\"x\";"), Php::Plain);
+        assert_eq!(php_decode("s:99999999999999999999:\"x\";"), Php::Plain);
+        assert_eq!(php_decode("a:18446744073709551615:{}"), Php::Plain);
     }
 
     #[test]
