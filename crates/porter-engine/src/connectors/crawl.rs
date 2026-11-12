@@ -3,6 +3,9 @@
 //! and (in `extract`) saves HTML and downloads media.
 
 use crate::config::ConnectorConfig;
+use crate::connectors::fetch::{
+    Download, download_capped, media_client as new_media_client, read_capped,
+};
 use crate::http;
 use crate::stage::{Capabilities, Connector, Feature, StageCtx};
 use crate::url::{UrlKey, normalise_url};
@@ -15,8 +18,8 @@ use porter_model::{
     Severity, SourceRef,
 };
 use regex::Regex;
+use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, LINK, LOCATION};
-use reqwest::{Client, Response};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -352,21 +355,6 @@ fn sitemap_locs(xml: &str) -> (bool, Vec<String>) {
         }
     }
     (index, locs)
-}
-
-/// Reads the body, giving up (`Err(bytes seen or declared)`) once it passes `cap`.
-async fn read_capped(mut r: Response, cap: u64) -> Result<std::result::Result<Vec<u8>, u64>> {
-    if let Some(n) = r.content_length().filter(|n| *n > cap) {
-        return Ok(Err(n));
-    }
-    let mut out = Vec::new();
-    while let Some(chunk) = r.chunk().await? {
-        out.extend_from_slice(&chunk);
-        if out.len() as u64 > cap {
-            return Ok(Err(out.len() as u64));
-        }
-    }
-    Ok(Ok(out))
 }
 
 /// GET a small text file; `None` on any failure or cancellation.
@@ -829,32 +817,21 @@ async fn download_media(sh: &Shared, route: ItemId, urls: &[String]) -> Result<(
         if !ctx.refresh && store.media_by_url(url)?.is_some() {
             continue;
         }
-        let fetched = tokio::select! {
-            _ = ctx.cancel.cancelled() => break,
-            r = async {
-                let r: Result<_> = async {
-                let r = http::send_with_retry(sh.media_client.get(url), 3).await?;
-                if !r.status().is_success() {
-                    return Ok(Err(format!("HTTP {}", r.status().as_u16())));
+        let bytes =
+            match download_capped(&sh.media_client, url, sh.opts.max_media, &ctx.cancel).await {
+                Ok(Download::Cancelled) => break,
+                Ok(Download::Ok(b)) => Ok(b),
+                Ok(Download::OverCap(n)) => {
+                    let (id, _) = media_placeholder(url);
+                    let reason = "over size cap".to_string();
+                    ctx.item_status(id, ItemKind::Media, ItemStatus::Skipped { reason })?;
+                    warn(format!("file over size cap ({n} bytes)"), url)?;
+                    pause(sh).await;
+                    continue;
                 }
-                Ok(Ok(read_capped(r, sh.opts.max_media).await?))
-                }.await;
-                r
-            } => r,
-        };
-        let bytes = match fetched {
-            Ok(Ok(Ok(b))) => Ok(b),
-            Ok(Ok(Err(n))) => {
-                let (id, _) = media_placeholder(url);
-                let reason = "over size cap".to_string();
-                ctx.item_status(id, ItemKind::Media, ItemStatus::Skipped { reason })?;
-                warn(format!("file over size cap ({n} bytes)"), url)?;
-                pause(sh).await;
-                continue;
-            }
-            Ok(Err(e)) => Err(e),
-            Err(e) => Err(format!("{e:#}")),
-        };
+                Ok(Download::Status(c)) => Err(format!("HTTP {c}")),
+                Err(e) => Err(format!("{e:#}")),
+            };
         match bytes {
             Err(e) => warn(format!("could not download {url}: {e}"), url)?,
             Ok(bytes) => {
@@ -930,11 +907,7 @@ async fn crawl(ctx: &StageCtx, opts: &Opts, extract: bool) -> Result<()> {
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(30))
         .build()?;
-    let media_client = Client::builder()
-        .user_agent(USER_AGENT)
-        .redirect(reqwest::redirect::Policy::limited(MAX_HOPS))
-        .read_timeout(Duration::from_secs(30))
-        .build()?;
+    let media_client = new_media_client(USER_AGENT)?;
     let robots = match start_text(&client, &opts.start, "/robots.txt", &ctx.cancel).await {
         Some(t) => Robots::parse(&t),
         None => Robots::default(),

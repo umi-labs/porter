@@ -57,8 +57,8 @@ pub enum ConnectorConfig {
         extra: toml::Table,
     },
     Wxr {
-        #[serde(flatten)]
-        extra: toml::Table,
+        /// WordPress export file; relative paths resolve against the project folder.
+        path: PathBuf,
     },
     WpDb {
         #[serde(flatten)]

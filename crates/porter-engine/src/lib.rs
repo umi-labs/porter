@@ -9,6 +9,7 @@ pub mod mapping;
 pub mod project;
 pub mod registry;
 pub mod report;
+pub mod sources;
 pub mod stage;
 pub mod store;
 pub mod url;
