@@ -1,5 +1,6 @@
 //! Streaming WordPress export (WXR) reader. Never holds more than one item in memory.
 use crate::config::ConnectorConfig;
+use crate::connectors::RawItem;
 use crate::connectors::fetch::{DEFAULT_MEDIA_CAP, Download, download_capped, media_client};
 use crate::stage::{Capabilities, Connector, Feature, StageCtx};
 use anyhow::{Context, Result};
@@ -12,6 +13,8 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 const NAME: &str = "wxr";
+/// Largest item (text and attribute bytes) kept in memory; bigger ones fail.
+const MAX_ITEM_BYTES: usize = 64 * 1024 * 1024;
 const USER_AGENT: &str = "porter/2.0 (+https://github.com/umi-labs/porter)";
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -97,6 +100,14 @@ impl Node {
             .map(|c| c.text.clone())
             .unwrap_or_default()
     }
+    /// Moves the text out (no copy) for the fields that can be huge.
+    fn take_text(&mut self, name: &str) -> String {
+        self.children
+            .iter_mut()
+            .find(|c| c.name == name)
+            .map(|c| std::mem::take(&mut c.text))
+            .unwrap_or_default()
+    }
     fn attr(&self, name: &str) -> String {
         self.attrs
             .iter()
@@ -155,12 +166,18 @@ fn read_node<R: BufRead>(
     rd: &mut Reader<R>,
     start: &quick_xml::events::BytesStart<'_>,
     lossy: &mut bool,
-) -> Result<Node, String> {
+    cap: usize,
+) -> Result<Node, (String, bool)> {
     let mut stack = vec![node_of(start, lossy)];
     let mut buf = Vec::new();
+    let (mut size, mut over) = (0usize, false);
     loop {
         buf.clear();
-        match rd.read_event_into(&mut buf).map_err(|e| e.to_string())? {
+        // Err's bool: the element was consumed to its end tag (no skipping needed).
+        match rd
+            .read_event_into(&mut buf)
+            .map_err(|e| (e.to_string(), false))?
+        {
             Event::Start(e) => stack.push(node_of(&e, lossy)),
             Event::Empty(e) => {
                 let n = node_of(&e, lossy);
@@ -168,8 +185,15 @@ fn read_node<R: BufRead>(
                     top.children.push(n);
                 }
             }
+            Event::Text(t) if over => drop(t),
+            Event::CData(t) if over => drop(t),
             Event::Text(t) => {
                 let s = unescape(decode(&t, lossy));
+                size += s.len();
+                over = size > cap;
+                if over {
+                    continue;
+                }
                 if let Some(top) = stack.last_mut() {
                     top.text.push_str(&s);
                 }
@@ -177,33 +201,74 @@ fn read_node<R: BufRead>(
             // WordPress splits a literal `]]>` across two CDATA sections; appending rejoins them.
             Event::CData(t) => {
                 let s = decode(&t, lossy);
+                size += s.len();
+                over = size > cap;
+                if over {
+                    continue;
+                }
                 if let Some(top) = stack.last_mut() {
                     top.text.push_str(&s);
                 }
             }
             Event::End(e) => {
                 let name = local(e.name().as_ref(), lossy);
-                let node = stack.pop().ok_or("unbalanced end tag")?;
+                let node = stack
+                    .pop()
+                    .ok_or(("unbalanced end tag".to_string(), false))?;
                 if node.name != name {
-                    return Err(format!("mismatched end tag </{name}> for <{}>", node.name));
+                    let msg = format!("mismatched end tag </{name}> for <{}>", node.name);
+                    return Err((msg, false));
                 }
                 match stack.last_mut() {
                     Some(parent) => parent.children.push(node),
+                    None if over => return Err((too_big(cap), true)),
                     None => return Ok(node),
                 }
             }
-            Event::Eof => return Err("unexpected end of file inside element".into()),
+            Event::Eof => return Err(("unexpected end of file inside element".into(), false)),
             _ => {}
         }
     }
 }
 
-fn build_item(n: &Node, ordinal: usize, lossy: bool) -> Result<WxrItem, WxrItemError> {
+fn too_big(cap: usize) -> String {
+    const MB: usize = 1024 * 1024;
+    if cap.is_multiple_of(MB) {
+        format!("item larger than {} MB", cap / MB)
+    } else {
+        format!("item larger than {cap} bytes")
+    }
+}
+
+fn build_item(mut n: Node, ordinal: usize, lossy: bool) -> Result<WxrItem, WxrItemError> {
     let err = |post_id, message: String| WxrItemError {
         post_id,
         ordinal,
         message,
     };
+    let (title, content, excerpt) = (
+        n.take_text("title"),
+        n.take_text("content:encoded"),
+        n.take_text("excerpt:encoded"),
+    );
+    let categories = n
+        .children
+        .iter_mut()
+        .filter(|c| c.name == "category")
+        .map(|c| {
+            (
+                c.attr("domain"),
+                c.attr("nicename"),
+                std::mem::take(&mut c.text),
+            )
+        })
+        .collect();
+    let meta = n
+        .children
+        .iter_mut()
+        .filter(|c| c.name == "postmeta")
+        .map(|m| (m.take_text("meta_key"), m.take_text("meta_value")))
+        .collect();
     let id_text = n.text_of("post_id");
     let post_id: u64 = id_text.trim().parse().map_err(|_| {
         err(
@@ -225,7 +290,7 @@ fn build_item(n: &Node, ordinal: usize, lossy: bool) -> Result<WxrItem, WxrItemE
         post_id,
         post_type: trimmed("post_type"),
         status: trimmed("status"),
-        title: n.text_of("title"),
+        title,
         link: trimmed("link"),
         slug: trimmed("post_name"),
         parent: u64::try_from(num("post_parent")?).unwrap_or(0),
@@ -233,20 +298,10 @@ fn build_item(n: &Node, ordinal: usize, lossy: bool) -> Result<WxrItem, WxrItemE
         date_gmt: trimmed("post_date_gmt"),
         modified_gmt: trimmed("post_modified_gmt"),
         author: trimmed("creator"),
-        content: n.text_of("content:encoded"),
-        excerpt: n.text_of("excerpt:encoded"),
-        categories: n
-            .children
-            .iter()
-            .filter(|c| c.name == "category")
-            .map(|c| (c.attr("domain"), c.attr("nicename"), c.text.clone()))
-            .collect(),
-        meta: n
-            .children
-            .iter()
-            .filter(|c| c.name == "postmeta")
-            .map(|m| (m.text_of("meta_key"), m.text_of("meta_value")))
-            .collect(),
+        content,
+        excerpt,
+        categories,
+        meta,
         attachment_url: Some(trimmed("attachment_url")).filter(|u| !u.is_empty()),
         invalid_utf8: lossy,
     })
@@ -295,9 +350,18 @@ fn term_of(n: &Node) -> WxrTerm {
 /// Streams the export. A malformed item reaches `on_item` as `Err` and parsing goes on.
 pub fn parse_wxr<R: BufRead>(
     r: R,
+    on_item: impl FnMut(Result<WxrItem, WxrItemError>),
+) -> Result<WxrHeader> {
+    parse_wxr_with_cap(r, MAX_ITEM_BYTES, on_item)
+}
+
+/// `parse_wxr` with an explicit per-item byte cap.
+pub fn parse_wxr_with_cap<R: BufRead>(
+    r: R,
+    cap: usize,
     mut on_item: impl FnMut(Result<WxrItem, WxrItemError>),
 ) -> Result<WxrHeader> {
-    parse_until(r, |i| {
+    parse_until(r, cap, |i| {
         on_item(i);
         true
     })
@@ -306,6 +370,7 @@ pub fn parse_wxr<R: BufRead>(
 /// Like `parse_wxr`, but stops early once `on_item` returns false.
 fn parse_until<R: BufRead>(
     r: R,
+    cap: usize,
     mut on_item: impl FnMut(Result<WxrItem, WxrItemError>) -> bool,
 ) -> Result<WxrHeader> {
     let mut rd = Reader::from_reader(r);
@@ -334,7 +399,7 @@ fn parse_until<R: BufRead>(
                     depth += 1;
                     continue;
                 }
-                let node = read_node(&mut rd, &e, &mut lossy);
+                let node = read_node(&mut rd, &e, &mut lossy, cap);
                 if name != "item" {
                     let Ok(n) = node else { continue };
                     match name.as_str() {
@@ -348,9 +413,11 @@ fn parse_until<R: BufRead>(
                 }
                 ordinal += 1;
                 let item = match node {
-                    Ok(n) => build_item(&n, ordinal, lossy),
-                    Err(message) => {
-                        skip_item(&mut rd);
+                    Ok(n) => build_item(n, ordinal, lossy),
+                    Err((message, consumed)) => {
+                        if !consumed {
+                            skip_item(&mut rd);
+                        }
                         Err(WxrItemError {
                             post_id: None,
                             ordinal,
@@ -405,45 +472,78 @@ impl WxrConnector {
     }
 }
 
-fn item_id(post_id: &str, url: Option<String>) -> ItemId {
+fn doc_ref(post_id: &str, url: Option<String>) -> (ItemId, SourceRef) {
     let src = SourceRef {
         connector: NAME.into(),
         source_id: post_id.to_string(),
         url,
     };
-    ItemId::new(ItemKind::Document, &src)
+    (ItemId::new(ItemKind::Document, &src), src)
 }
 
-fn doc_id(i: &WxrItem) -> ItemId {
-    item_id(
-        &i.post_id.to_string(),
-        Some(i.link.clone()).filter(|l| !l.is_empty()),
-    )
-}
-
-fn failed_id(e: &WxrItemError) -> ItemId {
+fn failed_ref(e: &WxrItemError) -> (ItemId, SourceRef) {
     match e.post_id {
-        Some(p) => item_id(&p.to_string(), None),
-        None => item_id(&format!("item-{}", e.ordinal), None),
+        Some(p) => doc_ref(&p.to_string(), None),
+        None => doc_ref(&format!("item-{}", e.ordinal), None),
     }
 }
 
-fn author_id(login: &str) -> ItemId {
+fn author_ref(login: &str) -> (ItemId, SourceRef) {
     let src = SourceRef {
         connector: NAME.into(),
         source_id: login.into(),
         url: None,
     };
-    ItemId::new(ItemKind::Author, &src)
+    (ItemId::new(ItemKind::Author, &src), src)
 }
 
-fn term_id(t: &WxrTerm) -> ItemId {
+fn term_ref(t: &WxrTerm) -> (ItemId, SourceRef) {
     let src = SourceRef {
         connector: NAME.into(),
         source_id: format!("{}:{}", t.domain, t.nicename),
         url: None,
     };
-    ItemId::new(ItemKind::Term, &src)
+    (ItemId::new(ItemKind::Term, &src), src)
+}
+
+/// Writes the RawItem row and the stage status; for documents, `i` is the parsed item.
+fn record(
+    ctx: &StageCtx,
+    kind: ItemKind,
+    (id, src): (ItemId, SourceRef),
+    row: RawItem,
+    status: Option<ItemStatus>,
+) -> Result<()> {
+    ctx.project.store().put_item(kind, id, &src, &row)?;
+    match status {
+        Some(s) => ctx.item_status(id, kind, s),
+        None => Ok(()),
+    }
+}
+
+fn doc_row(i: &WxrItem) -> (ItemId, SourceRef, RawItem) {
+    let (id, src) = doc_ref(
+        &i.post_id.to_string(),
+        Some(i.link.clone()).filter(|l| !l.is_empty()),
+    );
+    let row = RawItem {
+        label: i.post_type.clone(),
+        title: Some(i.title.clone()),
+        status: Some(i.status.clone()),
+        url: src.url.clone(),
+        raw_path: Some(format!("items/{}.json", i.post_id)),
+    };
+    (id, src, row)
+}
+
+fn failed_row() -> RawItem {
+    RawItem {
+        label: "unparsed".into(),
+        title: None,
+        status: None,
+        url: None,
+        raw_path: None,
+    }
 }
 
 fn lossy_status(lossy: bool) -> ItemStatus {
@@ -462,10 +562,36 @@ fn write_json<T: Serialize + ?Sized>(path: &Path, v: &T) -> Result<()> {
 
 fn mark_header(ctx: &StageCtx, h: &WxrHeader) -> Result<()> {
     for a in &h.authors {
-        ctx.item_status(author_id(&a.login), ItemKind::Author, ItemStatus::Done)?;
+        let row = RawItem {
+            label: "author".into(),
+            title: Some(a.display_name.clone()),
+            status: None,
+            url: None,
+            raw_path: None,
+        };
+        record(
+            ctx,
+            ItemKind::Author,
+            author_ref(&a.login),
+            row,
+            Some(ItemStatus::Done),
+        )?;
     }
     for t in &h.terms {
-        ctx.item_status(term_id(t), ItemKind::Term, ItemStatus::Done)?;
+        let row = RawItem {
+            label: t.domain.clone(),
+            title: Some(t.name.clone()),
+            status: None,
+            url: None,
+            raw_path: None,
+        };
+        record(
+            ctx,
+            ItemKind::Term,
+            term_ref(t),
+            row,
+            Some(ItemStatus::Done),
+        )?;
     }
     Ok(())
 }
@@ -479,7 +605,7 @@ fn stream_items(
 ) -> Result<WxrHeader> {
     let mut fail = None;
     let mut seen = 0u64;
-    let header = parse_until(r, |item| {
+    let header = parse_until(r, MAX_ITEM_BYTES, |item| {
         if ctx.cancel.is_cancelled() {
             return false;
         }
@@ -521,16 +647,32 @@ impl Connector for WxrConnector {
             Ok(i) => {
                 *counts.entry(i.post_type.clone()).or_default() += 1;
                 attachments += u64::from(i.attachment_url.is_some());
-                ctx.item_status(doc_id(&i), ItemKind::Document, ItemStatus::Done)
+                let (id, src, mut row) = doc_row(&i);
+                row.raw_path = None; // nothing on disk until extract
+                record(
+                    ctx,
+                    ItemKind::Document,
+                    (id, src),
+                    row,
+                    Some(ItemStatus::Done),
+                )
             }
-            Err(e) => ctx.item_status(
-                failed_id(&e),
-                ItemKind::Document,
-                ItemStatus::Failed {
+            Err(e) => {
+                let status = ItemStatus::Failed {
                     error: e.to_string(),
-                },
-            ),
+                };
+                record(
+                    ctx,
+                    ItemKind::Document,
+                    failed_ref(&e),
+                    failed_row(),
+                    Some(status),
+                )
+            }
         })?;
+        if ctx.cancel.is_cancelled() {
+            return Ok(());
+        }
         mark_header(ctx, &header)?;
         let dir = ctx.project.raw_dir(NAME);
         std::fs::create_dir_all(&dir)?;
@@ -551,28 +693,38 @@ impl Connector for WxrConnector {
         let mut pending: Vec<(ItemId, String, bool)> = vec![];
         let header = stream_items(ctx, self.open(ctx)?, |r| match r {
             Ok(i) => {
-                let id = doc_id(&i);
+                let (id, src, row) = doc_row(&i);
                 let file = items_dir.join(format!("{}.json", i.post_id));
-                if let Err(e) = write_json(&file, &i) {
-                    let error = format!("{e:#}");
-                    return ctx.item_status(id, ItemKind::Document, ItemStatus::Failed { error });
-                }
-                match i.attachment_url {
-                    Some(url) => {
-                        pending.push((id, url, i.invalid_utf8));
-                        Ok(())
-                    }
-                    None => ctx.item_status(id, ItemKind::Document, lossy_status(i.invalid_utf8)),
-                }
+                let status = match write_json(&file, &i) {
+                    Err(e) => Some(ItemStatus::Failed {
+                        error: format!("{e:#}"),
+                    }),
+                    Ok(()) => match &i.attachment_url {
+                        Some(url) => {
+                            pending.push((id, url.clone(), i.invalid_utf8));
+                            None
+                        }
+                        None => Some(lossy_status(i.invalid_utf8)),
+                    },
+                };
+                record(ctx, ItemKind::Document, (id, src), row, status)
             }
-            Err(e) => ctx.item_status(
-                failed_id(&e),
-                ItemKind::Document,
-                ItemStatus::Failed {
+            Err(e) => {
+                let status = ItemStatus::Failed {
                     error: e.to_string(),
-                },
-            ),
+                };
+                record(
+                    ctx,
+                    ItemKind::Document,
+                    failed_ref(&e),
+                    failed_row(),
+                    Some(status),
+                )
+            }
         })?;
+        if ctx.cancel.is_cancelled() {
+            return Ok(());
+        }
         write_json(&dir.join("authors.json"), &header.authors)?;
         write_json(&dir.join("terms.json"), &header.terms)?;
         let site = serde_json::json!({

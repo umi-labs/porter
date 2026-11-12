@@ -1,7 +1,10 @@
 use porter_engine::config::ConnectorConfig;
+use porter_engine::connectors::RawItem;
 use porter_engine::events::{EventSink, exit_code};
 use porter_engine::project::Project;
-use porter_engine::sources::wordpress::wxr::{WxrConnector, WxrItem, parse_wxr};
+use porter_engine::sources::wordpress::wxr::{
+    WxrConnector, WxrItem, parse_wxr, parse_wxr_with_cap,
+};
 use porter_engine::stage::{Connector, run_stage};
 use porter_model::{ItemId, ItemKind, ItemStatus, SourceRef, Stage};
 use std::io::{BufReader, BufWriter, Write};
@@ -175,4 +178,56 @@ fn wxr_memory_bounded() {
     })
     .unwrap();
     assert_eq!(n, 200_000);
+}
+
+#[test]
+fn wxr_oversized_item_failed() {
+    let big = "y".repeat(5000);
+    let xml = format!(
+        r#"<rss xmlns:wp="w" xmlns:content="c"><channel><title>S</title>
+<item><title>Big</title><wp:post_id>1</wp:post_id><content:encoded><![CDATA[{big}]]></content:encoded></item>
+<item><title>Small</title><wp:post_id>2</wp:post_id><content:encoded><![CDATA[ok]]></content:encoded></item>
+</channel></rss>"#
+    );
+    let mut out = vec![];
+    parse_wxr_with_cap(xml.as_bytes(), 1000, |r| {
+        out.push(r.map_err(|e| e.to_string()))
+    })
+    .unwrap();
+    assert_eq!(out.len(), 2);
+    let e = out[0].as_ref().unwrap_err();
+    assert!(e.contains("item larger than"), "{e}");
+    assert_eq!(out[1].as_ref().unwrap().content, "ok");
+}
+
+#[tokio::test]
+async fn wxr_writes_raw_item_rows() {
+    let (_d, p, _s) = run("tricky.xml", Stage::Extract).await;
+    let rows = p.store().items::<RawItem>(ItemKind::Document).unwrap();
+    let labels: Vec<(String, String)> = rows
+        .iter()
+        .map(|(_, src, r)| (src.source_id.clone(), r.label.clone()))
+        .collect();
+    for (id, label) in [
+        ("10", "post"),
+        ("11", "post"),
+        ("12", "attachment"),
+        ("14", "page"),
+    ] {
+        assert!(labels.contains(&(id.into(), label.into())), "{labels:?}");
+    }
+    let r10 = rows.iter().find(|(_, s, _)| s.source_id == "10").unwrap();
+    assert_eq!(r10.2.raw_path.as_deref(), Some("items/10.json"));
+    assert_eq!(
+        p.store().items::<RawItem>(ItemKind::Author).unwrap()[0]
+            .2
+            .label,
+        "author"
+    );
+    assert_eq!(
+        p.store().items::<RawItem>(ItemKind::Term).unwrap()[0]
+            .2
+            .label,
+        "genre"
+    );
 }
