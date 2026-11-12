@@ -56,7 +56,8 @@ pub fn button(
             .border_color(t.border_strong)
             .text_color(t.muted)
             .hover(|s| s.bg(t.hover))
-            .child("🔒")
+            // A mono glyph, not the colour emoji: it takes the muted tone like the label.
+            .child("⚿")
             .child(label),
     }
 }

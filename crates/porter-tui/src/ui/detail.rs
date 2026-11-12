@@ -193,7 +193,11 @@ fn stage_text(app: &App) -> String {
             }
         }
         StageState::Never => out += "\nnot run yet. space runs it.\n",
+        StageState::Skipped => out += "\nskipped: the last load was a dry run.\n",
         _ => {}
+    }
+    if let Some(why) = &r.stale {
+        out += &format!("\nstale: {why}. The result below is from before that.\n");
     }
     if let Some(run) = &r.last_run {
         out += &format!(

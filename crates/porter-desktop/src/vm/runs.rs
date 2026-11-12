@@ -6,7 +6,8 @@ use porter_engine::events::Event;
 use porter_engine::store::RunRow;
 use porter_model::Stage;
 
-use super::pipeline::{name, run_state, state_text};
+use super::pipeline::{name, state_text};
+use porter_engine::session::{StageState, run_state};
 
 /// Runs per stage, newest first.
 pub type History = Vec<(Stage, Vec<RunRow>)>;
@@ -71,15 +72,15 @@ impl Runs {
     }
 }
 
-pub fn history_row(stage: Stage, r: &RunRow) -> HistoryRow {
-    let state = state_text(&run_state(stage, r)).to_string();
+pub fn history_row(r: &RunRow) -> HistoryRow {
+    let state = run_state(r);
     HistoryRow {
         started_at: r.started_at.clone(),
         ended_at: r.ended_at.clone().unwrap_or_else(|| "—".into()),
-        outcome: if r.dry_run {
-            format!("{state} (dry run)")
-        } else {
-            state
+        outcome: match state {
+            StageState::DryRun => "dry run · nothing written".into(),
+            s if r.dry_run => format!("{} (dry run)", state_text(&s)),
+            s => state_text(&s).into(),
         },
         counts: r.summary.as_ref().map_or_else(String::new, |s| {
             format!(
@@ -117,7 +118,7 @@ mod tests {
             summary: Some(Default::default()),
             dry_run: true,
         };
-        assert_eq!(history_row(Stage::Load, &r).outcome, "clean (dry run)");
+        assert_eq!(history_row(&r).outcome, "dry run · nothing written");
     }
 
     #[test]
@@ -131,8 +132,8 @@ mod tests {
             dry_run: true,
         };
         // The history row is plain text with no tone: it carries no green or ✓, and the
-        // outcome always says "(dry run)".
-        let h = history_row(Stage::Load, &r);
-        assert!(h.outcome.ends_with("(dry run)") && !h.outcome.contains('✓'));
+        // outcome always says "dry run".
+        let h = history_row(&r);
+        assert!(h.outcome.contains("dry run") && !h.outcome.contains('✓'));
     }
 }

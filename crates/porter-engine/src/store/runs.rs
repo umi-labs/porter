@@ -133,7 +133,7 @@ impl Store {
         }
         let mut last: Map<String, Value> = Map::new();
         let mut stmt = conn.prepare(
-            "SELECT stage, id, started_at, ended_at, summary FROM runs WHERE deleted_at IS NULL ORDER BY id",
+            "SELECT stage, id, started_at, ended_at, summary, dry_run FROM runs WHERE deleted_at IS NULL ORDER BY id",
         )?;
         for row in stmt.query_map([], |r| {
             Ok((
@@ -142,16 +142,18 @@ impl Store {
                 r.get::<_, String>(2)?,
                 r.get::<_, Option<String>>(3)?,
                 r.get::<_, Option<String>>(4)?,
+                r.get::<_, bool>(5)?,
             ))
         })? {
-            let (stage, id, started, ended, summary) = row?;
+            let (stage, id, started, ended, summary, dry_run) = row?;
             let summary = summary
                 .map(|s| serde_json::from_str::<Value>(&s))
                 .transpose()?;
             // ORDER BY id (UUIDv7) so the last row per stage wins.
             last.insert(
                 stage,
-                json!({"run": id, "started_at": started, "ended_at": ended, "summary": summary}),
+                // A dry-run load wrote nothing: say so, so its counts never read as writes.
+                json!({"run": id, "started_at": started, "ended_at": ended, "summary": summary, "dry_run": dry_run}),
             );
         }
         Ok(json!({"stages": stages, "open_issues": open, "last_runs": last}))

@@ -1,10 +1,11 @@
 //! The pipeline strip: one row per stage, from the stored overview plus the live events
-//! of the run in flight. Same rules as the terminal UI; the stored state always comes
-//! from `session::stage_state`.
+//! of the run in flight. Same rules as the terminal UI; the stored state and staleness
+//! always come from `session::stage_view`.
 
 use porter_engine::events::{Event, Summary};
-use porter_engine::session::{Overview, RunOutcome, RunPlan, STAGES, StageState, stage_state};
-use porter_engine::store::RunRow;
+use porter_engine::session::{
+    Overview, RunOutcome, RunPlan, STAGES, StageState, finished_state, stage_view,
+};
 use porter_model::{Issue, Severity, Stage};
 
 pub type Progress = (u64, Option<u64>, String);
@@ -12,7 +13,6 @@ pub type Progress = (u64, Option<u64>, String);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
     Muted,
-    Accent,
     Success,
     Warning,
     Danger,
@@ -23,13 +23,33 @@ pub struct StageRow {
     pub stage: Stage,
     pub name: String,
     pub state: StageState,
-    pub glyph: &'static str,
-    pub tone: Tone,
-    /// "running 3/10 items", "clean (dry run)", "could not run: …".
+    /// The chip's words: "12 errors", "Running · 62%", "Dry run · nothing written".
+    pub label: String,
+    /// The line under the counts: progress, the engine's error verbatim, "Loaded, not
+    /// yet verified". Empty when the chip says it all.
     pub status: String,
+    /// Why the shown result no longer holds. The card keeps it, dimmed, with ↻ and this.
+    pub stale: Option<String>,
     /// When the shown run started ("this session" for one that just ended).
     pub last_run: Option<String>,
     pub summary: Option<Summary>,
+    /// The shown load wrote nothing.
+    pub dry_run: bool,
+}
+
+impl StageRow {
+    /// The run's counts; a dry run's are what it would write.
+    pub fn counts(&self) -> Option<String> {
+        let s = self.summary.as_ref()?;
+        Some(if self.dry_run {
+            format!("would write {} · {} failed · 0 written", s.done, s.failed)
+        } else {
+            format!(
+                "{} done · {} failed · {} errors · {} warnings",
+                s.done, s.failed, s.errors, s.warnings
+            )
+        })
+    }
 }
 
 /// How long a closing window waits for a cancelled run to reach a safe point.
@@ -81,52 +101,48 @@ pub fn state_text(s: &StageState) -> &'static str {
         StageState::Errors => "errors",
         StageState::Interrupted => "interrupted",
         StageState::CouldNotRun(_) => "could not run",
+        StageState::DryRun => "dry run",
+        StageState::Skipped => "skipped",
     }
 }
 
-pub fn glyph(s: &StageState) -> (&'static str, Tone) {
-    match s {
-        StageState::Never => ("·", Tone::Muted),
-        StageState::Running => ("●", Tone::Accent),
-        StageState::Clean => ("✓", Tone::Success),
-        StageState::Warnings => ("⚠", Tone::Warning),
-        StageState::Errors => ("✗", Tone::Danger),
-        StageState::Interrupted => ("⏸", Tone::Warning),
-        StageState::CouldNotRun(_) => ("‼", Tone::Danger),
-    }
-}
-
-/// The state a single run amounts to, by the shared `stage_state` rules.
-pub fn run_state(stage: Stage, run: &RunRow) -> StageState {
-    let one = Overview {
-        last_runs: vec![(stage, run.clone())],
-        ..Default::default()
-    };
-    stage_state(&one, stage)
-}
-
-/// A summary the engine just reported, judged like a stored run.
-fn summary_state(stage: Stage, summary: &Summary) -> StageState {
-    run_state(
-        stage,
-        &RunRow {
-            id: String::new(),
-            porter_version: String::new(),
-            started_at: String::new(),
-            ended_at: None,
-            summary: Some(summary.clone()),
-            dry_run: false,
+/// The chip's words for a state.
+fn chip_label(
+    stage: Stage,
+    state: &StageState,
+    sum: Option<&Summary>,
+    p: Option<&Progress>,
+) -> String {
+    let n = |f: fn(&Summary) -> u64| sum.map_or(0, f);
+    match state {
+        StageState::Running => match p {
+            Some((done, Some(total), _)) if *total > 0 => {
+                format!("Running · {}%", done.saturating_mul(100) / total)
+            }
+            _ => "Running".into(),
         },
-    )
+        StageState::Clean if stage == Stage::Load => "Clean · written".into(),
+        StageState::Clean => "Clean".into(),
+        StageState::Warnings => match n(|s| s.warnings) {
+            1 => "Done · 1 warning".into(),
+            w => format!("Done · {w} warnings"),
+        },
+        StageState::Errors => match (n(|s| s.errors), n(|s| s.failed)) {
+            (0, f) => format!("{f} failed"),
+            (1, _) => "1 error".into(),
+            (e, _) => format!("{e} errors"),
+        },
+        StageState::DryRun => "Dry run · nothing written".into(),
+        StageState::CouldNotRun(_) => "Failed".into(),
+        StageState::Interrupted => "Interrupted".into(),
+        StageState::Never => "Not run".into(),
+        StageState::Skipped => "Skipped".into(),
+    }
 }
 
 impl Pipeline {
     pub fn busy(&self) -> bool {
         self.plan.is_some()
-    }
-
-    pub fn running_stage(&self) -> Option<Stage> {
-        self.running
     }
 
     /// Marks `plan` as started. Refused (with why) while another run is in flight.
@@ -269,63 +285,89 @@ impl Pipeline {
         self.close_step(true, self.cancelling) == CloseStep::CancelAndWait
     }
 
+    /// A load that wrote is only half the story until a verify run comes after it.
+    fn verified(&self, ov: &Overview) -> bool {
+        if self.finished[idx(Stage::Load)].is_some() {
+            return self.finished[idx(Stage::Verify)].is_some();
+        }
+        let id = |s: Stage| {
+            ov.last_runs
+                .iter()
+                .find(|(x, _)| *x == s)
+                .map(|(_, r)| r.id.as_str())
+        };
+        matches!((id(Stage::Load), id(Stage::Verify)), (Some(l), Some(v)) if v > l)
+    }
+
     /// Live states (running, could not run, just finished) win over the stored run.
     pub fn rows(&self) -> Vec<StageRow> {
         let empty = Overview::default();
         let ov = self.overview.as_ref().unwrap_or(&empty);
+        let verified = self.verified(ov);
         STAGES
             .iter()
             .map(|&stage| {
                 let i = idx(stage);
                 let fin = self.finished[i].as_ref();
-                let stored = ov
-                    .last_runs
-                    .iter()
-                    .find(|(s, _)| *s == stage)
-                    .map(|(_, r)| r);
+                let view = stage_view(ov, stage);
+                let stored = view.last_run.as_ref();
+                let dry = match fin {
+                    Some(_) => stage == Stage::Load && self.dry_load,
+                    None => stored.is_some_and(|r| r.dry_run),
+                };
+                let mut stale = None;
                 let state = if self.running == Some(stage) {
                     StageState::Running
                 } else if let Some(e) = &self.could_not_run[i] {
                     StageState::CouldNotRun(e.clone())
                 } else if let Some(sum) = fin {
-                    summary_state(stage, sum)
+                    finished_state(sum, dry)
                 } else {
-                    stage_state(ov, stage)
+                    // An upstream stage running now: the stored result is about to be old.
+                    let live = self
+                        .running
+                        .filter(|r| idx(*r) < i && !(*r == Stage::Load && self.dry_load));
+                    stale = match live {
+                        Some(up) if stored.is_some() => Some(format!("{} is re-running", name(up))),
+                        _ => view.stale.clone(),
+                    };
+                    view.state.clone()
                 };
-                let dry = match fin {
-                    Some(_) => stage == Stage::Load && self.dry_load,
-                    None => stored.is_some_and(|r| r.dry_run),
-                };
-                let status = match (&self.progress[i], &state) {
+                let summary = fin
+                    .cloned()
+                    .or_else(|| stored.and_then(|r| r.summary.clone()));
+                let progress = self.progress[i].as_ref();
+                let status = match (progress, &state) {
                     (Some((done, Some(total), label)), _) => {
                         format!("running {done}/{total} {label}")
                     }
                     (Some((done, None, label)), _) => format!("running {done} {label}"),
                     (None, StageState::Running) if self.cancelling => "cancelling…".into(),
                     (None, StageState::Running) => "starting…".into(),
-                    (None, StageState::CouldNotRun(e)) => format!("could not run: {e}"),
-                    (None, StageState::Clean) if dry => "dry run — nothing written".into(),
-                    (None, s) if dry => format!("{} (dry run)", state_text(s)),
-                    (None, s) => state_text(s).into(),
-                };
-                // A clean dry run wrote nothing: it must not look like a finished load.
-                let (glyph, tone) = match &state {
-                    StageState::Clean if dry => ("◌", Tone::Muted),
-                    s => glyph(s),
+                    (None, StageState::CouldNotRun(e)) => e.clone(),
+                    (None, StageState::DryRun) => "nothing written to the destination".into(),
+                    (None, StageState::Skipped) => "the last load was a dry run".into(),
+                    (None, StageState::Interrupted) => "Resume skips what is already done".into(),
+                    (None, StageState::Errors) if dry => "dry run · nothing written".into(),
+                    (None, StageState::Clean | StageState::Warnings)
+                        if stage == Stage::Load && !verified =>
+                    {
+                        "Loaded, not yet verified".into()
+                    }
+                    (None, _) => String::new(),
                 };
                 StageRow {
                     stage,
                     name: name(stage),
-                    glyph,
-                    tone,
+                    label: chip_label(stage, &state, summary.as_ref(), progress),
                     status,
+                    stale,
                     last_run: match fin {
                         Some(_) => Some("this session".into()),
                         None => stored.map(|r| r.started_at.clone()),
                     },
-                    summary: fin
-                        .cloned()
-                        .or_else(|| stored.and_then(|r| r.summary.clone())),
+                    summary,
+                    dry_run: dry,
                     state,
                 }
             })
@@ -397,6 +439,7 @@ mod tests {
     use super::*;
     use porter_engine::session::StageOpts;
     use porter_engine::stage::SchemaMode;
+    use porter_engine::store::RunRow;
 
     #[test]
     fn relative_times() {
@@ -475,23 +518,29 @@ mod tests {
                 StageState::Warnings,
                 StageState::Errors,
                 StageState::Interrupted,
-                StageState::Clean,
-                StageState::Never,
+                StageState::DryRun,
+                // Verify after a dry-run load: not run on purpose.
+                StageState::Skipped,
             ]
         );
-        assert_eq!(rows[0].glyph, "✓");
-        assert_eq!(rows[0].tone, Tone::Success);
-        assert_eq!(rows[2].tone, Tone::Danger);
-        assert_ne!(rows[2].glyph, "✓");
+        assert_eq!(rows[0].label, "Clean");
+        assert_eq!(rows[1].label, "Done · 2 warnings");
+        // Error issues with nothing failed: never green.
+        assert_eq!(rows[2].label, "1 error");
+        assert_eq!(rows[3].status, "Resume skips what is already done");
         // A clean dry-run load wrote nothing: never the green "written" look.
-        assert_eq!(rows[4].state, StageState::Clean);
-        assert_ne!(rows[4].tone, Tone::Success);
-        assert_ne!(rows[4].glyph, "✓");
-        assert_eq!(rows[4].status, "dry run — nothing written");
-        assert_eq!(rows[5].status, "not run");
+        assert_eq!(rows[4].label, "Dry run · nothing written");
+        assert_eq!(rows[4].status, "nothing written to the destination");
+        assert_eq!(
+            rows[4].counts().as_deref(),
+            Some("would write 5 · 0 failed · 0 written")
+        );
+        assert_eq!(rows[5].label, "Skipped");
+        assert_eq!(rows[5].status, "the last load was a dry run");
+        assert!(rows.iter().all(|r| r.stale.is_none()));
         // The shared rule for a single run agrees.
         assert_eq!(
-            run_state(Stage::Normalise, &run(Some(sum(1, 0, 3, 0)), false)),
+            porter_engine::session::run_state(&run(Some(sum(1, 0, 3, 0)), false)),
             StageState::Errors
         );
 
@@ -506,6 +555,12 @@ mod tests {
             label: "items".into(),
         });
         assert_eq!(row(&p, Stage::Normalise).status, "running 3/10 items");
+        assert_eq!(row(&p, Stage::Normalise).label, "Running · 30%");
+        // Downstream results are about to be old: dimmed, with why.
+        assert_eq!(
+            row(&p, Stage::Schema).stale.as_deref(),
+            Some("normalise is re-running")
+        );
         // It finishes with error issues and no failed items: red, not green, before the
         // overview re-query has landed.
         p.on_event(&Event::StageFinished {
@@ -537,7 +592,75 @@ mod tests {
             row(&p, Stage::Extract).state,
             StageState::CouldNotRun("porter.toml: bad".into())
         );
-        assert_eq!(row(&p, Stage::Extract).glyph, "‼");
+        assert_eq!(row(&p, Stage::Extract).label, "Failed");
+        assert_eq!(row(&p, Stage::Extract).status, "porter.toml: bad");
+    }
+
+    fn with_id(id: &str, r: RunRow) -> RunRow {
+        RunRow { id: id.into(), ..r }
+    }
+
+    #[test]
+    fn stale_keeps_previous_counts() {
+        let mut p = Pipeline::default();
+        p.overview_landed(Ok(Overview {
+            last_runs: vec![
+                (
+                    Stage::Extract,
+                    with_id("2", run(Some(sum(9, 0, 0, 0)), false)),
+                ),
+                (
+                    Stage::Normalise,
+                    with_id("1", run(Some(sum(5, 2, 3, 0)), false)),
+                ),
+            ],
+            ..Default::default()
+        }));
+        let n = row(&p, Stage::Normalise);
+        // The old result, not a new state: same chip, same counts, plus why.
+        assert_eq!(n.state, StageState::Errors);
+        assert_eq!(n.label, "3 errors");
+        assert_eq!(n.stale.as_deref(), Some("extract re-ran since"));
+        assert_eq!(
+            n.counts().as_deref(),
+            Some("5 done · 2 failed · 3 errors · 0 warnings")
+        );
+        assert_eq!(row(&p, Stage::Extract).stale, None);
+    }
+
+    #[test]
+    fn loaded_not_verified_label() {
+        let mut p = Pipeline::default();
+        let applied = |verify: Option<&str>| {
+            let mut last_runs =
+                vec![(Stage::Load, with_id("5", run(Some(sum(4, 0, 0, 0)), false)))];
+            if let Some(id) = verify {
+                last_runs.push((
+                    Stage::Verify,
+                    with_id(id, run(Some(sum(4, 0, 0, 0)), false)),
+                ));
+            }
+            Overview {
+                last_runs,
+                ..Default::default()
+            }
+        };
+        p.overview_landed(Ok(applied(None)));
+        let l = row(&p, Stage::Load);
+        assert_eq!(l.label, "Clean · written");
+        assert_eq!(l.status, "Loaded, not yet verified");
+        // A verify from before this load does not count.
+        p.overview_landed(Ok(applied(Some("4"))));
+        assert_eq!(row(&p, Stage::Load).status, "Loaded, not yet verified");
+        p.overview_landed(Ok(applied(Some("6"))));
+        assert_eq!(row(&p, Stage::Load).status, "");
+        // A dry run never says loaded.
+        p.overview_landed(Ok(Overview {
+            last_runs: vec![(Stage::Load, run(Some(sum(4, 0, 0, 0)), true))],
+            ..Default::default()
+        }));
+        assert_ne!(row(&p, Stage::Load).status, "Loaded, not yet verified");
+        assert_eq!(row(&p, Stage::Verify).state, StageState::Skipped);
     }
 
     #[test]

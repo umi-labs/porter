@@ -216,10 +216,12 @@ pub struct Overview {
     pub open_errors: u64,
     pub open_warnings: u64,
     pub open_infos: u64,
+    /// When porter.toml (and so the mapping) last changed; None if it could not be read.
+    pub config_modified: Option<std::time::SystemTime>,
 }
 
 /// What a stage's last run honestly amounts to. `Running` and `CouldNotRun` are live
-/// states the front end overlays; `stage_state` only derives the stored ones.
+/// states the front end overlays; `stage_view` only derives the stored ones.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StageState {
     Never,
@@ -229,22 +231,91 @@ pub enum StageState {
     Errors,
     Interrupted,
     CouldNotRun(String),
+    /// A load without apply that finished: its counts are what it would write. It wrote
+    /// nothing, so it is never `Clean`.
+    DryRun,
+    /// Not run on purpose: verify while the last load was a dry run.
+    Skipped,
 }
 
-/// Same rules as `exit_code`: failed items or error issues are never Clean.
-pub fn stage_state(overview: &Overview, stage: Stage) -> StageState {
-    let Some((_, run)) = overview.last_runs.iter().find(|(s, _)| *s == stage) else {
-        return StageState::Never;
-    };
-    // A run row with no summary started and never ended (crash/kill): not a success.
-    let Some(sum) = &run.summary else {
-        return StageState::Interrupted;
-    };
+/// A stage as a front end shows it: its state, the run it comes from, and whether that
+/// result still holds.
+#[derive(Clone, Debug)]
+pub struct StageView {
+    pub state: StageState,
+    /// Why the previous result no longer holds ("extract re-ran since"). A modifier: the
+    /// state and counts stay those of `last_run`.
+    pub stale: Option<String>,
+    pub last_run: Option<RunRow>,
+}
+
+/// Same rules as `exit_code`: failed items or error issues are never Clean, and a dry run
+/// that finished is `DryRun` (its errors still show as `Errors`: they block Apply).
+pub fn finished_state(sum: &Summary, dry_run: bool) -> StageState {
     match exit_code(sum) {
         3 => StageState::Interrupted,
         2 => StageState::Errors,
+        _ if dry_run => StageState::DryRun,
         _ if sum.warnings > 0 => StageState::Warnings,
         _ => StageState::Clean,
+    }
+}
+
+/// The state one stored run amounts to.
+pub fn run_state(run: &RunRow) -> StageState {
+    match &run.summary {
+        Some(sum) => finished_state(sum, run.dry_run),
+        // A run row with no summary started and never ended (crash/kill): not a success.
+        None => StageState::Interrupted,
+    }
+}
+
+pub fn stage_state(overview: &Overview, stage: Stage) -> StageState {
+    stage_view(overview, stage).state
+}
+
+pub fn stage_view(ov: &Overview, stage: Stage) -> StageView {
+    let last = |s: Stage| ov.last_runs.iter().find(|(x, _)| *x == s).map(|(_, r)| r);
+    let Some(run) = last(stage) else {
+        // Verify after a dry-run load: there is nothing in the destination to check.
+        let skipped = stage == Stage::Verify && last(Stage::Load).is_some_and(|l| l.dry_run);
+        return StageView {
+            state: if skipped {
+                StageState::Skipped
+            } else {
+                StageState::Never
+            },
+            stale: None,
+            last_run: None,
+        };
+    };
+    StageView {
+        state: run_state(run),
+        stale: stale_reason(ov, stage, run),
+        last_run: Some(run.clone()),
+    }
+}
+
+/// The nearest upstream stage that ran after `run` (run ids are UUIDv7, so they order by
+/// start), or, from normalise on, porter.toml edited after it started. A dry-run load
+/// wrote nothing, so it leaves verify's result standing.
+fn stale_reason(ov: &Overview, stage: Stage, run: &RunRow) -> Option<String> {
+    let pos = STAGES.iter().position(|s| *s == stage)?;
+    for &up in STAGES[..pos].iter().rev() {
+        let newer = ov
+            .last_runs
+            .iter()
+            .any(|(s, r)| *s == up && r.id > run.id && !(up == Stage::Load && r.dry_run));
+        if newer {
+            return Some(format!("{} re-ran since", format!("{up:?}").to_lowercase()));
+        }
+    }
+    let modified = ov.config_modified.filter(|_| pos >= 2)?;
+    match chrono::DateTime::parse_from_rfc3339(&run.started_at) {
+        Ok(t) if modified > std::time::SystemTime::from(t) => Some("mapping changed since".into()),
+        Ok(_) => None,
+        // Fails closed, like `preview_stale`.
+        Err(_) => Some("its start time could not be read".into()),
     }
 }
 
@@ -385,7 +456,12 @@ impl Session {
         let p = self.project.clone();
         blocking(move || {
             let store = p.store();
-            let mut o = Overview::default();
+            let mut o = Overview {
+                config_modified: std::fs::metadata(p.dir().join("porter.toml"))
+                    .and_then(|m| m.modified())
+                    .ok(),
+                ..Default::default()
+            };
             for stage in STAGES {
                 if let Some(r) = store.runs(stage)?.pop() {
                     o.last_runs.push((stage, r));
@@ -928,6 +1004,161 @@ mod tests {
 
     use super::*;
     use tokio_util::sync::CancellationToken;
+
+    /// A finished run; `id` orders runs like UUIDv7 ids do.
+    fn done(stage: Stage, id: &str, dry_run: bool, f: fn(&mut Summary)) -> (Stage, RunRow) {
+        let mut sum = Summary {
+            done: 5,
+            ..Default::default()
+        };
+        f(&mut sum);
+        (
+            stage,
+            RunRow {
+                id: id.into(),
+                porter_version: "0".into(),
+                started_at: "2026-11-12T10:00:00.000Z".into(),
+                ended_at: Some("2026-11-12T10:01:00.000Z".into()),
+                summary: Some(sum),
+                dry_run,
+            },
+        )
+    }
+
+    fn view(runs: Vec<(Stage, RunRow)>, stage: Stage) -> StageView {
+        let ov = Overview {
+            last_runs: runs,
+            ..Default::default()
+        };
+        stage_view(&ov, stage)
+    }
+
+    #[test]
+    fn dry_run_is_its_own_state_and_never_clean() {
+        let v = view(vec![done(Stage::Load, "1", true, |_| {})], Stage::Load);
+        assert_eq!(v.state, StageState::DryRun);
+        // Keeps its would-write counts.
+        assert_eq!(v.last_run.unwrap().summary.unwrap().done, 5);
+        // Warnings in a dry run: still a dry run, never clean or warnings.
+        let v = view(
+            vec![done(Stage::Load, "1", true, |s| s.warnings = 2)],
+            Stage::Load,
+        );
+        assert_eq!(v.state, StageState::DryRun);
+        // Errors still block Apply, so they show as errors.
+        let v = view(
+            vec![done(Stage::Load, "1", true, |s| s.errors = 1)],
+            Stage::Load,
+        );
+        assert_eq!(v.state, StageState::Errors);
+        // The live rule agrees.
+        assert_eq!(
+            finished_state(&Summary::default(), true),
+            StageState::DryRun
+        );
+        assert_eq!(
+            finished_state(&Summary::default(), false),
+            StageState::Clean
+        );
+    }
+
+    #[test]
+    fn verify_after_a_dry_run_load_is_skipped() {
+        let dry = done(Stage::Load, "1", true, |_| {});
+        assert_eq!(
+            view(vec![dry.clone()], Stage::Verify).state,
+            StageState::Skipped
+        );
+        // After a real load verify simply has not run yet.
+        let real = done(Stage::Load, "1", false, |_| {});
+        assert_eq!(view(vec![real], Stage::Verify).state, StageState::Never);
+        assert_eq!(view(vec![], Stage::Verify).state, StageState::Never);
+        // A verify result stands after a later dry run: nothing was written since.
+        let v = view(
+            vec![dry, done(Stage::Verify, "0", false, |_| {})],
+            Stage::Verify,
+        );
+        assert_eq!((v.state, v.stale), (StageState::Clean, None));
+    }
+
+    #[test]
+    fn stale_by_upstream_keeps_the_previous_result() {
+        let runs = vec![
+            done(Stage::Extract, "3", false, |_| {}),
+            done(Stage::Normalise, "2", false, |s| s.errors = 4),
+            done(Stage::Schema, "4", false, |_| {}),
+        ];
+        let v = view(runs.clone(), Stage::Normalise);
+        assert_eq!(
+            v.state,
+            StageState::Errors,
+            "the old result, not a new state"
+        );
+        assert_eq!(v.stale.as_deref(), Some("extract re-ran since"));
+        assert_eq!(v.last_run.unwrap().summary.unwrap().errors, 4);
+        // Schema ran after both: fresh. Extract has nothing upstream that re-ran.
+        assert_eq!(view(runs.clone(), Stage::Schema).stale, None);
+        assert_eq!(view(runs.clone(), Stage::Extract).stale, None);
+        // The nearest upstream is named.
+        let mut more = runs;
+        more.push(done(Stage::Load, "1", false, |_| {}));
+        assert_eq!(
+            view(more, Stage::Load).stale.as_deref(),
+            Some("schema re-ran since")
+        );
+        // A real load after verify makes verify stale; a dry one does not (above).
+        let v = view(
+            vec![
+                done(Stage::Load, "2", false, |_| {}),
+                done(Stage::Verify, "1", false, |_| {}),
+            ],
+            Stage::Verify,
+        );
+        assert_eq!(v.stale.as_deref(), Some("load re-ran since"));
+        // Never run: nothing to be stale.
+        assert_eq!(
+            view(
+                vec![done(Stage::Analyse, "9", false, |_| {})],
+                Stage::Extract
+            )
+            .stale,
+            None
+        );
+    }
+
+    #[test]
+    fn stale_by_mapping_from_normalise_on() {
+        let at = |iso: &str| {
+            Some(std::time::SystemTime::from(
+                chrono::DateTime::parse_from_rfc3339(iso).unwrap(),
+            ))
+        };
+        let runs = vec![
+            done(Stage::Extract, "1", false, |_| {}),
+            done(Stage::Normalise, "2", false, |_| {}),
+            done(Stage::Load, "3", true, |_| {}),
+        ];
+        let mut ov = Overview {
+            last_runs: runs,
+            config_modified: at("2026-11-12T11:00:00Z"),
+            ..Default::default()
+        };
+        assert_eq!(
+            stage_view(&ov, Stage::Extract).stale,
+            None,
+            "extract ignores mapping"
+        );
+        let n = stage_view(&ov, Stage::Normalise);
+        assert_eq!(n.stale.as_deref(), Some("mapping changed since"));
+        assert_eq!(n.state, StageState::Clean);
+        let l = stage_view(&ov, Stage::Load);
+        assert_eq!(
+            (l.state, l.stale.as_deref()),
+            (StageState::DryRun, Some("mapping changed since"))
+        );
+        ov.config_modified = at("2026-11-12T09:00:00Z");
+        assert_eq!(stage_view(&ov, Stage::Normalise).stale, None);
+    }
 
     #[tokio::test]
     async fn interrupt_stops_run_even_with_keep_going() {

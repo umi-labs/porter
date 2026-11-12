@@ -36,7 +36,10 @@ pub fn middle_truncate(path: &str, max_chars: usize) -> String {
     }
     // The tail alone is too long: keep the last segment, shorten the second-last from its head.
     let tail = tail.trim_start_matches('/');
-    let (second, last) = tail.rsplit_once('/').unwrap_or(("", tail));
+    // A single segment has nothing to drop: never invent a "/" or an ellipsis.
+    let Some((second, last)) = tail.rsplit_once('/') else {
+        return path.to_string();
+    };
     let room = max_chars.saturating_sub(len(last) + 2);
     let skip = len(second).saturating_sub(room);
     let second: String = second.chars().skip(skip).collect();
@@ -114,6 +117,14 @@ mod tests {
             ("/a", "/b/c"),
             "a trailing slash is ignored"
         );
+    }
+
+    #[test]
+    fn a_single_segment_is_never_cut_or_prefixed() {
+        assert_eq!(middle_truncate("abcdefghij", 5), "abcdefghij");
+        assert_eq!(middle_truncate("/abcdefghij", 5), "/abcdefghij");
+        assert_eq!(middle_truncate("/a/b/c", 0), "…/c");
+        assert_eq!(middle_truncate("", 0), "");
     }
 
     #[test]

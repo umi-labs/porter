@@ -5,13 +5,16 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, SystemTime};
 
+use gpui::prelude::FluentBuilder;
 use gpui::{
-    AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Subscription, Task,
-    Window, div, hsla,
+    AppContext, Context, Entity, FocusHandle, FontWeight, InteractiveElement, IntoElement,
+    KeyDownEvent, ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Task,
+    Window, div, hsla, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::{ActiveTheme, Disableable, Root, h_flex, v_flex};
+use gpui_component::checkbox::Checkbox;
+use gpui_component::input::{Input, InputEvent, InputState, Paste};
+use gpui_component::{ActiveTheme, Root, h_flex, v_flex};
 use porter_engine::events::Event;
 use porter_engine::report::Coverage;
 use porter_engine::session::{MediaRow, RouteFilter, RunOutcome, RunPlan, Session, StageOpts};
@@ -20,7 +23,9 @@ use porter_model::{ItemId, Stage};
 
 use crate::bridge::{Bridge, DataResult, UiEvent, coalesce};
 use crate::sidebar::{self, Section, View};
+use crate::theme::{radius, text, tokens};
 use crate::thumbs::{Cache, Thumb};
+use crate::ui::buttons::{Kind, button};
 use crate::views;
 use crate::vm::apply::{ApplySheet, age};
 use crate::vm::content::{Content, NodeKey, Query};
@@ -61,6 +66,8 @@ pub struct ProjectWindow {
     /// The apply confirmation sheet, while open.
     apply: Option<ApplySheet>,
     apply_input: Entity<InputState>,
+    /// Cancel takes focus when the sheet opens; Enter there cancels, never applies.
+    apply_cancel: FocusHandle,
     _subs: Vec<Subscription>,
     /// Closing: the run was cancelled and the window goes once it has stopped.
     closing: bool,
@@ -111,6 +118,7 @@ impl ProjectWindow {
             kinds: None,
             apply: None,
             apply_input,
+            apply_cancel: cx.focus_handle(),
             _subs: subs,
             closing: false,
             close_prompt: false,
@@ -432,23 +440,22 @@ impl ProjectWindow {
             DataResult::ThumbReady => {}
             DataResult::Preview {
                 confirm: false,
-                url,
-                preview,
+                facts,
             } => {
                 self.apply_input
                     .update(cx, |s, cx| s.set_value("", window, cx));
-                self.apply = Some(ApplySheet::new(url, preview));
+                self.apply = Some(ApplySheet::new(facts));
+                window.focus(&self.apply_cancel);
             }
-            // The recheck after Apply was pressed: only acts while the sheet is open.
+            // The recheck after Apply was pressed: every gate again, while the sheet is open.
             DataResult::Preview {
                 confirm: true,
-                url,
-                preview,
+                facts,
             } => {
                 let Some(sheet) = &mut self.apply else {
                     return;
                 };
-                match sheet.finish(&url, preview) {
+                match sheet.finish(facts) {
                     Ok(plan) => {
                         self.apply = None;
                         self.start(plan, cx);
@@ -482,7 +489,7 @@ impl ProjectWindow {
         cx.notify();
     }
 
-    fn open_apply(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn open_apply(&mut self, cx: &mut Context<Self>) {
         if !self.pipeline.busy() {
             self.bridge.preview(false);
         }
@@ -593,7 +600,7 @@ impl ProjectWindow {
     }
 
     fn top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+        let t = tokens(cx);
         let busy = self.pipeline.busy();
         let session = self.bridge.session();
         let config = session.config();
@@ -603,40 +610,75 @@ impl ProjectWindow {
             config.project.name.clone()
         };
         let has_dest = !config.destination.adapter.is_empty();
-        let route = format!(
-            "{} → {}",
-            config.source.adapter,
-            if has_dest {
-                &config.destination.adapter
-            } else {
-                "no destination"
+        let dest = if has_dest {
+            match host_of(&config.destination.url) {
+                Some(h) => format!("{} · {h}", config.destination.adapter),
+                None => config.destination.adapter.clone(),
             }
-        );
+        } else {
+            "no destination".into()
+        };
+        let enabled = |b: gpui::Stateful<gpui::Div>, on: bool| {
+            if on {
+                b
+            } else {
+                b.opacity(0.5).cursor_default()
+            }
+        };
+        let run_all = button("run-all", Kind::Secondary, "Run all", cx);
+        let dry_load = button("dry-load", Kind::Primary, "Load (dry run)", cx);
+        let apply = button("apply-load", Kind::ApplyGhost, "Apply load…", cx);
         h_flex()
             .w_full()
+            .min_w_0()
             .px_4()
             .py_2()
             .gap_3()
             .justify_between()
-            .bg(theme.title_bar)
+            .bg(t.surface)
             .border_b_1()
-            .border_color(theme.border)
+            .border_color(t.border)
             .child(
-                h_flex().gap_3().child(div().text_lg().child(name)).child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child(route),
-                ),
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_shrink()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(text::HEADING)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(name),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_shrink()
+                            .min_w_0()
+                            .gap_1()
+                            .text_size(text::DENSE)
+                            .text_color(t.muted)
+                            .child(div().flex_none().child(config.source.adapter.clone()))
+                            .child(div().flex_none().text_color(t.faint).child("→"))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .when(!has_dest, |d| d.text_color(t.warn))
+                                    .child(dest),
+                            ),
+                    ),
             )
             .child(
                 h_flex()
+                    .flex_none()
                     .gap_2()
-                    .child(
-                        Button::new("run-all")
-                            .label("Run all")
-                            .disabled(busy)
-                            .on_click(cx.listener(|this, _, _, cx| {
+                    .child(enabled(
+                        if busy {
+                            run_all
+                        } else {
+                            run_all.on_click(cx.listener(|this, _, _, cx| {
                                 this.start(
                                     RunPlan::All {
                                         keep_going: false,
@@ -644,101 +686,270 @@ impl ProjectWindow {
                                     },
                                     cx,
                                 )
-                            })),
-                    )
-                    .child(
-                        Button::new("dry-load")
-                            .label("Load (dry run)")
-                            .disabled(busy)
-                            .on_click(cx.listener(|this, _, _, cx| {
+                            }))
+                        },
+                        !busy,
+                    ))
+                    .child(enabled(
+                        if busy {
+                            dry_load
+                        } else {
+                            dry_load.on_click(cx.listener(|this, _, _, cx| {
                                 this.start(RunPlan::Stage(Stage::Load, dry()), cx)
-                            })),
-                    )
-                    .child(
-                        Button::new("apply-load")
-                            .label("Apply load…")
-                            .disabled(busy || !has_dest)
-                            .on_click(cx.listener(|this, _, _, cx| this.open_apply(cx))),
-                    ),
+                            }))
+                        },
+                        !busy,
+                    ))
+                    .child(enabled(
+                        if busy || !has_dest {
+                            apply
+                        } else {
+                            apply.on_click(cx.listener(|this, _, _, cx| this.open_apply(cx)))
+                        },
+                        !busy && has_dest,
+                    )),
             )
     }
 
     fn apply_sheet(&self, sheet: &ApplySheet, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = tokens(cx);
         let typed = self.apply_input.read(cx).value();
         let ok = sheet.check(&typed).is_ok() && !sheet.confirming() && !self.pipeline.busy();
-        let theme = cx.theme();
-        let url = if sheet.url.is_empty() {
-            "(no destination.url set)".to_string()
-        } else {
-            sheet.url.clone()
+        let session = self.bridge.session();
+        let adapter = session.config().destination.adapter.clone();
+        let host = sheet.host().map(str::to_string);
+        let section = |title: &'static str| {
+            div()
+                .text_size(text::MICRO)
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(t.muted)
+                .child(title)
         };
-        let mut lines = vec![];
-        match &sheet.preview {
-            None => lines.push("No dry run yet: run Load (dry run) first.".to_string()),
-            Some(p) => {
-                let when = format!("Dry run from {}", age(p.at, SystemTime::now()));
-                match &p.stale {
-                    Some(why) => lines.push(format!("{when}; {why}. Run Load (dry run) again.")),
-                    None => {
-                        let total: u64 = p.counts.values().sum();
-                        lines.push(format!("{when}. Items the load would send ({total}):"));
-                        lines.extend(p.counts.iter().map(|(k, n)| format!("  {k}: {n}")));
+        let gates = sheet.gates().into_iter().map(|g| {
+            let (mark, color) = if g.pass {
+                ("✓", t.text)
+            } else {
+                ("✕", t.err)
+            };
+            h_flex()
+                .gap_2()
+                .items_start()
+                .child(div().flex_none().w(px(14.)).text_color(color).child(mark))
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .child(div().text_color(color).child(g.title))
+                        .child(
+                            div()
+                                .text_size(text::DENSE)
+                                .text_color(t.muted)
+                                .child(g.detail),
+                        ),
+                )
+        });
+        let warnings = sheet.open_warnings();
+        let ack = (warnings > 0).then(|| {
+            Checkbox::new("apply-ack")
+                .label(format!("I've reviewed the {warnings} open warnings"))
+                .checked(sheet.acked())
+                .on_click(cx.listener(|this, _: &bool, _, cx| {
+                    if let Some(s) = &mut this.apply {
+                        s.toggle_ack();
                     }
-                }
-            }
-        }
-        let prompt = match sheet.host() {
-            Some(h) => format!("Type {h} to confirm"),
-            None => "destination.url has no host; apply is not possible".into(),
+                    cx.notify();
+                }))
+        });
+        let writes = sheet.writes();
+        // What will be written: only from a fresh dry run.
+        let will = sheet
+            .facts
+            .preview
+            .as_ref()
+            .filter(|_| !sheet.needs_dry_run())
+            .map(|p| {
+                let row = |k: String, n: String| {
+                    h_flex()
+                        .justify_between()
+                        .gap_3()
+                        .text_size(text::DENSE)
+                        .child(div().min_w_0().truncate().child(k))
+                        .child(div().flex_none().child(n))
+                };
+                v_flex()
+                    .gap_1()
+                    .child(section("WILL BE WRITTEN"))
+                    .child(
+                        div()
+                            .text_size(text::DENSE)
+                            .text_color(t.muted)
+                            .child(format!(
+                                "From the dry run {} · these are the writes Apply will make",
+                                age(p.at, SystemTime::now())
+                            )),
+                    )
+                    .children(p.counts.iter().map(|(k, n)| row(k.clone(), n.to_string())))
+                    .child(
+                        row("Total".into(), writes.to_string()).font_weight(FontWeight::SEMIBOLD),
+                    )
+            });
+        let wont = (!sheet.facts.not_written.is_empty()).then(|| {
+            v_flex()
+                .gap_1()
+                .p_2()
+                .rounded(radius::SM)
+                .bg(t.warn_bg)
+                .child(section("NOT WRITTEN"))
+                .children(
+                    sheet
+                        .facts
+                        .not_written
+                        .iter()
+                        .map(|l| div().text_size(text::DENSE).child(l.clone())),
+                )
+        });
+        let confirm: gpui::AnyElement = if sheet.needs_dry_run() {
+            // No confirm field until a fresh dry run exists.
+            v_flex()
+                .gap_2()
+                .child(
+                    div()
+                        .text_size(text::DENSE)
+                        .text_color(t.muted)
+                        .child("There's no confirm field until a fresh dry run exists."),
+                )
+                .child(if self.pipeline.busy() {
+                    button("apply-dry", Kind::Primary, "Run dry run now", cx)
+                        .opacity(0.5)
+                        .cursor_default()
+                } else {
+                    button("apply-dry", Kind::Primary, "Run dry run now", cx).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.apply = None;
+                            this.start(RunPlan::Stage(Stage::Load, dry()), cx);
+                        },
+                    ))
+                })
+                .into_any_element()
+        } else {
+            let hint = match &host {
+                Some(h) if typed.trim().eq_ignore_ascii_case(h) => "Host matches.",
+                Some(_) if !typed.is_empty() => "Doesn't match the destination host.",
+                Some(_) => "Paste is disabled for this field.",
+                None => "destination.url has no host; apply is not possible.",
+            };
+            v_flex()
+                .gap_1()
+                .child(div().text_size(text::DENSE).child(match &host {
+                    Some(h) => format!("Type {h} to confirm"),
+                    None => "Type the destination host to confirm".into(),
+                }))
+                // Paste is refused here, before the input's own handler sees it: the host is
+                // typed, never pasted (keyboard, Edit menu and context menu all send `Paste`).
+                .child(
+                    div()
+                        .capture_action(|_: &Paste, _, cx| cx.stop_propagation())
+                        .child(Input::new(&self.apply_input)),
+                )
+                .child(div().text_size(text::MICRO).text_color(t.muted).child(hint))
+                .into_any_element()
         };
-        let card = v_flex()
-            .w_128()
-            .max_h_full()
-            .p_6()
-            .gap_3()
-            .bg(theme.background)
+        let label = if sheet.confirming() {
+            "Checking…".to_string()
+        } else {
+            format!("Apply {writes} writes")
+        };
+        // Red only when it can be pressed; no key binding, and Enter never reaches it.
+        let apply = div()
+            .id("apply-confirm")
+            .flex()
+            .items_center()
+            .h(px(32.))
+            .px(px(10.))
+            .rounded(radius::SM)
             .border_1()
-            .border_color(theme.border)
-            .rounded_lg()
-            .child(div().text_lg().child("Apply load"))
+            .font_weight(FontWeight::MEDIUM)
+            .whitespace_nowrap()
+            .child(label);
+        let apply = if ok {
+            apply
+                .border_color(t.err_solid)
+                .bg(t.err_solid)
+                .text_color(t.on_err)
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| this.confirm_apply(cx)))
+        } else {
+            apply.border_color(t.border_strong).text_color(t.muted)
+        };
+        let cancel = button("apply-cancel", Kind::Secondary, "Cancel", cx)
+            .track_focus(&self.apply_cancel)
+            .focus(|s| s.border_color(t.accent))
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                if matches!(e.keystroke.key.as_str(), "enter" | "space") {
+                    this.close_apply(cx);
+                }
+            }))
+            .on_click(cx.listener(|this, _, _, cx| this.close_apply(cx)));
+        let card = v_flex()
+            .id("apply-sheet")
+            .w(px(560.))
+            .max_w_full()
+            .max_h_full()
+            .overflow_y_scroll()
+            .p_6()
+            .gap_4()
+            .bg(t.bg)
+            .border_1()
+            .border_color(t.border)
+            .rounded(radius::XL)
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                if e.keystroke.key == "escape" {
+                    this.close_apply(cx);
+                }
+            }))
             .child(
-                div()
-                    .text_color(theme.danger)
-                    .child("This writes to a live CMS."),
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(text::TITLE)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Apply load to the destination"),
+                    )
+                    .child(div().text_size(text::DENSE).text_color(t.muted).child(format!(
+                        "This writes to {} ({adapter}). Re-running updates by source identity, but nothing here is undone automatically.",
+                        host.clone().unwrap_or_else(|| sheet.facts.url.clone())
+                    ))),
             )
-            .child(div().child(format!("Destination: {url}")))
-            .children(lines.into_iter().map(|l| div().text_sm().child(l)))
-            .child(div().text_sm().child(prompt))
-            .child(Input::new(&self.apply_input))
+            .child(v_flex().gap_2().child(section("GATES")).children(gates).children(ack))
+            .children(will)
+            .children(wont)
+            .child(confirm)
             .children(
                 sheet
                     .error
                     .clone()
-                    .map(|e| div().text_sm().text_color(theme.danger).child(e)),
+                    .map(|e| div().text_size(text::DENSE).text_color(t.err).child(e)),
             )
             .child(
                 h_flex()
-                    .justify_end()
+                    .justify_between()
                     .gap_2()
                     .child(
-                        Button::new("apply-cancel")
-                            .label("Cancel")
-                            .on_click(cx.listener(|this, _, _, cx| this.close_apply(cx))),
+                        div()
+                            .text_size(text::MICRO)
+                            .text_color(t.muted)
+                            .child("⎋ Cancel is the default. Apply has no shortcut."),
                     )
-                    .child(
-                        Button::new("apply-confirm")
-                            .danger()
-                            .label(if sheet.confirming() {
-                                "Checking…"
-                            } else {
-                                "Apply"
-                            })
-                            .disabled(!ok)
-                            .on_click(cx.listener(|this, _, _, cx| this.confirm_apply(cx))),
-                    ),
+                    .child(h_flex().gap_2().child(cancel).child(apply)),
             );
         overlay(card)
     }
+}
+
+fn host_of(url: &str) -> Option<String> {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
 }
 
 /// Dims the window and centres `card` over it.

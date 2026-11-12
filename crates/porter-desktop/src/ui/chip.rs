@@ -9,9 +9,8 @@ use porter_engine::session::StageState;
 
 use crate::theme::{Tokens, radius, tokens};
 
-/// Every state the design can show. The engine derives only the first seven stored ones
-/// (see `From<&StageState>`); `Stale`, `DryRun` and `Skipped` are overlays the front end
-/// applies (`of`, `Look::stale`).
+/// Every state the design can show, from the engine's `StageState` (see
+/// `From<&StageState>`). Stale is a modifier on a previous result (`Look::stale`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChipState {
     NotRun,
@@ -24,6 +23,7 @@ pub enum ChipState {
     Interrupted,
     /// An upstream stage or the mapping changed since. Prefer `Look::stale` on the
     /// previous result; this is the bare chip for when there is none.
+    #[allow(dead_code)]
     Stale,
     DryRun,
     Skipped,
@@ -39,17 +39,8 @@ impl From<&StageState> for ChipState {
             StageState::Errors => Self::Errors,
             StageState::Interrupted => Self::Interrupted,
             StageState::CouldNotRun(_) => Self::Failed,
-        }
-    }
-}
-
-impl ChipState {
-    /// The state a stored run shows. A load without `--apply` wrote nothing, so a finished
-    /// dry run is `DryRun` and never green; errors stay errors because they block Apply.
-    pub fn of(state: &StageState, dry_run: bool) -> Self {
-        match (Self::from(state), dry_run) {
-            (Self::Clean | Self::Warnings, true) => Self::DryRun,
-            (s, _) => s,
+            StageState::DryRun => Self::DryRun,
+            StageState::Skipped => Self::Skipped,
         }
     }
 }
@@ -231,6 +222,7 @@ impl Chip {
         self
     }
 
+    #[allow(dead_code)] // for headers (D3)
     pub fn large(mut self) -> Self {
         self.large = true;
         self
@@ -387,16 +379,20 @@ mod tests {
         assert_eq!(m(StageState::Errors), C::Errors);
         assert_eq!(m(StageState::Interrupted), C::Interrupted);
         assert_eq!(m(StageState::CouldNotRun("boom".into())), C::Failed);
+        assert_eq!(m(StageState::DryRun), C::DryRun);
+        assert_eq!(m(StageState::Skipped), C::Skipped);
     }
 
+    /// Dry run, clean and skipped share no tone, shape or mark, each on its own.
     #[test]
-    fn a_dry_run_is_never_green() {
-        use ChipState as C;
-        assert_eq!(ChipState::of(&StageState::Clean, true), C::DryRun);
-        assert_eq!(ChipState::of(&StageState::Warnings, true), C::DryRun);
-        assert_eq!(ChipState::of(&StageState::Clean, false), C::Clean);
-        // Errors block Apply whether or not it was a dry run.
-        assert_eq!(ChipState::of(&StageState::Errors, true), C::Errors);
-        assert_eq!(ChipState::of(&StageState::Never, true), C::NotRun);
+    fn dry_clean_skipped_differ_in_every_way() {
+        let l = [ChipState::Clean, ChipState::DryRun, ChipState::Skipped].map(stage_look);
+        for (i, a) in l.iter().enumerate() {
+            for b in &l[i + 1..] {
+                assert_ne!(a.tone, b.tone, "{} vs {}", a.word, b.word);
+                assert_ne!(a.shape, b.shape, "{} vs {}", a.word, b.word);
+                assert_ne!(a.glyph, b.glyph, "{} vs {}", a.word, b.word);
+            }
+        }
     }
 }

@@ -436,14 +436,23 @@ mod tests {
             ..Default::default()
         });
         app.panels.stages.sel = 4;
-        assert!(stages_panel(&app).contains("✓ load       clean (dry run)"));
+        let out = stages_panel(&app);
+        assert!(
+            out.contains("◌ load       dry run, nothing written"),
+            "{out}"
+        );
+        assert!(!out.contains('✓'), "a dry run is never a tick: {out}");
         let detail = render(&app, 120, 40);
         assert!(detail.contains("dry run: nothing was written"), "{detail}");
         // Live: `l` then the stage ends, before the overview re-query lands.
         let (mut app, _d) = app_with(None, false);
         press_key(&mut app, KeyCode::Char('l'));
         load_finished(&mut app);
-        assert!(stages_panel(&app).contains("clean (dry run)"));
+        let out = stages_panel(&app);
+        assert!(
+            out.contains("◌ load       dry run, nothing written"),
+            "{out}"
+        );
         // A real apply says nothing of the sort.
         let (mut app, _d) = app_with(None, false);
         press_key(&mut app, KeyCode::Char('L'));
@@ -459,6 +468,24 @@ mod tests {
         load_finished(&mut app);
         let out = stages_panel(&app);
         assert!(out.contains("✓ load") && !out.contains("dry run"), "{out}");
+    }
+
+    #[test]
+    fn stale_stage_keeps_its_result_and_says_why() {
+        let (mut app, _d) = app_with(sum(|_| {}), true);
+        let ov = app.panels.overview.as_mut().unwrap();
+        let mut newer = ov.last_runs[0].1.clone();
+        newer.id = "s".into();
+        let mut normalise = newer.clone();
+        normalise.id = "a".into();
+        ov.last_runs.push((Stage::Normalise, normalise));
+        ov.last_runs[0].1 = newer;
+        let out = stages_panel(&app);
+        assert!(
+            out.contains("✓ normalise  clean ↻ stale: extract re"),
+            "{out}"
+        );
+        insta::assert_snapshot!(out);
     }
 
     #[test]

@@ -2,22 +2,24 @@
 //! analysis, and open issues by kind.
 
 use gpui::{
-    Context, Hsla, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement,
-    Styled, div,
+    Context, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, div, px,
 };
-use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::tooltip::Tooltip;
-use gpui_component::{ActiveTheme, Disableable, Theme, h_flex, v_flex};
-use porter_engine::session::RunPlan;
-use porter_model::Severity;
+use gpui_component::{ActiveTheme, Theme, h_flex, v_flex};
+use porter_engine::session::{RunPlan, StageState};
+use porter_model::{Severity, Stage};
 
 use crate::project_window::{ProjectWindow, dry};
+use crate::theme::{radius, text, tokens};
+use crate::ui::buttons::{Kind, button};
+use crate::ui::chip::{Chip, ChipState, STALE_OPACITY};
+use crate::ui::severity::SeverityChip;
 use crate::vm::pipeline::{StageRow, Tone, relative_time};
 
 pub fn tone_color(t: Tone, theme: &Theme) -> Hsla {
     match t {
         Tone::Muted => theme.muted_foreground,
-        Tone::Accent => theme.info,
         Tone::Success => theme.success,
         Tone::Warning => theme.warning,
         Tone::Danger => theme.danger,
@@ -46,7 +48,10 @@ pub fn render(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> impl IntoEl
         .overflow_y_scroll()
         .p_4()
         .gap_6()
-        .child(heading("Pipeline"))
+        .child(v_flex().gap_1().child(heading("Pipeline")).child(muted(
+            "Stages re-run independently. A changed upstream stage marks the ones after it stale.",
+            cx,
+        )))
         .child(strip)
         .child(heading("Coverage"))
         .child(coverage(w, cx))
@@ -65,64 +70,132 @@ fn muted(t: impl Into<gpui::SharedString>, cx: &Context<ProjectWindow>) -> gpui:
         .child(t.into())
 }
 
+/// A card button that does nothing while disabled.
+fn action(
+    id: (&'static str, usize),
+    label: &'static str,
+    enabled: bool,
+    cx: &mut Context<ProjectWindow>,
+    f: impl Fn(&mut ProjectWindow, &mut Context<ProjectWindow>) + 'static,
+) -> impl IntoElement {
+    let b = button(id, Kind::Secondary, label, cx);
+    if enabled {
+        b.on_click(cx.listener(move |this, _, _, cx| f(this, cx)))
+    } else {
+        b.opacity(0.5).cursor_default()
+    }
+}
+
 fn stage_card(w: &ProjectWindow, r: StageRow, cx: &mut Context<ProjectWindow>) -> impl IntoElement {
-    let theme = cx.theme();
+    let t = tokens(cx);
     let busy = w.pipeline.busy();
-    let running = w.pipeline.running_stage() == Some(r.stage);
     let stage = r.stage;
-    let counts = r.summary.as_ref().map(|s| {
-        format!(
-            "{} done · {} failed · {} errors · {} warnings",
-            s.done, s.failed, s.errors, s.warnings
+    let i = stage as usize;
+    let running = matches!(r.state, StageState::Running);
+    let counts = r.counts();
+    let mut chip = Chip::new(ChipState::from(&r.state)).label(r.label.clone());
+    if r.stale.is_some() {
+        chip = chip.stale();
+    }
+    // Stale is a modifier: the old chip and counts stay, dimmed, and the reason says why.
+    let mut result = v_flex()
+        .gap_1()
+        .min_w_0()
+        .child(chip)
+        .children(counts.map(|c| small(c, t.text)))
+        .children((!r.status.is_empty()).then(|| small(r.status.clone(), t.muted)));
+    if r.stale.is_some() {
+        result = result.opacity(STALE_OPACITY);
+    }
+    let button = match &r.state {
+        StageState::Running => action(
+            ("cancel", i),
+            "Cancel",
+            !w.pipeline.cancelling,
+            cx,
+            |this, cx| this.cancel(cx),
         )
-    });
+        .into_any_element(),
+        // A writing load resumes through the Apply sheet and its gates, never directly.
+        StageState::Interrupted if stage == Stage::Load && !r.dry_run => {
+            action(("resume", i), "Resume…", !busy, cx, |this, cx| {
+                this.open_apply(cx)
+            })
+            .into_any_element()
+        }
+        // The engine skips what is already done.
+        StageState::Interrupted => action(("resume", i), "Resume", !busy, cx, move |this, cx| {
+            this.start(RunPlan::Stage(stage, dry()), cx)
+        })
+        .into_any_element(),
+        _ => action(
+            ("run", i),
+            if stage == Stage::Load {
+                "Dry run"
+            } else {
+                "Run"
+            },
+            !busy,
+            cx,
+            move |this, cx| this.start(RunPlan::Stage(stage, dry()), cx),
+        )
+        .into_any_element(),
+    };
     v_flex()
         .flex_1()
         .min_w_0()
         .p_3()
-        .gap_1()
+        .gap_2()
+        .rounded(radius::MD)
         .border_1()
-        .border_color(theme.border)
-        .rounded_md()
+        .border_color(if running { t.accent } else { t.border })
+        .bg(if running { t.accent_bg } else { t.surface })
         .child(
             h_flex()
                 .gap_2()
-                .child(div().text_color(tone_color(r.tone, theme)).child(r.glyph))
-                .child(div().child(r.name.clone())),
-        )
-        .child(
-            div()
-                .text_sm()
-                .text_color(tone_color(r.tone, theme))
-                .child(r.status.clone()),
-        )
-        .children(r.last_run.clone().map(|t| {
-            let shown = relative_time(&t, chrono::Utc::now());
-            muted(format!("last run {shown}"), cx)
-                .id(("last-run", stage as usize))
-                .tooltip(move |window, cx| Tooltip::new(t.clone()).build(window, cx))
-        }))
-        .children(counts.map(|c| muted(c, cx)))
-        .child(
-            h_flex()
-                .pt_2()
-                .gap_1()
+                .min_w_0()
+                .text_size(text::MICRO)
+                .text_color(t.faint)
+                .child(format!("{}", i + 1))
                 .child(
-                    Button::new(("run", stage as usize))
-                        .label("Run")
-                        .disabled(busy)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.start(RunPlan::Stage(stage, dry()), cx)
-                        })),
-                )
-                .child(
-                    Button::new(("cancel", stage as usize))
-                        .ghost()
-                        .label("Cancel")
-                        .disabled(!running || w.pipeline.cancelling)
-                        .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(text::BODY)
+                        .text_color(t.text)
+                        .child(capitalised(&r.name)),
                 ),
         )
+        .child(result)
+        .children(
+            r.stale
+                .clone()
+                .map(|why| small(format!("↻ {why}"), t.muted)),
+        )
+        .children(r.last_run.clone().map(|when| {
+            let shown = relative_time(&when, chrono::Utc::now());
+            small(shown, t.faint)
+                .id(("last-run", i))
+                .tooltip(move |window, cx| Tooltip::new(when.clone()).build(window, cx))
+        }))
+        .child(h_flex().pt_1().child(button))
+}
+
+fn small(s: impl Into<SharedString>, color: Hsla) -> gpui::Div {
+    div()
+        .text_size(text::DENSE)
+        .line_height(px(16.))
+        .text_color(color)
+        .min_w_0()
+        .child(s.into())
+}
+
+fn capitalised(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|f| f.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
 }
 
 fn coverage(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> gpui::AnyElement {
@@ -202,12 +275,7 @@ fn issues(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> gpui::AnyElemen
             .py_1()
             .border_b_1()
             .border_color(theme.border)
-            .child(
-                div()
-                    .w_4()
-                    .text_color(tone_color(severity_tone(k.worst), theme))
-                    .child("●"),
-            )
+            .child(div().w_24().child(SeverityChip(k.worst)))
             .child(div().w_48().child(k.kind.clone()))
             .child(div().child(k.total.to_string()))
     });

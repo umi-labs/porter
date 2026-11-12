@@ -1,7 +1,7 @@
 use super::{accent, panel, tint};
 use crate::app::{App, Panel, Progress};
-use porter_engine::events::{Summary, exit_code};
-use porter_engine::session::{Overview, STAGES, StageState, stage_state};
+use porter_engine::events::Summary;
+use porter_engine::session::{Overview, STAGES, StageState, finished_state, stage_view};
 use porter_engine::store::RunRow;
 use porter_model::Stage;
 use ratatui::{
@@ -39,6 +39,8 @@ pub struct StageRow {
     pub state: StageState,
     pub last_run: Option<RunSummaryView>,
     pub progress: Option<Progress>,
+    /// Why the stored result no longer holds (`session::stage_view`).
+    pub stale: Option<String>,
 }
 
 pub fn name(s: Stage) -> String {
@@ -54,14 +56,17 @@ pub fn rows(app: &App) -> Vec<StageRow> {
         .iter()
         .map(|&stage| {
             let fin = st.finished_of(stage);
+            let view = stage_view(ov, stage);
+            let mut stale = None;
             let state = if st.running == Some(stage) {
                 StageState::Running
             } else if let Some(e) = st.could_not_run_of(stage) {
                 StageState::CouldNotRun(e.to_string())
             } else if let Some(sum) = fin {
-                finished_state(sum)
+                finished_state(sum, stage == Stage::Load && st.dry_load)
             } else {
-                stage_state(ov, stage)
+                stale = view.stale;
+                view.state
             };
             let stored: Option<RunSummaryView> = ov
                 .last_runs
@@ -83,19 +88,10 @@ pub fn rows(app: &App) -> Vec<StageRow> {
                     None => stored,
                 },
                 progress: st.progress_of(stage).cloned(),
+                stale,
             }
         })
         .collect()
-}
-
-/// Same rules as `stage_state`, from a summary the engine just reported.
-fn finished_state(sum: &Summary) -> StageState {
-    match exit_code(sum) {
-        3 => StageState::Interrupted,
-        2 => StageState::Errors,
-        _ if sum.warnings > 0 => StageState::Warnings,
-        _ => StageState::Clean,
-    }
 }
 
 pub fn glyph(s: &StageState) -> (&'static str, Option<Color>) {
@@ -107,6 +103,9 @@ pub fn glyph(s: &StageState) -> (&'static str, Option<Color>) {
         StageState::Errors => ("✗", Some(Color::Red)),
         StageState::Interrupted => ("⏸", Some(Color::Yellow)),
         StageState::CouldNotRun(_) => ("‼", Some(Color::Red)),
+        // Wrote nothing: never the green tick.
+        StageState::DryRun => ("◌", Some(Color::Blue)),
+        StageState::Skipped => ("–", None),
     }
 }
 
@@ -126,6 +125,8 @@ fn state_text(s: &StageState) -> &'static str {
         StageState::Errors => "errors",
         StageState::Interrupted => "interrupted",
         StageState::CouldNotRun(_) => "could not run",
+        StageState::DryRun => "dry run, nothing written",
+        StageState::Skipped => "skipped",
     }
 }
 
@@ -139,18 +140,29 @@ pub fn render(app: &App, f: &mut Frame, area: Rect) {
         .enumerate()
         .map(|(i, r)| {
             let (g, c) = glyph(&r.state);
+            // Stale keeps the old glyph, greyed: a result that no longer holds is not green.
+            let c = if r.stale.is_some() {
+                Some(Color::DarkGray)
+            } else {
+                c
+            };
             let sel = i == app.panels.stages.sel && focused;
-            let tail = match (&r.progress, &r.state) {
+            let mut tail = match (&r.progress, &r.state) {
                 (Some(p), _) => progress_text(p),
                 (None, StageState::Running) => "starting…".into(),
                 (None, StageState::CouldNotRun(e)) => {
                     format!("could not run: {}", e.lines().next().unwrap_or(""))
                 }
-                (None, s) if r.last_run.as_ref().is_some_and(|l| l.dry_run) => {
+                (None, s @ (StageState::Errors | StageState::Interrupted))
+                    if r.last_run.as_ref().is_some_and(|l| l.dry_run) =>
+                {
                     format!("{} (dry run)", state_text(s))
                 }
                 (None, s) => state_text(s).into(),
             };
+            if let Some(why) = &r.stale {
+                tail += &format!(" ↻ stale: {why}");
+            }
             let mut line = Line::from(vec![
                 Span::raw(if sel { "> " } else { "  " }),
                 Span::styled(g, tint(c)),

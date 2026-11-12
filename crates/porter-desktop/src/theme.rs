@@ -2,9 +2,6 @@
 //! appearance, and the mapping of those tokens onto gpui-component's own theme so stock
 //! widgets match.
 
-// Token constants the views have not needed yet; same removal note as `ui`.
-#![allow(dead_code)]
-
 use gpui::{App, Global, Hsla, Pixels, Window, WindowAppearance, px, rgb};
 use gpui_component::{Theme, ThemeMode};
 
@@ -122,6 +119,8 @@ pub mod radius {
     pub const XL: Pixels = px(14.); // sheets
 }
 
+// Not used by a view yet (D3: mapping, URLs).
+#[allow(dead_code)]
 pub mod space {
     use super::*;
     pub const S1: Pixels = px(4.);
@@ -141,7 +140,10 @@ pub mod text {
     pub const MICRO: Pixels = px(11.);
 }
 
+// For the tables and sidebar restyle (D3).
+#[allow(dead_code)]
 pub const ROW_TABLE: Pixels = px(28.);
+#[allow(dead_code)]
 pub const ROW_SIDEBAR: Pixels = px(32.);
 
 // Dry run: dashed `dry_border` + `dry_bg`, plus gpui::pattern_slash(dry_hatch, ...)
@@ -310,6 +312,37 @@ mod tests {
         for t in [l, d] {
             assert_ne!(t.dry, t.ok);
             assert_ne!(t.dry_bg, t.ok_bg);
+        }
+    }
+
+    /// The ported values match the source of truth, so a token change cannot drift.
+    #[test]
+    fn tokens_match_tokens_json() {
+        let json: serde_json::Value =
+            serde_json::from_str(include_str!("../../../docs/design/tokens/tokens.json")).unwrap();
+        for (mode, t) in [("light", Tokens::light()), ("dark", Tokens::dark())] {
+            let hex = |k: &str| {
+                let s = json["color"][mode][k]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{mode}.{k}"));
+                c(u32::from_str_radix(s.trim_start_matches('#'), 16).unwrap())
+            };
+            for (k, v) in [
+                ("bg", t.bg),
+                ("text", t.text),
+                ("muted", t.muted),
+                ("accent", t.accent),
+                ("ok", t.ok),
+                ("warn", t.warn),
+                ("err", t.err),
+                ("err-solid", t.err_solid),
+                ("int", t.int),
+                ("dry", t.dry),
+                ("dry-border", t.dry_border),
+                ("stale-bg", t.stale_bg),
+            ] {
+                assert_eq!(v, hex(k), "{mode}.{k}");
+            }
         }
     }
 }

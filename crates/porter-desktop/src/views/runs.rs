@@ -68,7 +68,7 @@ fn history(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> gpui::AnyEleme
     let theme = cx.theme();
     let sections = all.iter().map(|(stage, runs)| {
         let rows = runs.iter().map(|r| {
-            let h = history_row(*stage, r);
+            let h = history_row(r);
             h_flex()
                 .gap_4()
                 .py_1()

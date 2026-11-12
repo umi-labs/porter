@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::thumbs::{self, Cache};
-use crate::vm::apply::{PreviewInfo, preview_info};
+use crate::vm::apply::{ApplyFacts, apply_facts};
 use crate::vm::content::{NodeKey, Query, Reply};
 use crate::vm::pipeline::{KindCount, issues_by_kind};
 use crate::vm::runs::History;
@@ -49,13 +49,11 @@ pub enum DataResult {
     Coverage(Result<Option<Coverage>, String>),
     /// Runs per stage, newest first.
     History(Result<History, String>),
-    /// The last dry run, for the apply sheet: to open it, or (`confirm`) the recheck
-    /// when Apply was pressed.
+    /// The apply sheet's gates and lists: to open it, or (`confirm`) the recheck when
+    /// Apply was pressed.
     Preview {
         confirm: bool,
-        /// `destination.url` as porter.toml says now.
-        url: String,
-        preview: Option<PreviewInfo>,
+        facts: ApplyFacts,
     },
     /// The content section's reads, tagged with the generation that asked.
     Content {
@@ -244,25 +242,20 @@ impl Bridge {
         });
     }
 
-    /// Reads the last dry run and whether it is still fresh.
+    /// Reads the apply gates: the last dry run and whether it is still fresh, the open
+    /// errors and warnings, and what the load leaves out.
     pub fn preview(&self, confirm: bool) {
         let (session, tx) = (self.session.clone(), self.tx.clone());
         runtime().spawn(async move {
             // Re-read porter.toml so the sheet names the destination the load would use.
-            let (url, preview) = blocking(move || {
+            // A failed read gives empty facts: no dry run, issues unknown, so every gate fails.
+            let facts = blocking(move || {
                 session.reload_config();
-                (
-                    session.config().destination.url.clone(),
-                    preview_info(&session),
-                )
+                apply_facts(&session)
             })
             .await
             .unwrap_or_default();
-            let _ = tx.send(UiEvent::Data(DataResult::Preview {
-                confirm,
-                url,
-                preview,
-            }));
+            let _ = tx.send(UiEvent::Data(DataResult::Preview { confirm, facts }));
         });
     }
 }
