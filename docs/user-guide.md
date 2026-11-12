@@ -98,10 +98,10 @@ Or do it all: `porter run --apply` (add `--continue` to keep going past a stage 
 In a folder without `porter.toml` the TUI opens a setup form instead of the project. Move between fields with `j`/`k`, tab or the arrow keys, press `enter` to type into a field (`enter` or `esc` finishes), and `space` or the arrow keys to choose among options. Optional connector sections open from their `use` field. `ctrl-s` writes `porter.toml` and opens the project straight away. Setup never overwrites an existing `porter.toml`, round-trips every connector, and shows validation problems next to the field that caused them. There is no field for secrets: the form shows the environment variable a connector reads and whether it is set, and a pasted secret is rejected.
 
 ### Running and reading
-Focus the Stages panel, move to a stage and press `space` to run it; `R` runs all stages, `v` verifies, `c` cancels the running stage. Progress and counts update live, then settle to the stored result of the run (clean, warnings, errors, interrupted, or could not run). Issues are grouped by kind; `enter` drills into a group and then an issue, `x` resolves it with a note, `g` jumps to its item, `/` filters, `f` cycles all, open and errors only. `o` opens the HTML report and `e` suspends the TUI to edit `porter.toml` in `$VISUAL`/`$EDITOR`, then re-checks it. `y` on an item or issue copies its id to the clipboard (OSC 52, so it needs a terminal that supports it).
+Focus the Stages panel, move to a stage and press `space` to run it; `R` runs analyse through a dry-run load and skips verify (apply with `L`, then verify with `v`), `v` verifies, `c` cancels the running stage. Progress and counts update live, then settle to the stored result of the run (clean, warnings, errors, interrupted, or could not run). Issues are grouped by kind; `enter` drills into a group and then an issue, `x` resolves it with a note, `g` jumps to its item, `/` filters, `f` cycles all, open and errors only. `o` opens the HTML report and `e` suspends the TUI to edit `porter.toml` in `$VISUAL`/`$EDITOR`, then re-checks it. `y` on an item or issue copies its id to the clipboard (OSC 52, so it needs a terminal that supports it).
 
 ### Loading
-`l` runs a load dry run. `L` opens an apply prompt that shows the item counts from the last dry run and writes to the live CMS only after you press `y`; any other key cancels. The prompt re-reads the dry run when you press `y` and refuses to apply from a missing or stale one, so a fresh dry run is always required first. Quitting while a stage runs asks first and then cancels the run cleanly, so it can be resumed.
+`l` runs a load dry run; the Stages panel marks it "(dry run)" so it never reads as a real write. `L` opens an apply prompt that shows the item counts from the last dry run and writes to the live CMS only after you press `y`; any other key cancels. The prompt re-reads the dry run when you press `y` and refuses to apply from a missing or stale one, so a fresh dry run is always required first. `ctrl-c` works everywhere, prompts and the filter box included: it closes what is open, then cancels the run (a second press quits). Quitting while a stage runs asks first and then cancels the run cleanly, so it can be resumed.
 
 ### Every key
 
@@ -112,11 +112,11 @@ Focus the Stages panel, move to a stage and press `space` to run it; `R` runs al
 | `tab` | focus the next panel |
 | `S-tab` | focus the previous panel |
 | `1-4` | focus a panel by number |
-| `R` | run all stages |
+| `R` | analyse → dry-run load; skips verify |
 | `l` | load, dry run |
 | `L` | load, apply (asks first) |
 | `v` | verify |
-| `ctrl-c` | cancel the run; again to quit |
+| `ctrl-c` | close prompts, cancel the run; again to quit |
 | `c` | cancel the running stage |
 | `o` | open the HTML report |
 | `e` | edit porter.toml |
@@ -203,7 +203,6 @@ Focus the Stages panel, move to a stage and press `space` to run it; `R` runs al
 | `j/↓` | scroll down |
 | `k/↑` | scroll up |
 | `?/esc` | close help |
-| `ctrl-c` | close help, cancel the run; again to quit |
 
 **Setup**
 
@@ -215,7 +214,6 @@ Focus the Stages panel, move to a stage and press `space` to run it; `R` runs al
 | `space/→` | next choice |
 | `←` | previous choice |
 | `ctrl-s` | write porter.toml and open the project |
-| `ctrl-c` | quit |
 | `q` | quit |
 
 **Setup field**
@@ -225,7 +223,6 @@ Focus the Stages panel, move to a stage and press `space` to run it; `R` runs al
 | `enter/esc` | finish typing in the field |
 | `backspace` | delete a character |
 | `ctrl-s` | write porter.toml and open the project |
-| `ctrl-c` | quit |
 
 **Honesty notes.** The TUI shows the engine's own outcomes: a stage is only shown as clean when the stored run was clean, and engine errors are printed verbatim. Load never applies by default: `l` is a dry run, and `L` opens a prompt that shows the last dry run's counts and applies only after an explicit `y` (any other key cancels). The prompt re-reads the dry run when you press `y` and refuses if it is stale or missing, so run `l` first and again after changing anything. The TUI never asks for secrets: the setup form shows which environment variable a connector reads and whether it is set, and rejects a pasted secret.
 

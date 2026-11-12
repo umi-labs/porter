@@ -69,9 +69,14 @@ async fn e2e_analyse_wxr_fixture() {
                 exec(c, &app, &tx, &mut run, d.path());
             }
             if done && app.panels.items.shown().len() >= 2 && app.panels.overview.is_some() {
-                // Quiet once RunDone's refresh has landed.
-                if rx.try_recv().is_err() {
-                    break;
+                // Quiet once RunDone's refresh has landed; a message still queued is
+                // handled, never dropped.
+                match rx.try_recv() {
+                    Ok(m) => {
+                        cmds = update(&mut app, m);
+                        continue;
+                    }
+                    Err(_) => break,
                 }
             }
             let msg = tokio::select! {

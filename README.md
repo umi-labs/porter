@@ -266,11 +266,11 @@ The main keys (`?` shows the full list in the app):
 | `tab` | focus the next panel |
 | `S-tab` | focus the previous panel |
 | `1-4` | focus a panel by number |
-| `R` | run all stages |
+| `R` | analyse → dry-run load; skips verify |
 | `l` | load, dry run |
 | `L` | load, apply (asks first) |
 | `v` | verify |
-| `ctrl-c` | cancel the run; again to quit |
+| `ctrl-c` | close prompts, cancel the run; again to quit |
 | `c` | cancel the running stage |
 | `o` | open the HTML report |
 | `e` | edit porter.toml |

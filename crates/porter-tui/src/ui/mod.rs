@@ -921,4 +921,33 @@ mod tests {
         app.modal = m(None);
         assert!(render(&app, 80, 24).contains("press l first"));
     }
+
+    #[test]
+    fn apply_prompt_with_12_collections_keeps_y_writes_visible() {
+        use crate::app::ApplyModal;
+        let (mut app, _d) = lists_app();
+        let modal = |n: u64| {
+            Some(Modal::ConfirmApply(ApplyModal {
+                url: "https://cms.example.com".into(),
+                preview: Some(crate::msg::PreviewInfo {
+                    counts: (1..=n).map(|i| (format!("collection-{i:02}"), i)).collect(),
+                    at: std::time::SystemTime::now(),
+                    stale: None,
+                }),
+            }))
+        };
+        app.modal = modal(12);
+        let out = render(&app, 80, 24);
+        assert!(out.contains("y writes"), "{out}");
+        assert!(out.contains("(78)"), "the total stays exact: {out}");
+        insta::assert_snapshot!(out);
+        // More than the screen holds: the rest is summarised, the `y` line stays.
+        app.modal = modal(30);
+        let out = render(&app, 80, 24);
+        assert!(out.contains("(465)"), "{out}");
+        assert!(
+            out.contains("y writes") && out.contains("+16 more collections"),
+            "{out}"
+        );
+    }
 }

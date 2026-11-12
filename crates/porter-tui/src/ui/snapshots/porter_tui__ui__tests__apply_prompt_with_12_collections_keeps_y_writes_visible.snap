@@ -1,0 +1,28 @@
+---
+source: crates/porter-tui/src/ui/mod.rs
+expression: out
+---
+"┌Project───────────────────────────────────────────────────────────────────────┐"
+"│demo  wordpress →                                                             │"
+"│0 err ·┌Apply load────────────────────────────────────────────────────┐       │"
+"└───────│This writes to a live CMS.                                    │───────┘"
+"┌Stages─│                                                              │───────┐"
+"│> · ana│Destination: https://cms.example.com                          │       │"
+"│  · ext│                                                              │       │"
+"│  · nor│dry run from just now                                         │       │"
+"│  · sch│Items the load would send (78):                               │       │"
+"│  · loa│  collection-01: 1                                            │       │"
+"│  · ver│  collection-02: 2                                            │       │"
+"└───────│  collection-03: 3                                            │───────┘"
+"┌Issues─│  collection-04: 4                                            │───────┐"
+"│  ✗ mis│  collection-05: 5                                            │       │"
+"└───────│  collection-06: 6                                            │───────┘"
+"┌Items 1│  collection-07: 7                                            │───────┐"
+"│  ✓ doc│  collection-08: 8                                            │       │"
+"└───────│  collection-09: 9                                            │───────┘"
+"┌Log────│  collection-10: 10                                           │───────┐"
+"│       │  collection-11: 11                                           │       │"
+"│       │  collection-12: 12                                           │       │"
+"│       │y writes · any other key cancels                              │       │"
+"└───────└──────────────────────────────────────────────────────────────┘───────┘"
+"y apply · n cancel                                                              "

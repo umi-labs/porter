@@ -454,7 +454,7 @@ pub const BINDINGS: &[Binding] = &[
         &[ch('R')],
         "R",
         A::RunAll,
-        "run all stages",
+        "analyse → dry-run load; skips verify",
         "R all",
     ),
     b(

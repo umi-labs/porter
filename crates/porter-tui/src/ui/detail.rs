@@ -234,7 +234,7 @@ fn project_text(app: &App) -> String {
     };
     let c = s.config();
     format!(
-        "{}\nsource: {}\ndestination: {} ({})\n\nR runs every stage, v verifies.",
+        "{}\nsource: {}\ndestination: {} ({})\n\nR runs analyse → a dry-run load (no verify);\nL applies the load, then v verifies.",
         c.project.name, c.source.adapter, c.destination.adapter, c.destination.url
     )
 }
