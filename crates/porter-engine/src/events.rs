@@ -58,7 +58,7 @@ pub enum Event {
     },
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(remote = "Event", tag = "event", rename_all = "kebab-case")]
 enum EventDef {
     StageStarted {
@@ -99,6 +99,18 @@ impl Serialize for Event {
     }
 }
 
+impl Event {
+    /// Parses one NDJSON line back into an event (e.g. one streamed from the hub).
+    /// `None` for anything that isn't a known v1 event.
+    pub fn from_json(line: &str) -> Option<Event> {
+        let v: serde_json::Value = serde_json::from_str(line).ok()?;
+        if v.get("v")?.as_u64()? != 1 {
+            return None;
+        }
+        EventDef::deserialize(v).ok()
+    }
+}
+
 #[derive(Clone)]
 pub struct EventSink(pub broadcast::Sender<Event>);
 
@@ -114,5 +126,24 @@ impl EventSink {
     /// Fire and forget: no subscribers (or a lagging one) never fails a stage.
     pub fn emit(&self, e: Event) {
         let _ = self.0.send(e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_round_trip() {
+        let e = Event::Progress {
+            stage: Stage::Extract,
+            done: 3,
+            total: Some(9),
+            label: "posts".into(),
+        };
+        let line = serde_json::to_string(&e).unwrap();
+        let back = Event::from_json(&line).unwrap();
+        assert_eq!(serde_json::to_string(&back).unwrap(), line);
+        assert!(Event::from_json(r#"{"event":"hub-note","message":"x"}"#).is_none());
     }
 }

@@ -38,7 +38,7 @@ pub fn print_json(v: &impl Serialize) {
     }
 }
 
-fn render(e: &Event) -> String {
+pub fn render(e: &Event) -> String {
     match e {
         Event::StageStarted { stage, .. } => format!("{}: started", wire(stage)),
         Event::Progress {

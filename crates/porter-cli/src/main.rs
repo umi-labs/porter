@@ -99,6 +99,8 @@ pub enum Command {
     Export {
         file: PathBuf,
     },
+    /// Sync with a Porter hub: login, link, push, pull, run, uploads
+    Hub(commands::hub::HubArgs),
     /// Upgrade porter (Homebrew, or the GitHub release binary)
     Upgrade {
         /// Only report the latest version
@@ -165,6 +167,14 @@ async fn dispatch(cli: Cli) -> Result<i32> {
         Command::Clean => clean::run(&dir, json),
         Command::Report => report::run(&dir, json),
         Command::Export { file } => export::run(&dir, json, &file),
+        Command::Hub(args) => {
+            let ctx = hub::Ctx {
+                dir,
+                json,
+                interactive: cli.interactive,
+            };
+            hub::dispatch(ctx, args).await
+        }
         Command::Upgrade { check, yes, force } => {
             upgrade::run(json, cli.interactive, check, yes, force).await
         }

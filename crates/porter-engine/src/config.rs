@@ -16,6 +16,18 @@ pub struct ProjectConfig {
     pub mapping: MappingConfig,
     pub redirects: Vec<ManualRedirect>,
     pub verify: VerifyConfig,
+    /// Written by `porter hub link`. Never holds a token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hub: Option<HubConfig>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct HubConfig {
+    /// Hub origin, e.g. `https://hub.example.com`.
+    pub url: String,
+    /// Project slug on the hub.
+    pub project: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -268,6 +280,20 @@ mod env_name_tests {
 #[cfg(test)]
 mod typo_tests {
     use super::*;
+
+    #[test]
+    fn hub_section_loads_and_refuses_a_token() {
+        let c = toml::from_str::<ProjectConfig>(
+            "[hub]\nurl = \"https://hub.example.com\"\nproject = \"acme\"\n",
+        )
+        .unwrap();
+        assert_eq!(c.hub.unwrap().project, "acme");
+        let e = toml::from_str::<ProjectConfig>(
+            "[hub]\nurl = \"https://h\"\nproject = \"a\"\ntoken = \"x\"\n",
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("token"), "{e}");
+    }
 
     #[test]
     fn typo_in_destination_errors() {
