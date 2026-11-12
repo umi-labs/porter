@@ -161,6 +161,16 @@ fn node_of(e: &quick_xml::events::BytesStart<'_>, lossy: &mut bool) -> Node {
     }
 }
 
+/// Bytes a node's name and attributes hold, counted against the item cap.
+fn node_bytes(n: &Node) -> usize {
+    // 16 covers the Node/Vec bookkeeping, so floods of empty elements count too.
+    16 + n.name.len()
+        + n.attrs
+            .iter()
+            .map(|(k, v)| k.len() + v.len())
+            .sum::<usize>()
+}
+
 /// Reads from just after `start` to its matching end tag.
 fn read_node<R: BufRead>(
     rd: &mut Reader<R>,
@@ -178,10 +188,20 @@ fn read_node<R: BufRead>(
             .read_event_into(&mut buf)
             .map_err(|e| (e.to_string(), false))?
         {
-            Event::Start(e) => stack.push(node_of(&e, lossy)),
+            // Once over the cap only nesting depth is kept, so memory stays bounded.
+            Event::Start(_) if over => stack.push(Node::default()),
+            Event::Empty(_) if over => {}
+            Event::Start(e) => {
+                let n = node_of(&e, lossy);
+                size += node_bytes(&n);
+                over = size > cap;
+                stack.push(if over { Node::default() } else { n });
+            }
             Event::Empty(e) => {
                 let n = node_of(&e, lossy);
-                if let Some(top) = stack.last_mut() {
+                size += node_bytes(&n);
+                over = size > cap;
+                if let (false, Some(top)) = (over, stack.last_mut()) {
                     top.children.push(n);
                 }
             }
@@ -215,11 +235,12 @@ fn read_node<R: BufRead>(
                 let node = stack
                     .pop()
                     .ok_or(("unbalanced end tag".to_string(), false))?;
-                if node.name != name {
+                if !over && node.name != name {
                     let msg = format!("mismatched end tag </{name}> for <{}>", node.name);
                     return Err((msg, false));
                 }
                 match stack.last_mut() {
+                    Some(_) if over => {}
                     Some(parent) => parent.children.push(node),
                     None if over => return Err((too_big(cap), true)),
                     None => return Ok(node),

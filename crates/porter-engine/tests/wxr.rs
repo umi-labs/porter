@@ -231,3 +231,24 @@ async fn wxr_writes_raw_item_rows() {
         "genre"
     );
 }
+
+#[test]
+fn wxr_oversized_attributes_failed() {
+    let flood =
+        r#"<x a="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"/>"#.repeat(100);
+    let xml = format!(
+        r#"<rss xmlns:wp="w"><channel><title>S</title>
+<item><wp:post_id>1</wp:post_id>{flood}<y><z b="{}"></z></y></item>
+<item><wp:post_id>2</wp:post_id></item>
+</channel></rss>"#,
+        "b".repeat(2000)
+    );
+    let mut out = vec![];
+    parse_wxr_with_cap(xml.as_bytes(), 1000, |r| {
+        out.push(r.map_err(|e| e.to_string()))
+    })
+    .unwrap();
+    assert_eq!(out.len(), 2);
+    assert!(out[0].as_ref().unwrap_err().contains("item larger than"));
+    assert_eq!(out[1].as_ref().unwrap().post_id, 2);
+}
