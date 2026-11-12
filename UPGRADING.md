@@ -1,6 +1,6 @@
 # Upgrading from porter 1.x to 2.0
 
-Porter 2.0 is a rebuild, not an update. The 1.x commands and flags are gone and are not kept working: a 1.x invocation exits with an error that points here. Plan to redo your setup rather than convert it in place.
+Porter 2.0 is a rebuild, not an update. The 1.x commands and flags are gone and are not kept working. A removed flag (`--source`, `--target`, `--collection`...) is a command-line usage error: porter prints the usage error and a note pointing here, and exits with code 2 before any stage runs. (In the README's exit codes, 2 means a stage finished with error issues; a usage error is clap's own exit 2.) Plan to redo your setup rather than convert it in place.
 
 ## What changed
 
@@ -16,7 +16,7 @@ Porter 2.0 is a rebuild, not an update. The 1.x commands and flags are gone and 
 | `--dry-run` | the default for `porter load`; add `--apply` to write |
 | `--debug`, `--verbose` | `-v`, `-vv`, `-vvv` (log detail on stderr) |
 | `--config <file>` | `--project <dir>` (the folder holding `porter.toml`) |
-| `--list-adapters` | gone; `porter init --adapter nope` fails and lists the available adapters |
+| `--list-adapters` | gone; `porter init --adapter nope` exits 1 with `unknown adapter "nope" (available: wordpress, umbraco)` and writes nothing |
 | `--plugin-dir` | gone; there is no plugin system |
 
 **Removed commands.** `config`, `generate`, `template`, `migrate`, `explain`. Use `analyse`, `extract`, `normalise`, `schema generate|check|prompt|spec`, `load`. `init`, `clean` and `upgrade` remain but work differently (below).

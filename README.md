@@ -279,7 +279,7 @@ Example:
 {"v":1,"event":"stage-finished","stage":"normalise","run":"0192f3a0-...","summary":{"done":478,"partial":2,"skipped":0,"failed":0,"errors":0,"warnings":3,"infos":0,"interrupted":false}}
 ```
 
-Other commands print one event each: `init` (`dir`, `name`), `status` (`stages`, `open_issues`, `last_runs`), `issue` (`issue`, one per line from `porter issues`), `issue-resolved` (`id`, `resolution`), `clean` (`dir`), `export` (`path`), `upgrade_check` (`current`, `latest`, `update_available`, `install`).
+Other commands print one event each: `init` (`dir`, `name`), `status` (`stages`, `open_issues`, `last_runs`), `issue` (`issue`, one per line from `porter issues`), `issue-resolved` (`id`, `resolution`), `clean` (`dir`), `export` (`path`), `report` (`paths`: the files written), `mapping-seeded` (no fields; emitted after analyse when `[mapping]` was seeded in `porter.toml`), `upgrade-check` (`current`, `latest`, `update_available`, `install`) and `upgrade` (`from`, `to`, `upgraded`: whether the binary was replaced).
 
 Porter never prompts unless stdin is a terminal and you passed `--interactive`; missing configuration is an error that names exactly what is missing.
 
@@ -289,7 +289,7 @@ Porter never prompts unless stdin is a terminal and you passed `--interactive`; 
 |---|---|
 | 0 | Finished, and this run opened no error-severity issues |
 | 1 | Could not run: bad config, missing credentials, unreachable source, internal error |
-| 2 | Finished with error-severity issues or failed items |
+| 2 | Finished with error-severity issues or failed items (also what a command-line usage error exits with, before any stage runs) |
 | 3 | Interrupted (Ctrl-C); resumable, run the same command again |
 
 ## Environment variables

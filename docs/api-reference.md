@@ -29,9 +29,9 @@ Exit codes: `0` finished and this run opened no error issues; `1` could not run;
 
 ### `porter upgrade`
 
-Detects how porter was installed from the path of the running binary. Under a Homebrew prefix or `Cellar` it runs `brew update` then `brew upgrade` (trying `umi-labs/tap/porter`, then `porter`). Anywhere else it downloads the [umi-labs/porter](https://github.com/umi-labs/porter/releases) release asset whose name contains this platform's target triple and replaces the running binary.
+Detects how porter was installed from the path of the running binary. Under a Homebrew prefix or `Cellar` it runs `brew update` then `brew upgrade` (trying `umi-labs/tap/porter`, then `porter`). Anywhere else it downloads the [umi-labs/porter](https://github.com/umi-labs/porter/releases) release asset whose name contains this platform's target triple and verifies it against the release's `<archive>.sha256` (a mismatch aborts and leaves the binary untouched), and replaces the running binary. With `--json` a final `upgrade` event reports `{from, to, upgraded}`.
 
-- `--check`: print current and latest version (and, with `--json`, one `upgrade_check` event); change nothing; exit 0.
+- `--check`: print current and latest version (and, with `--json`, one `upgrade-check` event); change nothing; exit 0.
 - `--yes`: replace without asking. Without `--yes`, porter refuses (exit 1), unless `--interactive` is set on a terminal, where it asks `[y/N]`.
 - `--force`: upgrade even when already current.
 

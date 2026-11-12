@@ -37,11 +37,11 @@ fn json_stdout_is_pure_ndjson() {
 #[test]
 fn json_errors_keep_stdout_empty() {
     let d = tempfile::tempdir().unwrap();
-    porter(d.path())
-        .args(["init", "demo", "--adapter", "nope"])
-        .write_stdin("")
-        .assert()
-        .success();
+    std::fs::write(
+        d.path().join("porter.toml"),
+        "[project]\nname = \"demo\"\n\n[source]\nadapter = \"nope\"\n",
+    )
+    .unwrap();
     porter(d.path())
         .args(["--json", "analyse"])
         .assert()
@@ -67,11 +67,11 @@ fn missing_config_exits_1_naming_key() {
 #[test]
 fn unregistered_adapter_exits_1_naming_it() {
     let d = tempfile::tempdir().unwrap();
-    porter(d.path())
-        .args(["init", "demo", "--adapter", "nope"])
-        .write_stdin("")
-        .assert()
-        .success();
+    std::fs::write(
+        d.path().join("porter.toml"),
+        "[project]\nname = \"demo\"\n\n[source]\nadapter = \"nope\"\n",
+    )
+    .unwrap();
     porter(d.path())
         .arg("analyse")
         .assert()
@@ -312,4 +312,17 @@ fn upgrade_args_parse() {
         .assert()
         .success()
         .stdout(predicate::str::contains("--check").and(predicate::str::contains("--yes")));
+}
+
+#[test]
+fn init_rejects_unknown_adapter() {
+    let d = tempfile::tempdir().unwrap();
+    porter(d.path())
+        .args(["init", "x", "--adapter", "nope"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "unknown adapter \"nope\" (available: wordpress, umbraco)",
+        ));
+    assert!(!d.path().join("porter.toml").exists());
 }
