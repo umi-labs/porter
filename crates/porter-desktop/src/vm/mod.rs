@@ -2,6 +2,7 @@
 
 pub mod apply;
 pub mod content;
+pub mod mapping;
 pub mod media;
 pub mod pipeline;
 pub mod runs;

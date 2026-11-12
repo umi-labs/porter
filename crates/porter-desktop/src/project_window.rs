@@ -24,6 +24,7 @@ use crate::thumbs::{Cache, Thumb};
 use crate::views;
 use crate::vm::apply::{ApplySheet, age};
 use crate::vm::content::{Content, NodeKey, Query};
+use crate::vm::mapping::Mapping;
 use crate::vm::media::{self, Media};
 use crate::vm::pipeline::{CLOSE_WAIT, CloseStep, KindCount, Pipeline, name};
 use crate::vm::runs::Runs;
@@ -40,6 +41,8 @@ pub struct ProjectWindow {
     pub(crate) content: Content,
     pub(crate) media: Media,
     pub(crate) urls: Urls,
+    pub(crate) mapping: Mapping,
+    pub(crate) mapping_inputs: views::mapping::Inputs,
     thumbs: Arc<Cache>,
     pub(crate) coverage: Option<Result<Option<Coverage>, String>>,
     pub(crate) kinds: Option<Result<Vec<KindCount>, String>>,
@@ -59,6 +62,7 @@ impl ProjectWindow {
     pub fn new(session: Arc<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (bridge, rx) = Bridge::new(session);
         let apply_input = cx.new(|cx| InputState::new(window, cx));
+        let mapping_inputs = views::mapping::Inputs::new(window, cx);
         // Redraw on typing so the Apply button follows the box. Enter does nothing:
         // applying always takes a click.
         let subs = vec![cx.subscribe(&apply_input, |_, _, _: &InputEvent, cx| cx.notify())];
@@ -70,6 +74,8 @@ impl ProjectWindow {
             content: Content::default(),
             media: Media::default(),
             urls: Urls::default(),
+            mapping: Mapping::default(),
+            mapping_inputs,
             thumbs: Arc::default(),
             coverage: None,
             kinds: None,
@@ -105,6 +111,7 @@ impl ProjectWindow {
                 let q = self.urls.open();
                 self.ask_urls(q);
             }
+            Section::Mapping if self.mapping.open() => self.bridge.mapping_open(),
             _ => {}
         }
         cx.notify();
@@ -119,6 +126,48 @@ impl ProjectWindow {
         self.ask_media(q);
         let q = self.urls.invalidate();
         self.ask_urls(q);
+        // A stage changed what the documents hold: check the mapping again.
+        if self.mapping.invalidate() {
+            self.bridge.mapping_open();
+        }
+    }
+
+    /// Applies a mapping edit and saves it off the UI thread.
+    pub(crate) fn mapping_edit(
+        &mut self,
+        f: impl FnOnce(&mut porter_engine::mapping::edit::MappingDoc),
+    ) {
+        if let Some(doc) = self.mapping.edit(f) {
+            self.bridge.mapping_save(doc);
+        }
+    }
+
+    pub(crate) fn mapping_reload(&mut self, cx: &mut Context<Self>) {
+        if self.mapping.reload() {
+            self.bridge.mapping_open();
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn mapping_note(&mut self, msg: String, cx: &mut Context<Self>) {
+        self.mapping.note(msg);
+        cx.notify();
+    }
+
+    /// Selects a type (and maybe one of its fields) or a block row, and fills the editor.
+    pub(crate) fn mapping_select(
+        &mut self,
+        ty: Option<String>,
+        field: Option<String>,
+        block: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.mapping.selected_type = ty;
+        self.mapping.selected_field = field;
+        self.mapping.selected_block = block;
+        self.mapping_inputs.fill(&self.mapping, window, cx);
+        cx.notify();
     }
 
     fn ask_media(&self, qs: Vec<media::Query>) {
@@ -244,6 +293,10 @@ impl ProjectWindow {
                 self.ask_media(q);
             }
             DataResult::Urls { generation, reply } => self.urls.land(generation, reply),
+            DataResult::Mapping(r) => {
+                self.mapping.land(r);
+                self.mapping_inputs.fill(&self.mapping, window, cx);
+            }
             // Redraw only: `handle`'s caller notifies after every drain.
             DataResult::ThumbReady => {}
             DataResult::Preview {
@@ -609,6 +662,7 @@ impl Render for ProjectWindow {
             View::Content => views::content::render(self, cx).into_any_element(),
             View::Media => views::media::render(self, cx).into_any_element(),
             View::Urls => views::urls::render(self, cx).into_any_element(),
+            View::Mapping => views::mapping::render(self, cx).into_any_element(),
             View::Runs => views::runs::render(self, cx).into_any_element(),
         };
         let sheet = self

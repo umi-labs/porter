@@ -5,7 +5,11 @@
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, OnceLock};
 
+use porter_engine::destinations::payload::schema_check;
+use porter_engine::destinations::payload::ts::read_payload_config;
 use porter_engine::events::Event;
+use porter_engine::mapping::edit::MappingDoc;
+use porter_engine::mapping::summary::TypeSummary;
 use porter_engine::report::{Coverage, read_coverage};
 use porter_engine::session::{
     IssueQuery, MediaRow, Overview, Page, RunOutcome, RunPlan, STAGES, Session,
@@ -20,7 +24,7 @@ use crate::vm::apply::{PreviewInfo, preview_info};
 use crate::vm::content::{NodeKey, Query, Reply};
 use crate::vm::pipeline::{KindCount, issues_by_kind};
 use crate::vm::runs::History;
-use crate::vm::{media, urls};
+use crate::vm::{mapping, media, urls};
 
 pub enum UiEvent {
     Engine(Event),
@@ -62,6 +66,8 @@ pub enum DataResult {
     },
     /// A thumbnail landed in the cache: redraw.
     ThumbReady,
+    /// porter.toml opened, or an edit saved (or refused), with the schema check's issues.
+    Mapping(mapping::Reply),
 }
 
 /// The app's one tokio runtime (multi-thread), created on first use.
@@ -347,6 +353,72 @@ impl Bridge {
     }
 }
 
+impl Bridge {
+    /// Opens porter.toml for the mapping editor (dropping unsaved edits) and checks it.
+    pub fn mapping_open(&self) {
+        let (session, tx) = (self.session.clone(), self.tx.clone());
+        runtime().spawn(async move {
+            let reply = blocking(move || {
+                let path = session.project().dir().join("porter.toml");
+                mapping::Reply::Loaded(
+                    MappingDoc::open(&path)
+                        .map_err(|e| format!("{e:#}"))
+                        .and_then(|doc| mapping_check(&session, doc)),
+                )
+            })
+            .await
+            .unwrap_or_else(|e| mapping::Reply::Loaded(Err(e)));
+            let _ = tx.send(UiEvent::Data(DataResult::Mapping(reply)));
+        });
+    }
+
+    /// Saves an edited document; once saved, runs the schema check again.
+    pub fn mapping_save(&self, mut doc: MappingDoc) {
+        let (session, tx) = (self.session.clone(), self.tx.clone());
+        runtime().spawn(async move {
+            let reply = blocking(move || {
+                let refused = doc.save();
+                if !refused.is_empty() {
+                    return mapping::Reply::Refused(refused);
+                }
+                session.reload_config();
+                mapping::Reply::Loaded(mapping_check(&session, doc))
+            })
+            .await
+            .unwrap_or_else(|e| mapping::Reply::Refused(vec![e]));
+            let _ = tx.send(UiEvent::Data(DataResult::Mapping(reply)));
+        });
+    }
+}
+
+/// `porter schema check` without the run: offline, nothing written to the store. The
+/// destination schema is read only when `destination.config_dir` is set.
+// ponytail: re-reads the store summary and the Payload config on every save; cache them
+// keyed by store run / file mtimes if large projects make saves slow.
+fn mapping_check(session: &Session, doc: MappingDoc) -> Result<Box<mapping::Loaded>, String> {
+    let err = |e: anyhow::Error| format!("{e:#}");
+    let config = doc.config().map_err(err)?;
+    let project = session.project();
+    let summary = TypeSummary::from_store(project.store()).map_err(err)?;
+    let dest = config
+        .destination
+        .config_dir
+        .as_ref()
+        .map(|d| read_payload_config(&project.dir().join(d)))
+        .transpose()
+        .map_err(err);
+    let issues = match &dest {
+        Ok(Some(d)) => schema_check::check(&summary, &config.mapping, d),
+        _ => vec![],
+    };
+    Ok(Box::new(mapping::Loaded {
+        doc,
+        summary,
+        dest,
+        issues,
+    }))
+}
+
 /// Titles of documents and filenames of media for `ids`; None where there is no live item.
 async fn read_labels(
     session: &Arc<Session>,
@@ -498,5 +570,48 @@ mod tests {
         bridge.refresh();
         let got = rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
         assert!(matches!(got, UiEvent::Data(DataResult::Overview(Ok(_)))));
+    }
+
+    /// The mapping editor's save path on the real engine, off the UI thread: open, save
+    /// an edit (re-checked), and a refusal when porter.toml changed on disk.
+    #[test]
+    fn mapping_open_save_refuse() {
+        use crate::vm::mapping::{Mapping, NO_SCHEMA, Picker};
+        let d = tempfile::tempdir().unwrap();
+        porter_engine::project::Project::init(d.path(), "demo", "wordpress").unwrap();
+        let session = Arc::new(Session::open(d.path()).unwrap());
+        let (bridge, rx) = Bridge::new(session);
+        let next = || loop {
+            if let UiEvent::Data(DataResult::Mapping(r)) =
+                rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap()
+            {
+                return r;
+            }
+        };
+        let mut m = Mapping::default();
+        assert!(m.open());
+        bridge.mapping_open();
+        m.land(next());
+        assert_eq!(m.error(), None);
+        assert_eq!(m.collection_picker(), Picker::FreeText(NO_SCHEMA.into()));
+        let doc = m.edit(|d| d.set_type_to("post", Some("posts"))).unwrap();
+        bridge.mapping_save(doc);
+        m.land(next());
+        assert!(m.messages().is_empty(), "{:?}", m.messages());
+        assert_eq!(m.type_rows()[0].to.as_deref(), Some("posts"));
+        let file = d.path().join("porter.toml");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("to = \"posts\""));
+        std::fs::write(&file, format!("{text}# hand edit\n")).unwrap();
+        let doc = m.edit(|d| d.set_path("post", Some("/{slug}/"))).unwrap();
+        bridge.mapping_save(doc);
+        m.land(next());
+        assert!(m.needs_reload());
+        assert_eq!(m.type_rows()[0].path, None, "refused edit undone");
+        assert!(
+            std::fs::read_to_string(&file)
+                .unwrap()
+                .ends_with("# hand edit\n")
+        );
     }
 }

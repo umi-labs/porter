@@ -5408,6 +5408,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "image",
+ "indexmap",
  "libc",
  "porter-engine",
  "porter-model",
@@ -5416,6 +5417,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "toml 1.2.1+spec-1.1.0",
  "url",
  "uuid",
 ]

@@ -1,6 +1,7 @@
 //! Per-client mapping decisions (`[mapping]` in porter.toml): which source types go where,
 //! field renames and transforms, builder blocks, URL patterns. Platform-free.
 
+pub mod edit;
 pub mod paths;
 pub mod summary;
 pub mod transforms;
