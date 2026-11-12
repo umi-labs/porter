@@ -79,7 +79,7 @@ async function mayGetMagicLink(db: Db, email: string) {
 }
 
 /** The one staff org (org membership there = staff). */
-const staffOrgSlug = () => process.env.STAFF_ORG_SLUG || "umi";
+export const staffOrgSlug = () => process.env.STAFF_ORG_SLUG || "umi";
 
 /** Creates the staff org if missing (server-side only, idempotent); returns its id. */
 export async function ensureStaffOrg(db: Db) {
@@ -103,18 +103,11 @@ async function provisionGoogleStaff(db: Db, userId: string, domain: string) {
     .limit(1);
   if (!google) return;
   const orgId = await ensureStaffOrg(db);
-  const [already] = await db
-    .select({ id: member.id })
-    .from(member)
-    .where(and(eq(member.organizationId, orgId), eq(member.userId, userId)))
-    .limit(1);
-  // ponytail: check-then-insert (member has no unique (org,user)); two simultaneous first sign-ins could
-  // double-insert. Add a unique index if that ever shows up.
-  if (!already) {
-    await db
-      .insert(member)
-      .values({ id: randomUUID(), organizationId: orgId, userId, role: "member", createdAt: new Date() });
-  }
+  // The unique (org, user) index makes this safe against two simultaneous first sign-ins.
+  await db
+    .insert(member)
+    .values({ id: randomUUID(), organizationId: orgId, userId, role: "member", createdAt: new Date() })
+    .onConflictDoNothing({ target: [member.organizationId, member.userId] });
 }
 
 /** Staff-org member, or an owner/developer on some project. */

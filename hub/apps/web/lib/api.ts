@@ -1,0 +1,68 @@
+import { connect } from "@porter-hub/db";
+import { getAuth } from "./auth";
+import type { Db } from "./permissions";
+import * as svc from "./projects";
+import { type Actor, HttpError, parse, schemas } from "./projects";
+
+type GetActor = (req: Request) => Promise<Actor | null>;
+type P = Record<string, string>;
+
+/** Route handlers, with the database and the session lookup injected so tests can drive them. */
+export function makeApi(db: Db, getActor: GetActor) {
+  const route =
+    <Ctx extends P | undefined = undefined>(
+      fn: (actor: Actor, req: Request, params: Ctx) => Promise<unknown>,
+      status = 200,
+    ) =>
+    async (req: Request, params: Ctx = undefined as Ctx) => {
+      try {
+        const actor = await getActor(req);
+        if (!actor) throw new HttpError(401, "Sign in required");
+        return Response.json(await fn(actor, req, params), { status });
+      } catch (e) {
+        if (e instanceof HttpError) return Response.json({ error: e.message }, { status: e.status });
+        console.error(e);
+        return Response.json({ error: "Internal error" }, { status: 500 });
+      }
+    };
+  const body = async (req: Request) => req.json().catch(() => undefined);
+  const slugOf = (p: P) => p.slug;
+
+  return {
+    listProjects: route((a) => svc.listProjects(db, a)),
+    createProject: route(
+      async (a, r) => svc.createProject(db, a, parse(schemas.createProject, await body(r))),
+      201,
+    ),
+    getProject: route<P>((a, _r, p) => svc.getProject(db, a, slugOf(p))),
+    listMembers: route<P>((a, _r, p) => svc.listMembers(db, a, slugOf(p))),
+    addMember: route<P>(
+      async (a, r, p) => svc.addMember(db, a, slugOf(p), parse(schemas.addMember, await body(r))),
+      201,
+    ),
+    updateMember: route<P>(async (a, r, p) =>
+      svc.setRole(db, a, slugOf(p), p.userId, parse(schemas.setRole, await body(r)).role),
+    ),
+    removeMember: route<P>((a, _r, p) => svc.removeMember(db, a, slugOf(p), p.userId)),
+    listInvitations: route<P>((a, _r, p) => svc.listInvitations(db, a, slugOf(p))),
+    createInvitation: route<P>(
+      async (a, r, p) => svc.createInvitation(db, a, slugOf(p), parse(schemas.invite, await body(r))),
+      201,
+    ),
+    revokeInvitation: route<P>(async (a, _r, p) => {
+      // Permission first (403/404), then the id shape, so a non-member learns nothing.
+      await svc.access(db, a, slugOf(p), "manage_members");
+      return svc.revokeInvitation(db, a, slugOf(p), parse(schemas.id, p.id));
+    }),
+  };
+}
+
+let instance: ReturnType<typeof makeApi> | undefined;
+/** The app's API, bound to the real database and Better Auth session. */
+export const getApi = () => {
+  instance ??= makeApi(connect().db, async (req) => {
+    const s = await getAuth().api.getSession({ headers: req.headers });
+    return s ? { id: s.user.id } : null;
+  });
+  return instance;
+};

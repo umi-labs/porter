@@ -15,6 +15,13 @@
       "when": 1794475736474,
       "tag": "0001_faithful_steve_rogers",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794476655738,
+      "tag": "0002_member_org_user_unique",
+      "breakpoints": true
     }
   ]
 }
