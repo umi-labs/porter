@@ -27,6 +27,16 @@ jobs:
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets
 
+  # Windows is a release target: unix-only code must stay behind #[cfg(unix)].
+  windows-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - run: cargo check -p porter-cli --target x86_64-pc-windows-msvc --locked
+
   fresh-resolve:
     runs-on: ubuntu-latest
     steps:

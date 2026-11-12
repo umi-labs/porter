@@ -27,7 +27,7 @@ pub async fn run_tui(dir: &Path) -> Result<i32> {
         None
     };
     term::install_panic_hook();
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut sigterm = Sigterm::new()?;
     // The guard lives only in this block: the terminal is restored before any note prints.
     let (code, note) = {
         let _guard = term::Guard::enter()?;
@@ -111,6 +111,39 @@ pub async fn run_tui(dir: &Path) -> Result<i32> {
         eprintln!("{n}");
     }
     Ok(code)
+}
+
+/// SIGTERM on unix. Windows has no SIGTERM (a console close kills the process), so there
+/// it never fires.
+#[cfg(unix)]
+struct Sigterm(tokio::signal::unix::Signal);
+
+#[cfg(unix)]
+impl Sigterm {
+    fn new() -> std::io::Result<Sigterm> {
+        use tokio::signal::unix::{SignalKind, signal};
+        signal(SignalKind::terminate()).map(Sigterm)
+    }
+
+    async fn recv(&mut self) {
+        if self.0.recv().await.is_none() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+#[cfg(not(unix))]
+struct Sigterm;
+
+#[cfg(not(unix))]
+impl Sigterm {
+    fn new() -> std::io::Result<Sigterm> {
+        Ok(Sigterm)
+    }
+
+    async fn recv(&mut self) {
+        std::future::pending::<()>().await;
+    }
 }
 
 /// Suspends the TUI, runs the editor on porter.toml, restores the TUI, then reloads the

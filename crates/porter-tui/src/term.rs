@@ -36,14 +36,21 @@ impl Drop for Guard {
 }
 
 /// Restores the terminal before the previous hook prints, so the message is readable.
+/// Call it on the thread that draws the UI.
 pub fn install_panic_hook() {
     install_panic_hook_with(restore);
 }
 
+/// Only a panic on the installing (UI) thread restores: a background thread's panic must
+/// not tear the terminal down under a UI that keeps drawing. Every panic still reaches
+/// the previous hook.
 pub fn install_panic_hook_with(restore: impl Fn() + Send + Sync + 'static) {
+    let ui = std::thread::current().id();
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        restore();
+        if std::thread::current().id() == ui {
+            restore();
+        }
         prev(info);
     }));
 }
@@ -54,15 +61,22 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    /// One test: the hook is process-wide, so two tests swapping it would race.
     #[test]
-    fn panic_restores_terminal() {
+    fn panic_restores_terminal_only_on_the_ui_thread() {
         let called = Arc::new(AtomicBool::new(false));
         let c = called.clone();
         let original = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {})); // keep test output quiet
         install_panic_hook_with(move || c.store(true, Ordering::SeqCst));
+        let _ = std::thread::spawn(|| panic!("background boom")).join();
+        let background = called.load(Ordering::SeqCst);
         let _ = std::panic::catch_unwind(|| panic!("boom"));
         std::panic::set_hook(original);
+        assert!(
+            !background,
+            "a background thread's panic restored the terminal"
+        );
         assert!(called.load(Ordering::SeqCst));
     }
 }
