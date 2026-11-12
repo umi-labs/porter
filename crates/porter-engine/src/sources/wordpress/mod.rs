@@ -115,6 +115,19 @@ pub(crate) fn classic_inner(
             "gallery" => {
                 blocks.extend(html(&std::mem::take(&mut pending), ctx));
                 let ids = n.attrs.get("ids").map(String::as_str).unwrap_or("");
+                if ids.trim().is_empty() {
+                    // "Show the post's attached images": nothing here says which.
+                    blocks.push(RtBlock::Raw {
+                        html: shortcodes::to_source(&n),
+                    });
+                    ctx.issue(
+                        IssueKind::UnsupportedBlock,
+                        Severity::Warning,
+                        "[gallery] without ids (attached images) kept as raw".into(),
+                        json!({ "shortcode": "gallery" }),
+                    );
+                    continue;
+                }
                 for id in ids.split(',').map(str::trim).filter(|s| !s.is_empty()) {
                     match id.parse::<u64>().ok().and_then(|i| media_ids.get(&i)) {
                         Some(m) => blocks.push(RtBlock::Media {
@@ -165,11 +178,26 @@ pub(crate) fn flag_literal_shortcodes<'r>(
     ctx: &mut HtmlCtx,
 ) {
     static LITERAL: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\[([a-z][\w-]*)[^\]]*\]").expect("valid regex"));
+        LazyLock::new(|| Regex::new(r"\[([a-z][\w-]*)([^\]]*)\]").expect("valid regex"));
+    static KNOWN: LazyLock<Regex> = LazyLock::new(shortcodes::default_known);
     let mut tags = BTreeSet::new();
     for rt in texts {
-        for c in LITERAL.captures_iter(&rt.plain_text()) {
-            tags.insert(c[1].to_string());
+        // Code is shown as written; brackets in it are not shortcodes.
+        let text = RichText {
+            blocks: rt
+                .blocks
+                .iter()
+                .filter(|b| !matches!(b, RtBlock::Code { .. }))
+                .cloned()
+                .collect(),
+        }
+        .plain_text();
+        for c in LITERAL.captures_iter(&text) {
+            // Prose like `arr[i]`, `[sic]` or `[note]` is not flagged: only known tags,
+            // or tags with an attribute.
+            if KNOWN.is_match(&c[1]) || c[2].contains('=') {
+                tags.insert(c[1].to_string());
+            }
         }
     }
     for tag in tags {
@@ -328,7 +356,7 @@ mod tests {
 
         let mut issues = vec![];
         divi::divi_to_layout(
-            "[et_pb_text]a [foo] b [foo x=1][/et_pb_text][et_pb_text][bar][/et_pb_text]",
+            "[et_pb_text]a [foo] b [foo x=1][/et_pb_text][et_pb_text][bar y=2][/et_pb_text]",
             &HashMap::new(),
             &ids,
             &mut ctx(&f, &mut issues),
@@ -345,5 +373,83 @@ mod tests {
             &mut ctx(&f, &mut issues),
         );
         assert_eq!(flagged(&issues), ["[promo] left as text"]);
+    }
+
+    #[test]
+    fn gallery_without_ids_kept_raw() {
+        let f = fixture();
+        let mut issues = vec![];
+        let rt = classic_to_richtext(
+            "Before\n\n[gallery columns=\"2\"]\n\nAfter",
+            &HashMap::new(),
+            &mut ctx(&f, &mut issues),
+        );
+        assert!(
+            rt.blocks
+                .iter()
+                .any(|b| matches!(b, RtBlock::Raw { html } if html == "[gallery columns=\"2\" /]")),
+            "{rt:?}"
+        );
+        let msgs: Vec<_> = issues
+            .iter()
+            .map(|i| (i.kind, i.message.as_str()))
+            .collect();
+        assert_eq!(
+            msgs,
+            [(
+                IssueKind::UnsupportedBlock,
+                "[gallery] without ids (attached images) kept as raw"
+            )]
+        );
+    }
+
+    #[test]
+    fn literal_shortcode_scan_ignores_prose_and_code() {
+        let f = fixture();
+        let mut issues = vec![];
+        classic_to_richtext(
+            "See arr[i] and [sic] and [note], also [embed].\n\n<pre>[widget size=\"2\"]</pre>",
+            &HashMap::new(),
+            &mut ctx(&f, &mut issues),
+        );
+        let msgs: Vec<_> = issues.iter().map(|i| i.message.as_str()).collect();
+        assert_eq!(msgs, ["[embed] left as text"]);
+    }
+
+    #[test]
+    fn gutenberg_loose_html_at_cap_kept() {
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let f = fixture();
+                let mut issues = vec![];
+                // At the cap, the innermost group's siblings: loose text and a paragraph block.
+                let src = format!(
+                    "{}LOOSE-TEXT<!-- wp:paragraph --><p>inner</p><!-- /wp:paragraph -->{}",
+                    "<!-- wp:group -->".repeat(crate::html::MAX_DEPTH),
+                    "<!-- /wp:group -->".repeat(crate::html::MAX_DEPTH)
+                );
+                let bs = gutenberg::gutenberg_to_layout(
+                    &src,
+                    &HashMap::new(),
+                    &mut ctx(&f, &mut issues),
+                );
+                let mut raw = vec![];
+                bs[0].walk(&mut |b| {
+                    if let Some(porter_model::FieldValue::Text(h)) = b.props.get("html") {
+                        raw.push(h.clone());
+                    }
+                });
+                assert_eq!(
+                    raw,
+                    [
+                        "LOOSE-TEXT",
+                        "<!-- wp:paragraph --><p>inner</p><!-- /wp:paragraph -->"
+                    ]
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

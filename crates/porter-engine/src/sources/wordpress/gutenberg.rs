@@ -237,13 +237,16 @@ impl Gb<'_, '_, '_> {
                 self.flagged_deep = true;
                 too_deep_issue(self.ctx);
             }
+            // In document order, loose HTML included.
             for p in pieces {
-                if let Piece::Block(b) = p {
-                    let mut raw = block(BlockKind::Raw, b);
-                    raw.props
-                        .insert("html".into(), FieldValue::Text(b.source()));
-                    out.push(raw);
-                }
+                let (src, html) = match p {
+                    Piece::Block(b) => (b, b.source()),
+                    Piece::Html(h) if h.trim().is_empty() => continue,
+                    Piece::Html(h) => (&freeform, h.clone()),
+                };
+                let mut raw = block(BlockKind::Raw, src);
+                raw.props.insert("html".into(), FieldValue::Text(html));
+                out.push(raw);
             }
             return out;
         }
