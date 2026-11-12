@@ -1,5 +1,6 @@
 import { getDb } from "@porter-hub/db";
 import { notFound } from "next/navigation";
+import { shareAllows } from "../../../lib/shares";
 import { listReports } from "../../../lib/snapshot-reader";
 import { NoSnapshot, Overview, Shell } from "../../../lib/view-parts";
 import { loadShare } from "../../../lib/views";
@@ -15,7 +16,7 @@ export default async function Shared({ params }: { params: Promise<{ token: stri
     <Shell title={v.project.name}>
       {!v.snap ? (
         <NoSnapshot />
-      ) : v.scope === "report" ? (
+      ) : !shareAllows(v.scope, "overview") ? (
         <>
           <h2>Reports</h2>
           <ul>

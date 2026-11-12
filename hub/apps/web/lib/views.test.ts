@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -191,9 +191,9 @@ afterAll(async () => {
 
 describe("safe extraction", () => {
   const dest = () => mkdtempSync(join(work, "x-"));
-  test("extracts regular files and dirs", () => {
+  test("extracts regular files and dirs", async () => {
     const d = dest();
-    extractTarZst(tarZst(entry("a/"), entry("a/b.txt", "hi")), d);
+    await extractTarZst(tarZst(entry("a/"), entry("a/b.txt", "hi")), d);
     expect(readFileSync(join(d, "a/b.txt"), "utf8")).toBe("hi");
   });
   test.each([
@@ -203,13 +203,13 @@ describe("safe extraction", () => {
     ["a symlink", entry("link", "", "2", "/etc/passwd")],
     ["a hardlink", entry("link", "", "1", "project.db")],
     ["a device", entry("dev", "", "3")],
-  ])("rejects %s", (_n, e) => {
+  ])("rejects %s", async (_n, e) => {
     const d = dest();
-    expect(() => extractTarZst(tarZst(entry("ok.txt", "ok"), e), d)).toThrow();
+    await expect(extractTarZst(tarZst(entry("ok.txt", "ok"), e), d)).rejects.toThrow();
     expect(existsSync(join(d, "..", "evil.txt"))).toBe(false);
   });
-  test("caps extracted size", () => {
-    expect(() => extractTarZst(tarZst(entry("big", Buffer.alloc(5000))), dest(), 1000)).toThrow();
+  test("caps extracted size", async () => {
+    await expect(extractTarZst(tarZst(entry("big", Buffer.alloc(5000))), dest(), 1000)).rejects.toThrow();
   });
 });
 
@@ -263,14 +263,15 @@ describe("snapshot queries", () => {
     expect(last).toMatchObject({ total: 250, pages: 3 });
     expect(last?.rows).toHaveLength(50);
   });
-  test("share issue rows carry only kind, severity, message, item title", () => {
+  test("share issue rows carry only kind, severity, item title (no message)", () => {
     const row = issuesPage(snapDir, 1, false)?.rows[0];
     expect(row).toEqual({
       kind: "broken-link",
       severity: "warning",
-      message: "issue 0",
       itemTitle: "About us",
     });
+    expect(JSON.stringify(issuesPage(snapDir, 1, false))).not.toContain("issue 0");
+    expect(issuesPage(snapDir, 1, true)?.rows[0]).toMatchObject({ message: "issue 0" });
   });
   test("urls", () => {
     expect(urlsPage(snapDir, 1)?.rows).toEqual([
@@ -285,8 +286,13 @@ describe("snapshot queries", () => {
     expect(overview(d).issueCounts).toBeNull();
     expect(overview(d).stages).not.toBeNull();
     expect(urlsPage(d, 1)?.total).toBe(2);
-    const empty = mkdtempSync(join(work, "none-"));
-    expect(overview(empty).stages).toBeNull(); // no project.db at all
+  });
+  test("other errors (corrupt or missing database) propagate instead of reading as 'not available'", () => {
+    const bad = mkdtempSync(join(work, "bad-"));
+    writeFileSync(join(bad, "project.db"), "this is not a sqlite database, not even close".repeat(50));
+    expect(() => overview(bad)).toThrow();
+    expect(() => issuesPage(bad, 1, true)).toThrow();
+    expect(() => overview(mkdtempSync(join(work, "none-")))).toThrow(); // no project.db at all
   });
 });
 
@@ -391,6 +397,7 @@ describe("share links", () => {
     const l = await mk({ scope: "project-readonly" });
     const v = await loadShare(conn.db, l.token, "issues");
     const dir = v?.snap?.dir as string;
+    expect(JSON.stringify(issuesPage(dir, 1, false))).not.toMatch(/issue \d/); // no issue message in a share response
     const everything = JSON.stringify([
       overview(dir),
       issuesPage(dir, 1, false),

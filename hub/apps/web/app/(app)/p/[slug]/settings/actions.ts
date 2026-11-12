@@ -46,6 +46,10 @@ export async function createShare(slug: string, _prev: unknown, f: FormData) {
   }
 }
 export async function revokeShare(slug: string, id: string) {
-  await shares.revokeShare(getDb(), await requireUser(), slug, id);
+  try {
+    await shares.revokeShare(getDb(), await requireUser(), slug, id);
+  } catch (e) {
+    if (!(e instanceof svc.HttpError && e.status === 404)) throw e; // already revoked in another tab
+  }
   done(slug);
 }

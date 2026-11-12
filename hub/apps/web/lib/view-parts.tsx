@@ -156,7 +156,7 @@ export function IssuesView({
           <tr>
             <th>Kind</th>
             <th>Severity</th>
-            <th>Message</th>
+            {full && <th>Message</th>}
             <th>Item</th>
             {full && <th>Stage</th>}
             {full && <th>Resolution</th>}
@@ -168,7 +168,7 @@ export function IssuesView({
             <tr key={i}>
               <td>{r.kind}</td>
               <td>{r.severity}</td>
-              <td>{r.message}</td>
+              {full && <td>{"message" in r ? r.message : ""}</td>}
               <td>{r.itemTitle ?? ""}</td>
               {full && <td>{"stage" in r ? r.stage : ""}</td>}
               {full && <td>{"resolution" in r ? r.resolution : ""}</td>}

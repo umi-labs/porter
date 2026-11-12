@@ -1,25 +1,24 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, readdirSync } from "node:fs";
+import { mkdir, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { zstdDecompressSync } from "node:zlib";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createZstdDecompress } from "node:zlib";
 import { projectVersion } from "@porter-hub/db";
 import { desc, eq } from "drizzle-orm";
+import * as tar from "tar-stream";
 import type { Db } from "./permissions";
-import { getBuffer } from "./storage";
+import { getStream } from "./storage";
 
 // node:sqlite (built in, no native build) and zlib's zstd both need Node >= 22.15; the Dockerfile must use at least that.
 
 export const PAGE_SIZE = 100;
+const MAX_ENTRIES = 200_000;
 const cacheDir = () => process.env.HUB_CACHE_DIR || join(tmpdir(), "porter-hub-cache");
 const maxBytes = () => Number(process.env.HUB_SNAPSHOT_MAX_BYTES) || 2 * 1024 ** 3;
-
-const octal = (b: Buffer) => {
-  if (b[0] & 0x80) return Number(b.readBigUInt64BE(b.length - 8) & 0x7fffffffffffffffn); // base-256
-  return Number.parseInt(b.toString("latin1").replace(/\0.*$/s, "").trim() || "0", 8);
-};
-const cstr = (b: Buffer) => b.toString("utf8").replace(/\0.*$/s, "");
 
 /** Throws unless `name` is a relative path with no `..`; returns it without a leading ./ or trailing /. "" is the archive root ("./"). */
 function safeName(name: string) {
@@ -34,63 +33,73 @@ function safeName(name: string) {
   return n === "." ? "" : n;
 }
 
+/** Passes bytes through, failing once more than `limit` have gone by. */
+const capBytes = (limit: number, what: string, seen: { n: number }) =>
+  new Transform({
+    transform(chunk, _enc, cb) {
+      seen.n += chunk.length;
+      cb(seen.n > limit ? new Error(`${what} is larger than ${limit} bytes`) : null, chunk);
+    },
+  });
+
 /**
- * Extracts a tar.zst into `dest`. Only regular files and directories are accepted (a symlink, hardlink or
- * device entry rejects the whole archive), as are paths that are absolute or contain `..`. Decompressed size
- * is capped, which also bounds a decompression bomb.
+ * Streams a tar.zst (zstd -> tar parser -> files) into `dest`; memory stays O(chunk), the event loop is never blocked.
+ * Only regular files and directories are accepted: a symlink, hardlink or device entry, an absolute path or a
+ * `..` rejects the whole archive. The cap counts bytes actually decompressed and written, not sizes the archive declares.
+ * If `hash` is given it is fed the compressed bytes.
  */
-export function extractTarZst(archive: Buffer, dest: string, limit = maxBytes()) {
-  const tar = zstdDecompressSync(archive, { maxOutputLength: limit + 1024 * 1024 });
+export async function extractTarZst(
+  source: Buffer | Readable,
+  dest: string,
+  limit = maxBytes(),
+  hash?: ReturnType<typeof createHash>,
+) {
   const root = resolve(dest);
-  mkdirSync(root, { recursive: true });
-  let total = 0;
-  let longName: string | undefined;
-  let paxPath: string | undefined;
-  for (let off = 0; off + 512 <= tar.length; ) {
-    const h = tar.subarray(off, off + 512);
-    if (h.every((x) => x === 0)) break;
-    let size = octal(h.subarray(124, 136));
-    const type = String.fromCharCode(h[156] || 48);
-    const body = () => tar.subarray(off + 512, off + 512 + size);
-    const next = off + 512 + Math.ceil(size / 512) * 512;
-    if (next > tar.length) throw new Error("truncated tar");
-    if (type === "L") {
-      longName = cstr(body());
-    } else if (type === "x") {
-      for (const m of body()
-        .toString("utf8")
-        .matchAll(/\d+ (\w+)=([^\n]*)\n/g)) {
-        if (m[1] === "path") paxPath = m[2];
-        if (m[1] === "size") size = Number(m[2]);
+  await mkdir(root, { recursive: true });
+  const input = Buffer.isBuffer(source) ? Readable.from([source]) : source;
+  if (hash) input.on("data", (c) => hash.update(c));
+  const extract = tar.extract();
+  const written = { n: 0 };
+  const run = pipeline(
+    input,
+    createZstdDecompress(),
+    capBytes(limit + 1024 * 1024, "snapshot", { n: 0 }),
+    extract,
+  );
+  const walk = (async () => {
+    let entries = 0;
+    for await (const entry of extract) {
+      const { name, type } = entry.header;
+      if (++entries > MAX_ENTRIES) throw new Error("snapshot has too many entries");
+      if (type !== "file" && type !== "directory") {
+        throw new Error(
+          `snapshot entry ${JSON.stringify(name)} has unsupported type ${JSON.stringify(type)}`,
+        );
       }
-    } else if (type === "g") {
-      // global pax header: nothing we need
-    } else {
-      const prefix = cstr(h.subarray(345, 500));
-      const raw =
-        paxPath ??
-        longName ??
-        (prefix && cstr(h.subarray(257, 262)) === "ustar" ? `${prefix}/` : "") + cstr(h.subarray(0, 100));
-      paxPath = longName = undefined;
-      if (type !== "0" && type !== "5")
-        throw new Error(`snapshot entry ${JSON.stringify(raw)} has unsupported type ${JSON.stringify(type)}`);
-      const rel = safeName(raw);
-      if (!rel && type === "5") {
-        off = next;
+      const rel = safeName(name);
+      const out = resolve(root, rel);
+      if (!rel && type === "directory") {
+        entry.resume();
         continue;
       }
-      const out = resolve(root, rel);
       if (!rel || !out.startsWith(root + sep))
-        throw new Error(`unsafe path in snapshot: ${JSON.stringify(raw)}`);
-      if (type === "5") mkdirSync(out, { recursive: true, mode: 0o755 });
-      else {
-        total += size;
-        if (total > limit) throw new Error(`snapshot is larger than ${limit} bytes`);
-        mkdirSync(dirname(out), { recursive: true, mode: 0o755 });
-        writeFileSync(out, body(), { mode: 0o644 });
+        throw new Error(`unsafe path in snapshot: ${JSON.stringify(name)}`);
+      if (type === "directory") {
+        await mkdir(out, { recursive: true, mode: 0o755 });
+        entry.resume();
+      } else {
+        await mkdir(dirname(out), { recursive: true, mode: 0o755 });
+        await pipeline(entry, capBytes(limit, "snapshot", written), createWriteStream(out, { mode: 0o644 }));
       }
     }
-    off = next;
+  })();
+  // Whichever side fails first rejects; tear the source down so S3 stops sending.
+  try {
+    await Promise.all([run, walk]);
+  } catch (e) {
+    input.destroy();
+    extract.destroy();
+    throw e;
   }
 }
 
@@ -106,29 +115,27 @@ export async function latestSnapshot(db: Db, projectId: string) {
     .limit(1);
   if (!v) return null;
   const final = join(cacheDir(), v.id);
+  // Single-flight per version: concurrent requests share one extraction. A failure clears the entry so the next request retries.
   let p = inflight.get(v.id);
   if (!p) {
     p = (async () => {
-      try {
-        readdirSync(final);
-        return final;
-      } catch {}
-      const buf = await getBuffer(v.snapshotKey);
-      if (v.snapshotSha256 && createHash("sha256").update(buf).digest("hex") !== v.snapshotSha256) {
-        throw new Error("stored snapshot does not match its checksum");
-      }
+      if (existsSync(join(final, "project.db"))) return final;
       // Temp dir then atomic rename: a concurrent request in another process sees all of it or none.
       const tmp = join(cacheDir(), `.tmp-${v.id}-${randomUUID()}`);
       try {
-        extractTarZst(buf, tmp);
+        const hash = createHash("sha256");
+        await extractTarZst(await getStream(v.snapshotKey), tmp, maxBytes(), hash);
+        if (v.snapshotSha256 && hash.digest("hex") !== v.snapshotSha256) {
+          throw new Error("stored snapshot does not match its checksum");
+        }
         try {
-          renameSync(tmp, final);
+          await rename(tmp, final);
         } catch (e) {
           const code = (e as { code?: string }).code;
           if (code !== "ENOTEMPTY" && code !== "EEXIST") throw e; // lost the race: the winner's copy is identical
         }
       } finally {
-        rmSync(tmp, { recursive: true, force: true });
+        await rm(tmp, { recursive: true, force: true });
       }
       return final;
     })().finally(() => inflight.delete(v.id));
@@ -148,7 +155,7 @@ export async function latestSnapshot(db: Db, projectId: string) {
 export type Snapshot = NonNullable<Awaited<ReturnType<typeof latestSnapshot>>>;
 
 type Row = Record<string, string | number | null>;
-/** Runs `fn` against project.db opened read-only; null when the table or column is missing (older snapshot). */
+/** Runs `fn` against project.db opened read-only; null only for "no such table/column" (older snapshot). Other errors throw. */
 export function withDb<T>(
   dir: string,
   fn: (q: (sql: string, ...a: (string | number)[]) => Row[]) => T,
@@ -158,8 +165,10 @@ export function withDb<T>(
     db = new DatabaseSync(join(dir, "project.db"), { readOnly: true });
     const d = db;
     return fn((sql, ...a) => d.prepare(sql).all(...a) as Row[]);
-  } catch {
-    return null;
+  } catch (e) {
+    // Only an older snapshot lacking a table or column is "not available"; corrupt or missing databases and bugs propagate.
+    if (/no such (table|column)/i.test((e as Error).message)) return null;
+    throw e;
   } finally {
     db?.close();
   }
@@ -207,23 +216,28 @@ export function overview(dir: string) {
   };
 }
 
-/** Issues, open and closed. `full` adds stage, resolution and item id (staff); without it only kind, severity, message, item title. */
+/** Issues, open and closed. `full` (view_raw members) adds message, stage, resolution and item id. Share views get only kind, severity and item title: messages can echo field or submission values. */
 export function issuesPage(dir: string, page: number, full: boolean) {
   return withDb(dir, (q) => {
-    const total = Number(q("SELECT count(*) AS n FROM issues WHERE deleted_at IS NULL")[0].n);
+    const only = full ? "" : "AND resolution = 'open'"; // shares show open issues only; the resolution tag stays hidden
+    const total = Number(q(`SELECT count(*) AS n FROM issues WHERE deleted_at IS NULL ${only}`)[0].n);
     const rows = q(
       `SELECT i.kind, i.severity, i.message, i.stage, i.resolution, i.item_id,
          (SELECT coalesce(json_extract(t.data, '$.title'), json_extract(t.data, '$.filename'))
             FROM items t WHERE t.id = i.item_id) AS item_title
-       FROM issues i WHERE i.deleted_at IS NULL ORDER BY i.id LIMIT ${PAGE_SIZE} OFFSET ?`,
+       FROM issues i WHERE i.deleted_at IS NULL ${only.replace("resolution", "i.resolution")} ORDER BY i.id LIMIT ${PAGE_SIZE} OFFSET ?`,
       (page - 1) * PAGE_SIZE,
     ).map((r) => ({
       kind: String(r.kind),
       severity: String(r.severity),
-      message: String(r.message),
       itemTitle: r.item_title == null ? null : String(r.item_title),
       ...(full
-        ? { stage: String(r.stage), resolution: String(r.resolution), itemId: String(r.item_id) }
+        ? {
+            message: String(r.message),
+            stage: String(r.stage),
+            resolution: String(r.resolution),
+            itemId: String(r.item_id),
+          }
         : {}),
     }));
     return pageOf(rows, total, page);

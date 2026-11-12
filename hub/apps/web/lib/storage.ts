@@ -1,3 +1,4 @@
+import type { Readable } from "node:stream";
 import {
   CreateBucketCommand,
   GetObjectCommand,
@@ -123,11 +124,9 @@ export async function listSizes(prefix: string) {
   return out;
 }
 
-/** Whole object into memory, via the internal endpoint. Snapshots only; media is never proxied. */
-export async function getBuffer(key: string) {
+/** The object body as a stream, via the internal endpoint. Snapshots only; media is never proxied. */
+export async function getStream(key: string) {
   await ensureBucket();
   const r = await s3().send(new GetObjectCommand({ Bucket: need("S3_BUCKET"), Key: key }));
-  return Buffer.from(
-    await (r.Body as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray(),
-  );
+  return r.Body as Readable;
 }
