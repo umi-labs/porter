@@ -113,6 +113,8 @@ pub(super) async fn load(l: &mut Loader<'_>) -> Result<()> {
         }
     }
 
+    fail_clashes(l, &mut todo)?;
+
     // Pass 1.
     let total = todo.len() as u64;
     let mut created: Vec<(&Document, &TypeMap, &str, Value)> = vec![];
@@ -256,26 +258,64 @@ fn wire_status(d: &Document) -> String {
         .unwrap_or_default()
 }
 
-/// The upsert key: the item id, or for `key_type = "number"` the source id's trailing number.
+/// The upsert key: the item id, or for `key_type = "number"` the source id's number. Only
+/// an id whose `:`-segments hold exactly one number, as the last segment (`123`,
+/// `posts:123`), has one: variant (`node:5:v1`), dedupe (`5~2`) and positional (`item-3`)
+/// ids would share a number with another document and overwrite it.
 fn key_of(tm: &TypeMap, d: &Document) -> Result<Value, String> {
     match tm.key_type {
         KeyType::Text => Ok(json!(d.id.to_string())),
         KeyType::Number => {
             let sid = &d.source.source_id;
-            let digits: String = sid
-                .chars()
-                .rev()
-                .take_while(char::is_ascii_digit)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
-            digits
-                .parse::<u64>()
-                .map(|n| json!(n))
-                .map_err(|_| format!("key_type is number but source id `{sid}` has no number"))
+            let segs: Vec<&str> = sid.split(':').collect();
+            let numeric = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+            let (last, rest) = segs.split_last().unwrap_or((&"", &[]));
+            if numeric(last)
+                && rest.iter().all(|s| !s.bytes().any(|b| b.is_ascii_digit()))
+                && let Ok(n) = last.parse::<u64>()
+            {
+                return Ok(json!(n));
+            }
+            Err(format!(
+                "source id `{sid}` has no unique numeric key; use key_type = text"
+            ))
         }
     }
+}
+
+/// Drops from `todo` every document whose `(collection, key)` another one shares, failing
+/// each with a schema-mismatch naming them all: an upsert on a shared key would overwrite
+/// one document with another. Text keys are item ids, so only numeric keys can clash.
+fn fail_clashes(l: &Loader, todo: &mut Vec<(&Document, &TypeMap, &str)>) -> Result<()> {
+    let mut by_key: HashMap<(String, String), Vec<&str>> = HashMap::new();
+    for (d, tm, coll) in todo.iter() {
+        if let Ok(k) = key_of(tm, d) {
+            by_key
+                .entry((coll.to_string(), k.to_string()))
+                .or_default()
+                .push(&d.source.source_id);
+        }
+    }
+    let clash = |d: &Document, tm: &TypeMap, coll: &str| {
+        let k = key_of(tm, d).ok()?;
+        let sids = by_key.get(&(coll.to_string(), k.to_string()))?;
+        (sids.len() > 1).then(|| (k, sids.join(", ")))
+    };
+    let mut keep = vec![];
+    for (d, tm, coll) in todo.drain(..) {
+        match clash(d, tm, coll) {
+            Some((k, sids)) => schema_fail(
+                l,
+                d.id,
+                format!(
+                    "key {k} in {coll} is shared by source ids {sids}: none of them written; use key_type = text"
+                ),
+            )?,
+            None => keep.push((d, tm, coll)),
+        }
+    }
+    *todo = keep;
+    Ok(())
 }
 
 fn has_refs(v: &FieldValue) -> bool {

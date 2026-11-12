@@ -716,3 +716,36 @@ async fn live_verify_roundtrip() {
     assert_eq!(ps[0].item, Some(docs[2].id));
     eprintln!("live verify after corruption: {}", ps[0].message);
 }
+
+#[tokio::test]
+async fn count_mismatch_points_at_removed_items() {
+    let fake = Fake::default();
+    let s = payload(&fake).await;
+    let f = fx(&s.uri());
+    f.loaded(&doc("1", "a", None), "pages", 1);
+    f.loaded(&doc("2", "b", None), "pages", 2);
+    fake.put("pages", json!({"id": 1, "title": "A", "parent": null}));
+    fake.put("pages", json!({"id": 2, "title": "B", "parent": null}));
+    // Removed from the source since; load flagged it and left it in the destination.
+    let st = f.p.store();
+    st.soft_delete(did("2")).unwrap();
+    let run = st.begin_run(Stage::Load).unwrap();
+    st.set_status(
+        run,
+        Stage::Load,
+        did("2"),
+        &ItemStatus::Skipped {
+            reason: "removed from source".into(),
+        },
+    )
+    .unwrap();
+    f.verify().await;
+    let counts = f.issues(IssueKind::SchemaMismatch);
+    assert_eq!(counts.len(), 1, "{counts:#?}");
+    assert!(
+        counts[0].message.contains("1 removed from source")
+            && counts[0].message.contains("still in the destination"),
+        "{}",
+        counts[0].message
+    );
+}

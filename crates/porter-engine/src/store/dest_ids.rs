@@ -1,6 +1,6 @@
 use super::{NOW, Store};
 use anyhow::Result;
-use porter_model::ItemId;
+use porter_model::{ItemId, ItemKind};
 use rusqlite::{OptionalExtension, params};
 use serde_json::Value;
 
@@ -48,6 +48,40 @@ impl Store {
         for row in rows {
             let (id, c, v) = row?;
             out.push((id.parse()?, c, serde_json::from_str(&v)?));
+        }
+        Ok(out)
+    }
+
+    /// Items of `connector` deleted from the store (gone from the source) that still have
+    /// a `dest_ids` row: `(item, kind, collection, dest id)`.
+    pub fn removed_with_dest(
+        &self,
+        connector: &str,
+    ) -> Result<Vec<(ItemId, ItemKind, String, Value)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT i.id, i.kind, d.collection, d.dest_id FROM items i
+             JOIN dest_ids d ON d.item_id = i.id
+             WHERE i.connector = ?1 AND i.deleted_at IS NOT NULL AND d.deleted_at IS NULL
+             ORDER BY i.rowid",
+        )?;
+        let rows = stmt.query_map([connector], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, kind, c, v) = row?;
+            out.push((
+                id.parse()?,
+                super::from_wire(kind)?,
+                c,
+                serde_json::from_str(&v)?,
+            ));
         }
         Ok(out)
     }

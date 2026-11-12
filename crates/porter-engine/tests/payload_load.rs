@@ -1296,3 +1296,86 @@ async fn live_load_roundtrip() {
     assert_eq!(c.count("redirects").await.unwrap(), redirects0 + 2);
     assert_eq!(f.p.store().dest_ids().unwrap().len(), ids.len());
 }
+
+#[tokio::test]
+async fn numeric_keys_must_be_unique() {
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let mut f = fx(&s.uri());
+    f.cfg.mapping.types.get_mut("page").unwrap().key_type = porter_engine::mapping::KeyType::Number;
+    // Variant, dedupe and positional ids: no unique number of their own.
+    for sid in ["node:5:v1", "node:5~2", "item-3"] {
+        f.put(&doc("page", sid, &sid.replace([':', '~'], "-"), None));
+    }
+    // Two sources ids carrying the same number: they would overwrite each other.
+    f.put(&doc("page", "node:7", "a", None));
+    f.put(&doc("page", "post:7", "b", None));
+    f.put(&doc("page", "node:9", "c", None));
+    let sum = f.load(true, CancellationToken::new()).await;
+    assert_eq!(exit_code(&sum), 2, "{sum:?}");
+    for sid in ["node:5:v1", "node:5~2", "item-3"] {
+        match f.status(did(sid)) {
+            Some(ItemStatus::Failed { error }) => {
+                assert!(error.contains("has no unique numeric key"), "{error}")
+            }
+            s => panic!("{sid}: {s:?}"),
+        }
+    }
+    for sid in ["node:7", "post:7"] {
+        match f.status(did(sid)) {
+            Some(ItemStatus::Failed { error }) => {
+                assert!(
+                    error.contains("node:7") && error.contains("post:7"),
+                    "{error}"
+                )
+            }
+            s => panic!("{sid}: {s:?}"),
+        }
+    }
+    assert_eq!(f.status(did("node:9")), Some(ItemStatus::Done));
+    let keys: Vec<Value> = fake
+        .writes()
+        .iter()
+        .filter(|(m, ..)| m == "POST")
+        .map(|(.., b)| b["legacyId"].clone())
+        .collect();
+    assert_eq!(keys, vec![json!(9)]);
+}
+
+#[tokio::test]
+async fn removed_from_source_is_flagged_not_deleted() {
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let f = fx(&s.uri());
+    f.put(&doc("page", "post:1", "a", None));
+    f.put(&doc("page", "post:2", "b", None));
+    f.load(true, CancellationToken::new()).await;
+    assert_eq!(f.status(did("post:2")), Some(ItemStatus::Done));
+    // normalise no longer saw post:2 at the source.
+    f.p.store().soft_delete(did("post:2")).unwrap();
+    let before = fake.log().len();
+    let sum = f.load(true, CancellationToken::new()).await;
+    assert_eq!(exit_code(&sum), 0, "{sum:?}");
+    assert_eq!(
+        f.status(did("post:2")),
+        Some(ItemStatus::Skipped {
+            reason: "removed from source".into()
+        })
+    );
+    let issues = issues_of(&f, did("post:2"));
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == porter_model::Severity::Warning
+                && i.message.contains("still in destination at pages/2")),
+        "{issues:#?}"
+    );
+    // Nothing deleted or rewritten for it.
+    assert!(
+        fake.log()[before..]
+            .iter()
+            .all(|(m, p, _)| m != "DELETE" && p != "pages/2"),
+        "{:?}",
+        &fake.log()[before..]
+    );
+}

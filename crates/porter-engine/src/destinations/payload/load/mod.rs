@@ -97,6 +97,7 @@ pub(super) async fn run(
     for (item, collection, id) in ctx.project.store().dest_ids()? {
         l.ids.insert(item, &collection, id);
     }
+    removed(&l)?;
     media::load(&mut l).await?;
     if l.cancelled() {
         return Ok(());
@@ -127,6 +128,29 @@ pub(super) async fn run(
     }
     extras::settings(&mut l).await?;
     extras::authors(&l)?;
+    Ok(())
+}
+
+/// Items the source no longer has but an earlier load wrote: never deleted here (that is
+/// the editor's call), but each gets a warning saying where it still is, and a status.
+fn removed(l: &Loader) -> Result<()> {
+    let adapter = &l.ctx.config.source.adapter;
+    for (item, kind, collection, id) in l.ctx.project.store().removed_with_dest(adapter)? {
+        let at = match &id {
+            Value::String(s) => format!("{collection}/{s}"),
+            v => format!("{collection}/{v}"),
+        };
+        l.ctx.issue(
+            IssueKind::SchemaMismatch,
+            Severity::Warning,
+            Some(item),
+            format!(
+                "removed from source; still in destination at {at} — unpublish or delete by hand"
+            ),
+            json!({"collection": collection, "id": id}),
+        )?;
+        l.skip(item, kind, crate::verify::REMOVED_FROM_SOURCE)?;
+    }
     Ok(())
 }
 

@@ -29,6 +29,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::task::JoinSet;
 
+/// Load's Skipped reason for an item gone from the source but still in the destination.
+pub const REMOVED_FROM_SOURCE: &str = "removed from source";
+
 const USER_AGENT: &str = "porter/2.0 (+https://github.com/umi-labs/porter)";
 const CONCURRENCY: usize = 8;
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -118,9 +121,17 @@ pub async fn run(ctx: &StageCtx, dest: &dyn Destination) -> Result<()> {
             .map(|(i, c, v)| (i, (c, v)))
             .collect(),
     );
+    // Gone from the source but left in the destination (load flagged each one).
+    let mut removed: HashMap<String, u64> = HashMap::new();
+    for (i, c, _) in store.dest_ids()? {
+        if matches!(load.get(&i), Some(ItemStatus::Skipped { reason }) if reason == REMOVED_FROM_SOURCE)
+        {
+            *removed.entry(c).or_default() += 1;
+        }
+    }
     let docs: Vec<Document> = canonical(ctx, ItemKind::Document)?;
     let mut checks = Checks::default();
-    counts(ctx, dest, &docs, &loaded, &mut checks).await?;
+    counts(ctx, dest, &docs, &loaded, &removed, &mut checks).await?;
     if !ctx.cancel.is_cancelled() {
         structure(ctx, dest, &docs, &loaded, &mut checks).await?;
     }
@@ -178,6 +189,7 @@ async fn counts(
     dest: &dyn Destination,
     docs: &[Document],
     loaded: &Loaded,
+    removed: &HashMap<String, u64>,
     checks: &mut Checks,
 ) -> Result<()> {
     // collection -> (key field, None = the destination's own key; loaded dest ids)
@@ -219,12 +231,20 @@ async fn counts(
             .await?;
         let total = dest.count(ctx, &collection).await?;
         if actual != expected {
+            let gone = removed.get(&collection).copied().unwrap_or(0);
+            let why = if gone > 0 {
+                format!(
+                    "; {gone} removed from source and still in the destination (see load's \"removed from source\" warnings)"
+                )
+            } else {
+                String::new()
+            };
             ctx.issue(
                 IssueKind::SchemaMismatch,
                 Severity::Error,
                 None,
                 format!(
-                    "{collection}: {expected} loaded but the destination holds {actual} migrated docs"
+                    "{collection}: {expected} loaded but the destination holds {actual} migrated docs{why}"
                 ),
                 json!({"collection": collection, "expected": expected, "actual": actual}),
             )?;
