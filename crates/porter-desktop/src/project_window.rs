@@ -46,6 +46,8 @@ pub struct ProjectWindow {
     pub(crate) mapping: Mapping,
     pub(crate) issues: Issues,
     pub(crate) resolve_choice: Choice,
+    /// The choice of the bulk resolve in flight, for its report.
+    resolving: Choice,
     pub(crate) issues_filter: Entity<InputState>,
     pub(crate) resolve_note: Entity<InputState>,
     /// The schema mode whose run is in flight: its folder opens when it finishes.
@@ -98,6 +100,7 @@ impl ProjectWindow {
             mapping: Mapping::default(),
             issues: Issues::default(),
             resolve_choice: Choice::HandledManually,
+            resolving: Choice::HandledManually,
             issues_filter,
             resolve_note,
             pending_mode: None,
@@ -218,6 +221,7 @@ impl ProjectWindow {
         match self.issues.plan(self.resolve_choice, &note) {
             Ok((ids, r)) => {
                 self.issues.note = Some(format!("resolving {}…", ids.len()));
+                self.resolving = self.resolve_choice;
                 self.bridge.resolve(ids, r);
             }
             Err(e) => self.issues.note = Some(e),
@@ -260,6 +264,7 @@ impl ProjectWindow {
             }
             (0, None) => format!("{} done", mode.label()),
             // Check finishes with 2 when it opened error issues: the results are below.
+            (3, _) => format!("{} cancelled — nothing written", mode.label()),
             (2, None) => format!("{} done; see the issues below", mode.label()),
             (code, _) => {
                 let why: Vec<_> = o
@@ -402,8 +407,9 @@ impl ProjectWindow {
             }
             DataResult::Urls { generation, reply } => self.urls.land(generation, reply),
             DataResult::Issues { generation, result } => self.issues.land(generation, result),
-            DataResult::Resolved(results) => {
-                self.issues.note = Some(self.issues.resolved(results));
+            DataResult::Resolved(Err(e)) => self.issues.note = Some(self.issues.resolve_failed(&e)),
+            DataResult::Resolved(Ok(results)) => {
+                self.issues.note = Some(self.issues.resolved(self.resolving, results));
                 // The overview counts and the table both changed.
                 self.refresh();
             }

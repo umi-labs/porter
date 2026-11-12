@@ -24,6 +24,17 @@ pub enum Choice {
     Reopen,
 }
 
+impl Choice {
+    /// What was done, for the report: never "resolved" for a reopen.
+    pub fn done(self) -> &'static str {
+        match self {
+            Choice::HandledManually => "marked handled",
+            Choice::WontFix => "marked won't fix",
+            Choice::Reopen => "reopened",
+        }
+    }
+}
+
 /// Where "jump to item" goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Jump {
@@ -179,7 +190,7 @@ impl Issues {
 
     /// Takes the per-issue results of a bulk resolve: resolved issues leave the selection,
     /// failed ones stay selected. Returns the report (never "all resolved" when some failed).
-    pub fn resolved(&mut self, results: Vec<(Uuid, Result<(), String>)>) -> String {
+    pub fn resolved(&mut self, choice: Choice, results: Vec<(Uuid, Result<(), String>)>) -> String {
         let total = results.len();
         let mut failed = vec![];
         for (id, r) in results {
@@ -199,11 +210,16 @@ impl Issues {
                 }
             }
         }
-        let mut s = format!("resolved {} of {total}", total - failed.len());
+        let mut s = format!("{} {} of {total}", choice.done(), total - failed.len());
         if !failed.is_empty() {
             s += &format!("; {} failed: {}", failed.len(), failed.join("; "));
         }
         s
+    }
+
+    /// The bulk call itself failed (not one issue): nothing is confirmed, the selection stays.
+    pub fn resolve_failed(&self, error: &str) -> String {
+        format!("bulk update failed: {error} — nothing confirmed")
     }
 
     /// "12 of 340 issues match, 3 selected".
@@ -301,14 +317,41 @@ mod tests {
         s.toggle_all();
         let a = Uuid::from_u128(1);
         let b = Uuid::from_u128(2);
-        let report = s.resolved(vec![(a, Ok(())), (b, Err("database is locked".into()))]);
-        assert!(report.contains("1 of 2"), "{report}");
+        let report = s.resolved(
+            Choice::HandledManually,
+            vec![(a, Ok(())), (b, Err("database is locked".into()))],
+        );
+        assert!(report.starts_with("marked handled 1 of 2"), "{report}");
         assert!(report.contains("1 failed"), "{report}");
         assert!(report.contains("database is locked"), "{report}");
         assert!(!s.is_selected(a));
         assert!(s.is_selected(b), "a failed one stays selected for a retry");
-        let all_ok = s.resolved(vec![(b, Ok(()))]);
-        assert_eq!(all_ok, "resolved 1 of 1");
+        let all_ok = s.resolved(Choice::WontFix, vec![(b, Ok(()))]);
+        assert_eq!(all_ok, "marked won't fix 1 of 1");
+    }
+
+    #[test]
+    fn report_names_the_action() {
+        let mut s = three();
+        s.toggle_all();
+        let ids: Vec<_> = s.selected.iter().copied().collect();
+        let ok = |c| s_clone(c, &ids);
+        fn s_clone(c: Choice, ids: &[Uuid]) -> String {
+            let mut s = three();
+            s.toggle_all();
+            s.resolved(c, ids.iter().map(|i| (*i, Ok(()))).collect())
+        }
+        assert_eq!(ok(Choice::Reopen), "reopened 2 of 2");
+        assert_eq!(ok(Choice::HandledManually), "marked handled 2 of 2");
+    }
+
+    #[test]
+    fn failed_bulk_call_confirms_nothing() {
+        let mut s = three();
+        s.toggle_all();
+        let m = s.resolve_failed("task panicked");
+        assert_eq!(m, "bulk update failed: task panicked — nothing confirmed");
+        assert_eq!(s.selected_count(), 2);
     }
 
     #[test]

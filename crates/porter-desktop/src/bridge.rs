@@ -77,7 +77,8 @@ pub enum DataResult {
         result: Result<Vec<Issue>, String>,
     },
     /// A bulk resolve, one result per issue.
-    Resolved(Vec<(Uuid, Result<(), String>)>),
+    /// Err: the whole bulk call failed (its task panicked or was cancelled).
+    Resolved(Result<Vec<(Uuid, Result<(), String>)>, String>),
     /// The kind of the item an issue is about, for the jump.
     Jump(ItemId, Result<ItemKind, String>),
     /// An output folder was handed to the OS (or could not be).
@@ -314,18 +315,12 @@ impl Bridge {
     pub fn resolve(&self, ids: Vec<Uuid>, r: Resolution) {
         let (session, tx) = (self.session.clone(), self.tx.clone());
         runtime().spawn(async move {
-            let results = blocking(move || {
-                ids.into_iter()
-                    .map(|id| {
-                        let r = session
-                            .resolve_issue(id, r.clone())
-                            .map_err(|e| format!("{e:#}"));
-                        (id, r)
-                    })
-                    .collect::<Vec<_>>()
+            let results = resolve_all(ids, move |id| {
+                session
+                    .resolve_issue(id, r.clone())
+                    .map_err(|e| format!("{e:#}"))
             })
-            .await
-            .unwrap_or_default();
+            .await;
             let _ = tx.send(UiEvent::Data(DataResult::Resolved(results)));
         });
     }
@@ -564,6 +559,15 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
         .map_err(|e| e.to_string())
 }
 
+/// Runs `f` on each id off the thread; one failing does not stop the rest. A panicked or
+/// cancelled task is an `Err`, never an empty result.
+async fn resolve_all(
+    ids: Vec<Uuid>,
+    f: impl Fn(Uuid) -> Result<(), String> + Send + 'static,
+) -> Result<Vec<(Uuid, Result<(), String>)>, String> {
+    blocking(move || ids.into_iter().map(|id| (id, f(id))).collect()).await
+}
+
 /// A closed window stops its run: the engine ends it at a safe point, resumable.
 impl Drop for Bridge {
     fn drop(&mut self) {
@@ -611,6 +615,15 @@ mod tests {
             UiEvent::Engine(Event::Progress { stage, done, .. }) => Some((*stage, *done)),
             _ => None,
         }
+    }
+
+    #[test]
+    fn a_panicking_bulk_task_is_an_error_not_an_empty_result() {
+        let ids = vec![Uuid::from_u128(1)];
+        let r = runtime().block_on(resolve_all(ids.clone(), |_| panic!("boom")));
+        assert!(r.is_err(), "{r:?}");
+        let ok = runtime().block_on(resolve_all(ids, |_| Ok(())));
+        assert_eq!(ok.map(|v| v.len()), Ok(1));
     }
 
     #[test]
