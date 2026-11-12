@@ -68,8 +68,16 @@ pub enum ConnectorConfig {
         path: PathBuf,
     },
     WpDb {
-        #[serde(flatten)]
-        extra: toml::Table,
+        /// SQL dump (plain or gzip); relative paths resolve against the project folder.
+        dump: PathBuf,
+        /// WordPress core, themes and plugins. Without it only a SQL fallback runs.
+        #[serde(default)]
+        wp_root: Option<PathBuf>,
+        #[serde(default = "default_table_prefix")]
+        table_prefix: String,
+        /// Overrides the dump's `home` for permalinks.
+        #[serde(default)]
+        site_url: Option<String>,
     },
     UmbracoJson {
         #[serde(flatten)]
@@ -122,6 +130,10 @@ fn default_max_media_bytes() -> u64 {
 
 fn default_delay_ms() -> u64 {
     250
+}
+
+fn default_table_prefix() -> String {
+    "wp_".into()
 }
 
 fn default_code() -> u16 {
