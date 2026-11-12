@@ -1,0 +1,23 @@
+[package]
+name = "porter-tui"
+description = "Terminal UI for Porter."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[dependencies]
+porter-engine = { path = "../porter-engine" }
+anyhow.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+futures.workspace = true
+porter-model.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+insta.workspace = true

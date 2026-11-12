@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 porter-engine = { path = "../porter-engine" }
 porter-model.workspace = true
+porter-tui = { path = "../porter-tui" }
 clap = { workspace = true }
 tokio.workspace = true
 tokio-util.workspace = true

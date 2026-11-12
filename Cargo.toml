@@ -47,6 +47,10 @@ swc_ecma_parser = "47"
 swc_ecma_ast = "30"
 swc_common = "27"
 swc_atoms = "10"
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
+futures = "0.3"
+insta = "1"
 porter-model = { path = "crates/porter-model" }
 
 # The profile that 'dist' will build with

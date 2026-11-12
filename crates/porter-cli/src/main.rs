@@ -5,8 +5,9 @@ mod commands;
 mod output;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use commands::stage::StageCmd;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 const OLD_FLAGS_NOTE: &str =
@@ -28,11 +29,13 @@ pub struct Cli {
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Open the terminal UI (also what bare `porter` does in a terminal)
+    Tui,
     /// Create porter.toml and an empty project store
     Init {
         name: String,
@@ -126,7 +129,16 @@ fn parse() -> Cli {
 async fn dispatch(cli: Cli) -> Result<i32> {
     use commands::*;
     let (dir, json) = (cli.project.clone(), cli.json);
-    match cli.command {
+    let command = match cli.command {
+        Some(c) => c,
+        None if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() => Command::Tui,
+        None => {
+            eprintln!("{}", Cli::command().render_help());
+            return Ok(2);
+        }
+    };
+    match command {
+        Command::Tui => porter_tui::run_tui(&dir).await,
         Command::Init { name, adapter } => init::run(&dir, json, &name, &adapter),
         Command::Status => status::run(&dir, json),
         Command::Issues {
