@@ -248,6 +248,17 @@ describe("run requests", () => {
     await clearRuns();
   });
 
+  test("an archived project takes no new runs (409)", async () => {
+    await conn.db.update(project).set({ archivedAt: new Date() }).where(eq(project.id, pid));
+    try {
+      const r = await api.createRun(req("dev", { stages: ["analyse"] }), slug);
+      expect(r.status).toBe(409);
+      expect((await json(r)).error).toBe("The project is archived");
+    } finally {
+      await conn.db.update(project).set({ archivedAt: null }).where(eq(project.id, pid));
+    }
+  });
+
   test("apply reads the destination host from the version's real snapshot", async () => {
     const dir = mkdtempSync(join(tmpdir(), "runs-snap-"));
     writeFileSync(join(dir, "porter.toml"), TOML);

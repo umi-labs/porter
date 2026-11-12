@@ -327,50 +327,84 @@ describe("device authorization", () => {
 });
 
 describe("email and password", () => {
-  const signUp = (email: string, password: string) =>
-    auth.api.signUpEmail({ body: { email, password, name: "Staff" }, headers: new Headers() });
+  const signUp = (email: string, password: string, invitationId?: string) =>
+    auth.api.signUpEmail({
+      body: { email, password, name: "Staff", ...(invitationId ? { invitationId } : {}) } as never,
+      headers: new Headers(),
+    });
+  const signIn = (email: string) =>
+    auth.api.signInEmail({ body: { email, password: "long-enough-password" }, headers: new Headers() });
+  const invite = async (id: string, orgId: string, email: string) => {
+    const inviter = await userByEmail(`isaac@${DOMAIN}`);
+    await conn.db.execute(
+      sql`insert into invitation (id, organization_id, email, role, status, expires_at, inviter_id)
+          values (${id}, ${orgId}, ${email}, 'member', 'pending', now() + interval '1 day', ${inviter.id})`,
+    );
+  };
+  const staffOrgId = async () =>
+    (await conn.db.select().from(organization).where(eq(organization.slug, "umi")))[0].id;
+  const statusOf = async (id: string) =>
+    (await conn.db.select().from(invitation).where(eq(invitation.id, id)))[0].status;
 
-  test("sign-up needs a pending staff invitation and a 12+ char password", async () => {
+  test("sign-up needs the id of a pending staff invitation for that email, and a 12+ char password", async () => {
     await expect(signUp("walkin@example.com", "long-enough-password")).rejects.toMatchObject({
       statusCode: 403,
     });
     expect(await userByEmail("walkin@example.com")).toBeUndefined();
 
-    const inviter = await userByEmail(`isaac@${DOMAIN}`);
-    const invite = (id: string, orgId: string, email: string) =>
-      conn.db.execute(
-        sql`insert into invitation (id, organization_id, email, role, status, expires_at, inviter_id)
-            values (${id}, ${orgId}, ${email}, 'member', 'pending', now() + interval '1 day', ${inviter.id})`,
-      );
-    // An invitation to some other org does not open password sign-up.
+    // An invitation to some other org does not open password sign-up, even with its id.
     await invite("inv0", otherOrgId, "sidedoor@example.com");
-    await expect(signUp("sidedoor@example.com", "long-enough-password")).rejects.toMatchObject({
+    await expect(signUp("sidedoor@example.com", "long-enough-password", "inv0")).rejects.toMatchObject({
       statusCode: 403,
     });
 
-    const [staffOrg] = await conn.db.select().from(organization).where(eq(organization.slug, "umi"));
-    await invite("inv1", staffOrg.id, "contractor@example.com");
-    await expect(signUp("contractor@example.com", "short-pw")).rejects.toThrow();
-    await expect(signUp("contractor@example.com", "long-enough-password")).resolves.toBeDefined();
+    await invite("inv1", await staffOrgId(), "contractor@example.com");
+    // Knowing the invited address is not enough: a squatter without the id is refused.
+    await expect(signUp("contractor@example.com", "long-enough-password")).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    await expect(signUp("contractor@example.com", "long-enough-password", "wrong-id")).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(await userByEmail("contractor@example.com")).toBeUndefined();
+    await expect(signUp("contractor@example.com", "short-pw", "inv1")).rejects.toThrow();
+    await expect(signUp("contractor@example.com", "long-enough-password", "inv1")).resolves.toBeDefined();
     expect(sent.some((m) => m.to === "contractor@example.com")).toBe(true); // verification email
+    expect(await statusOf("inv1")).toBe("signed-up");
 
-    // Unverified: signing in is refused and makes no member. Verified: sign-in accepts the staff invitation.
-    const signIn = () =>
-      auth.api.signInEmail({
-        body: { email: "contractor@example.com", password: "long-enough-password" },
-        headers: new Headers(),
-      });
-    await expect(signIn()).rejects.toMatchObject({ statusCode: 403 });
+    // Unverified: signing in is refused and makes no member. Verified: sign-in accepts that staff invitation.
+    await expect(signIn("contractor@example.com")).rejects.toMatchObject({ statusCode: 403 });
     await conn.db.update(user).set({ emailVerified: true }).where(eq(user.email, "contractor@example.com"));
-    await signIn();
+    await signIn("contractor@example.com");
     const contractor = await userByEmail("contractor@example.com");
     const memberships = await conn.db.select().from(member).where(eq(member.userId, contractor.id));
-    expect(memberships.map((m) => m.organizationId)).toEqual([staffOrg.id]);
-    const [inv] = await conn.db.select().from(invitation).where(eq(invitation.id, "inv1"));
-    expect(inv.status).toBe("accepted");
-    // The other org's invitation was not accepted.
-    const [side] = await conn.db.select().from(invitation).where(eq(invitation.id, "inv0"));
-    expect(side.status).toBe("pending");
+    expect(memberships.map((m) => m.organizationId)).toEqual([await staffOrgId()]);
+    expect(await statusOf("inv1")).toBe("accepted");
+    expect(await statusOf("inv0")).toBe("pending"); // the other org's invitation was not touched
+  });
+
+  test("a squatter holding an old invitation id for a different email is refused", async () => {
+    await invite("inv-old", await staffOrgId(), "former@example.com");
+    await invite("inv-target", await staffOrgId(), "boss@example.com");
+    await expect(signUp("boss@example.com", "long-enough-password", "inv-old")).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(await userByEmail("boss@example.com")).toBeUndefined();
+    expect(await statusOf("inv-old")).toBe("pending");
+    expect(await statusOf("inv-target")).toBe("pending");
+  });
+
+  test("sign-in accepts only the invitation the account signed up with, not another pending one", async () => {
+    await invite("inv-a", await staffOrgId(), "pair@example.com");
+    await signUp("pair@example.com", "long-enough-password", "inv-a");
+    // An admin re-invites meanwhile: that pending invitation was never used to sign up.
+    await invite("inv-b", await staffOrgId(), "pair@example.com");
+    await conn.db.update(invitation).set({ status: "canceled" }).where(eq(invitation.id, "inv-a"));
+    await conn.db.update(user).set({ emailVerified: true }).where(eq(user.email, "pair@example.com"));
+    await signIn("pair@example.com");
+    const u = await userByEmail("pair@example.com");
+    expect(await conn.db.select().from(member).where(eq(member.userId, u.id))).toEqual([]);
+    expect(await statusOf("inv-b")).toBe("pending");
   });
 });
 

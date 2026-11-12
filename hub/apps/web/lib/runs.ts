@@ -67,10 +67,10 @@ const isActiveConflict = (e: unknown) => {
   );
 };
 
-/** Queues a run on the latest version. Apply needs `confirm_host` equal to that version's destination host. */
 /** Stages before load: re-running any of them invalidates load's dry run. */
 const UPSTREAM_OF_LOAD: readonly string[] = ["analyse", "extract", "normalise", "schema-check"];
 
+/** Queues a run on the latest version. Apply needs `confirm_host` equal to that version's destination host. */
 export async function createRun(db: Db, actor: Actor, slug: string, input: unknown, toml = readToml) {
   const { project: p } = await access(db, actor, slug, "run");
   const body = parse(schemas.create, input);

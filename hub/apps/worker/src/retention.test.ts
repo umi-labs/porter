@@ -10,16 +10,17 @@ import {
   organization,
   project,
   projectVersion,
+  run,
   upload,
   user,
   versionUpload,
 } from "@porter-hub/db";
 import { runMigrations } from "@porter-hub/db/migrate";
 import { freshDb } from "@porter-hub/db/test-helper";
-import { head, keys, listSizes, putFile } from "@porter-hub/storage/s3";
+import { deletePrefix, head, keys, listSizes, putFile } from "@porter-hub/storage/s3";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { sweepRetention } from "./retention";
+import { retireProject, sweepRetention } from "./retention";
 
 const DAY = 24 * 3_600_000;
 let fresh: Awaited<ReturnType<typeof freshDb>>;
@@ -123,6 +124,62 @@ describe("retention", () => {
       expect(existsSync(join(cache, v.id))).toBe(true);
       expect(await conn.db.select().from(auditLog).where(eq(auditLog.targetId, p.id))).toEqual([]);
     }
+  });
+
+  const audits = async (id: string) => conn.db.select().from(auditLog).where(eq(auditLog.targetId, id));
+  const intact = async (id: string) => {
+    expect((await listSizes(keys.projectPrefix(id))).size).toBe(3);
+    expect(await conn.db.select().from(project).where(eq(project.id, id))).toHaveLength(1);
+    expect(await audits(id)).toEqual([]);
+  };
+
+  test("unarchived after the daily list was taken: the locked re-check skips it, nothing deleted", async () => {
+    const { p } = await seed(100, 90);
+    await conn.db.update(project).set({ archivedAt: null }).where(eq(project.id, p.id));
+    expect(await retireProject(conn.db, p.id, cache)).toBe(false);
+    await intact(p.id);
+  });
+
+  test("a queued or running run holds retention back until it ends", async () => {
+    const { p } = await seed(100, 90);
+    const [r] = await conn.db
+      .insert(run)
+      .values({ projectId: p.id, stages: ["analyse"] })
+      .returning();
+    await sweepRetention(conn.db, cache);
+    await intact(p.id);
+    await conn.db.update(run).set({ state: "running" }).where(eq(run.id, r.id));
+    expect(await retireProject(conn.db, p.id, cache)).toBe(false);
+    await conn.db.update(run).set({ state: "finished" }).where(eq(run.id, r.id));
+    await sweepRetention(conn.db, cache);
+    expect(await conn.db.select().from(project).where(eq(project.id, p.id))).toEqual([]);
+    expect(await audits(p.id)).toHaveLength(1);
+  });
+
+  test("two replicas at once: one deletes, the other skips; one audit row", async () => {
+    const { p } = await seed(100, 90);
+    const slow = async (prefix: string) => {
+      await new Promise((r) => setTimeout(r, 300));
+      return deletePrefix(prefix);
+    };
+    const results = await Promise.all([
+      retireProject(conn.db, p.id, cache, Date.now(), slow),
+      retireProject(conn.db, p.id, cache, Date.now(), slow),
+    ]);
+    expect(results.sort()).toEqual([false, true]);
+    expect(await audits(p.id)).toHaveLength(1);
+    expect((await listSizes(keys.projectPrefix(p.id))).size).toBe(0);
+  });
+
+  test("storage failing mid-delete rolls back: row and audit untouched, retried next pass", async () => {
+    const { p } = await seed(100, 90);
+    const broken = async () => {
+      throw new Error("storage down");
+    };
+    await expect(retireProject(conn.db, p.id, cache, Date.now(), broken)).rejects.toThrow("storage down");
+    await intact(p.id);
+    expect(await retireProject(conn.db, p.id, cache)).toBe(true);
+    expect(await audits(p.id)).toHaveLength(1);
   });
 
   test("expired push inits: their snapshot and never-committed media are deleted; live ones kept", async () => {

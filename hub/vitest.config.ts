@@ -6,6 +6,8 @@ export default defineConfig({
   test: {
     include: ["packages/**/*.test.ts", "apps/**/*.test.ts"],
     testTimeout: 30000,
+    // Hooks create and drop a database each; under the full suite, Postgres serialises those and 10 s is too tight.
+    hookTimeout: 60000,
     // Dev MinIO from docker-compose.dev.yml; its own bucket so tests never touch dev data.
     env: {
       S3_ENDPOINT: "http://localhost:59100",

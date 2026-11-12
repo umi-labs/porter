@@ -103,9 +103,13 @@ async function provisionGoogleStaff(db: Db, userId: string, domain: string) {
     .onConflictDoNothing({ target: [member.organizationId, member.userId] });
 }
 
+/** Status of a staff invitation whose id was used to sign up (Better Auth itself only knows pending/accepted/...). */
+const SIGNED_UP = "signed-up";
+
 /**
- * The password route for staff: a verified user with a pending, unexpired staff-org invitation (invite-staff)
- * becomes a staff-org member on sign-in, as Better Auth's accept-invitation would.
+ * The password route for staff: once its email is verified, the account that signed up with a staff-org invitation
+ * (invite-staff) becomes a staff-org member on sign-in, as Better Auth's accept-invitation would. Only that invitation
+ * counts: a merely pending invitation for the same email is not accepted this way.
  */
 async function acceptStaffInvite(db: Db, userId: string) {
   const [u] = await db.select().from(user).where(eq(user.id, userId));
@@ -121,7 +125,7 @@ async function acceptStaffInvite(db: Db, userId: string) {
             tx.select({ id: org.id }).from(org).where(eq(org.slug, staffOrgSlug())),
           ),
           lower(invitation.email, u.email),
-          eq(invitation.status, "pending"),
+          eq(invitation.status, SIGNED_UP),
           gt(invitation.expiresAt, new Date()),
         ),
       )
@@ -264,23 +268,28 @@ export function createAuth(
         }
       : {},
     hooks: {
-      // Password sign-up is for staff: only emails with a pending invitation to the staff org.
+      // Password sign-up is for staff: it needs the id of a pending staff-org invitation for exactly this email.
+      // The id is the secret (invite-staff prints it); knowing an invited address is not enough.
       before: createAuthMiddleware(async (ctx) => {
         if (ctx.path !== "/sign-up/email") return;
         const email = String(ctx.body?.email ?? "");
-        const [inv] = await db
-          .select({ id: invitation.id })
-          .from(invitation)
-          .innerJoin(org, eq(org.id, invitation.organizationId))
-          .where(
-            and(
-              eq(org.slug, staffOrgSlug()),
-              lower(invitation.email, email),
-              eq(invitation.status, "pending"),
-              gt(invitation.expiresAt, new Date()),
-            ),
-          )
-          .limit(1);
+        const id = String(ctx.body?.invitationId ?? "");
+        const [inv] = id
+          ? await db
+              .select({ id: invitation.id })
+              .from(invitation)
+              .innerJoin(org, eq(org.id, invitation.organizationId))
+              .where(
+                and(
+                  eq(invitation.id, id),
+                  eq(org.slug, staffOrgSlug()),
+                  lower(invitation.email, email),
+                  eq(invitation.status, "pending"),
+                  gt(invitation.expiresAt, new Date()),
+                ),
+              )
+              .limit(1)
+          : [];
         if (!inv) throw new APIError("FORBIDDEN", { message: "Sign-up is by staff invitation only" });
       }),
     },
@@ -296,6 +305,20 @@ export function createAuth(
               .where(pendingProjectInvite(u.email))
               .limit(1);
             if (!inv) return false;
+          },
+          // A password sign-up binds its invitation to the account it created; only that one is accepted at sign-in.
+          after: async (u, ctx) => {
+            if (ctx?.path !== "/sign-up/email") return;
+            await db
+              .update(invitation)
+              .set({ status: SIGNED_UP })
+              .where(
+                and(
+                  eq(invitation.id, String(ctx.body?.invitationId ?? "")),
+                  lower(invitation.email, u.email),
+                  eq(invitation.status, "pending"),
+                ),
+              );
           },
         },
       },

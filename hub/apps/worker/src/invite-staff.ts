@@ -1,6 +1,7 @@
 /**
  * `pnpm -C hub admin:invite-staff <email>`: creates the staff org if missing and a pending staff invitation, so
- * that email can sign up with a password (the fallback to Google). Signing in with the verified email makes them staff.
+ * that email can sign up with a password (the fallback to Google). The invitation id is the sign-up secret: it is
+ * printed (with the sign-up link) for the admin to pass on. Signing in with the verified email makes them staff.
  * In the worker container: `docker compose exec worker node_modules/.bin/tsx apps/worker/src/invite-staff.ts <email>`.
  */
 import { randomUUID } from "node:crypto";
@@ -53,8 +54,19 @@ if (process.argv[1]?.endsWith("invite-staff.ts")) {
   const { db, client } = connect();
   inviteStaff(db, email)
     .then((inv) => {
+      const base = (process.env.BETTER_AUTH_URL ?? "https://<hub>").replace(/\/$/, "");
+      const body = JSON.stringify({
+        email: inv.email,
+        password: "<12+ characters>",
+        name: "<name>",
+        invitationId: inv.id,
+      });
       console.log(`invited ${inv.email} to the staff org until ${inv.expiresAt.toISOString()}.`);
-      console.log("They sign up with email + password at /sign-in, verify the email, then sign in.");
+      console.log(`invitation id: ${inv.id} (the sign-up secret: send it to them privately)`);
+      console.log(`sign up at: ${base}/sign-up?invitation=${inv.id}`);
+      console.log(`or: curl -sS ${base}/api/auth/sign-up/email -H 'content-type: application/json' \\`);
+      console.log(`       -H 'origin: ${base}' -d '${body}'`);
+      console.log("Then verify the email (link in the mail) and sign in with the password.");
     })
     .catch((e) => {
       console.error(e instanceof Error ? e.message : e);

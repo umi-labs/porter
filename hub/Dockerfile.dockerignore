@@ -8,5 +8,5 @@ hub/**/node_modules
 hub/**/.next
 hub/**/.next-*
 hub/**/*.tsbuildinfo
-hub/.env
-hub/**/.env
+hub/**/.env*
+!hub/.env.example

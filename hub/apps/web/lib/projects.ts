@@ -83,8 +83,11 @@ export async function access(db: Db, actor: Actor, slug: string, action: Action)
     .where(eq(project.slug, slug));
   if (!row) throw new HttpError(404, "Project not found");
   if (!roleCan(row.role, action)) throw new HttpError(403, "You don't have permission to do that");
+  // An archived project is waiting for retention to delete it: nothing new goes in.
+  if (row.project.archivedAt && WRITES.includes(action)) throw new HttpError(409, "The project is archived");
   return row;
 }
+const WRITES: readonly Action[] = ["push", "run", "upload"];
 
 export async function listProjects(db: Db, actor: Actor) {
   return db

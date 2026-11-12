@@ -9,6 +9,8 @@ x-build: &build
 # What web and worker both need.
 x-common-env: &common-env
   NODE_ENV: production
+  # The hub's public origin. Web: auth. Worker: the sign-up link invite-staff prints.
+  BETTER_AUTH_URL: ${BETTER_AUTH_URL:?set BETTER_AUTH_URL (https://hub.example.com)}
   DATABASE_URL: ${DATABASE_URL:-postgres://porter:${POSTGRES_PASSWORD}@db:5432/porter}
   HUB_SECRET_KEY: ${HUB_SECRET_KEY:?set HUB_SECRET_KEY (openssl rand -base64 32)}
   S3_ENDPOINT: ${S3_ENDPOINT:-http://storage:9000}
@@ -28,7 +30,6 @@ services:
     environment:
       <<: *common-env
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET (openssl rand -base64 32)}
-      BETTER_AUTH_URL: ${BETTER_AUTH_URL:?set BETTER_AUTH_URL (https://hub.example.com)}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       STAFF_EMAIL_DOMAIN: ${STAFF_EMAIL_DOMAIN:-}

@@ -210,6 +210,12 @@ export async function commitVersion(db: Db, actor: Actor, slug: string, input: u
     return await db.transaction(async (tx) => {
       // Serialise pushes to one project so the latest check and the insert can't interleave.
       await tx.select({ id: project.id }).from(project).where(eq(project.id, p.id)).for("update");
+      // Claim the init inside the transaction: if retention (or a concurrent commit) took it meanwhile, stop here.
+      const [spent] = await tx
+        .delete(versionUpload)
+        .where(eq(versionUpload.id, up.id))
+        .returning({ id: versionUpload.id });
+      if (!spent) throw new HttpError(404, "Unknown or expired upload_id");
       const latest = await latestOf(tx, p.id);
       if (latest !== body.base_version)
         throw new HttpError(409, "Base version is not the latest", { latest });

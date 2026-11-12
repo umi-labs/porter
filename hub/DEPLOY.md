@@ -11,7 +11,8 @@ The hub is one Docker Compose app, `hub/docker-compose.yml`:
 
 Both app images are built on the server from the repo (Rust builds `porter-cli` in release; porter-desktop is never
 built). Nothing is pushed to a registry. The first build takes 10–15 minutes, most of it the Rust compile. Allow
-about 4 GB of disk for the build.
+about 8 GB of disk for the build: the images plus about 6.5 GB of build cache (base images, cargo and pnpm caches).
+The cache makes later builds fast. Reclaim it with `docker builder prune` when disk is tight.
 
 Everything below uses `hub.example.com` for the hub and `s3.example.com` for storage. Swap in your domains.
 
@@ -218,21 +219,31 @@ docker compose -p <dokploy-app-name> exec worker \
 # invited you@example.com to the staff org until …
 ```
 
-(In a local checkout with `DATABASE_URL` in `hub/.env`: `pnpm -C hub admin:invite-staff you@example.com`.) The
-invitation lasts 7 days, and running the command again replaces it. It also creates the staff organization if it
-doesn't exist yet.
+It prints the invitation id and a sign-up link:
 
-The sign-in page has no sign-up form, so create the account with one request (password: 12+ characters):
-
-```sh
-curl -sS https://hub.example.com/api/auth/sign-up/email \
-  -H 'content-type: application/json' -H 'origin: https://hub.example.com' \
-  -d '{"email":"you@example.com","password":"<12+ characters>","name":"Your Name"}'
+```text
+invited you@example.com to the staff org until …
+invitation id: 6f1c…  (the sign-up secret: send it to them privately)
+sign up at: https://hub.example.com/sign-up?invitation=6f1c…
+or: curl -sS https://hub.example.com/api/auth/sign-up/email -H 'content-type: application/json' \
+       -H 'origin: https://hub.example.com' -d '{"email":"you@example.com","password":"<12+ characters>","name":"<name>","invitationId":"6f1c…"}'
 ```
 
+(In a local checkout with `DATABASE_URL` in `hub/.env`: `pnpm -C hub admin:invite-staff you@example.com`.) The
+invitation lasts 7 days. Running the command again replaces it, with a new id. It also creates the staff
+organization if it doesn't exist yet.
+
+**The invitation id is the secret.** Sign-up needs it, together with exactly the invited email, so knowing an
+invited address isn't enough. Pass the link (or the id) to the invitee privately; don't post it in a shared channel.
+The invitee opens the link and chooses a password (12+ characters), or uses the curl form.
+
 The hub then emails a verification link (SMTP must work). Click it, then sign in at
-`https://hub.example.com/sign-in` → "Use a password instead". The first sign-in with the
-verified email accepts the invitation, and you're staff.
+`https://hub.example.com/sign-in` → "Use a password instead". The first sign-in with the verified email accepts
+the invitation the account signed up with, and you're staff.
+
+**If you get a verification email you didn't ask for, don't click it.** The same applies if sign-up says the
+account already exists. Someone else may have created an account on your address. Ask an admin to delete that user
+(`delete from "user" where email = '…'`) and run `invite-staff` again.
 
 No working SMTP yet? As a one-off, you can mark the address verified in the database instead:
 
@@ -309,7 +320,8 @@ docker compose -p <app> start web worker   # web applies any newer migrations on
 
 **MinIO data:** back up the `miniodata` volume (Dokploy Volume Backups), or mirror the bucket:
 `mc mirror local/porter-hub <remote>/porter-hub` from inside the container. With R2/S3, use the provider's
-versioning or replication.
+versioning or replication. With versioning on, retention's deletes only add delete markers. Add a noncurrent-version
+expiration rule (e.g. 30 days), or deleted projects' data stays in the bucket.
 
 A database restored without the matching objects shows versions whose snapshots fail to load. Objects without
 database rows are harmless but take space. Restore both from about the same time.
@@ -362,13 +374,16 @@ cleanup setting for this.
 - **PgBouncer.** The worker sets `statement_timeout` as a connection startup parameter. PgBouncer in transaction
   pooling mode rejects unknown startup parameters unless `ignore_startup_parameters = statement_timeout` is set.
   The bundled Postgres has no PgBouncer; this only matters with an external `DATABASE_URL`. `LISTEN/NOTIFY` (live
-  run logs) also needs session pooling or a direct connection for the web.
+  run logs) also needs session pooling or a direct connection for the web. The same goes for migrations: the web
+  takes a session advisory lock while it migrates, which a transaction pooler can't hold. So web's `DATABASE_URL`
+  must be a direct or session-pooled connection.
 - **The MinIO digest** can disappear from Chainguard ([§5](#5-storage)). R2/S3 avoids that.
 - **Report share links** serve the stored HTML reports as they are. Those can include issue text, which can include
   error bodies returned by the destination. Don't share report links for projects whose destination errors may
   carry sensitive data.
 - **Retention:** archived projects are deleted for good `retention_days` (default 90) after archiving, by the
   worker's daily job: storage, database rows and cached snapshots. Each deletion is written to `audit_log`
-  (`action = 'retention.delete'`, project id in `target_id`). There's no archive button yet. To archive or
+  (`action = 'retention.delete'`, project id in `target_id`). An archived project takes no new pushes, runs or
+  uploads (409); it can still be viewed and pulled until it's deleted. There's no archive button yet. To archive or
   unarchive, use SQL: `update project set archived_at = now() where slug = '…'` (or `= null`). To keep a project
   longer, raise its `retention_days`.
