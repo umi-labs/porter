@@ -216,8 +216,9 @@ pub struct Overview {
     pub open_errors: u64,
     pub open_warnings: u64,
     pub open_infos: u64,
-    /// When porter.toml (and so the mapping) last changed; None if it could not be read.
-    pub config_modified: Option<std::time::SystemTime>,
+    /// porter.toml as it is now, to compare with what each run recorded. None: not
+    /// checked (no config rule applies); `Err`: could not be read, so every result is stale.
+    pub config: Option<std::result::Result<Arc<ProjectConfig>, String>>,
 }
 
 /// What a stage's last run honestly amounts to. `Running` and `CouldNotRun` are live
@@ -296,9 +297,9 @@ pub fn stage_view(ov: &Overview, stage: Stage) -> StageView {
     }
 }
 
-/// The nearest upstream stage that ran after `run` (run ids are UUIDv7, so they order by
-/// start), or, from normalise on, porter.toml edited after it started. A dry-run load
-/// wrote nothing, so it leaves verify's result standing.
+/// The nearest upstream stage that started after `run` did (run ids are UUIDv7, so they
+/// order by start), or a section of porter.toml the stage reads that differs from what
+/// the run recorded. A dry-run load wrote nothing, so it leaves verify's result standing.
 fn stale_reason(ov: &Overview, stage: Stage, run: &RunRow) -> Option<String> {
     let pos = STAGES.iter().position(|s| *s == stage)?;
     for &up in STAGES[..pos].iter().rev() {
@@ -307,16 +308,18 @@ fn stale_reason(ov: &Overview, stage: Stage, run: &RunRow) -> Option<String> {
             .iter()
             .any(|(s, r)| *s == up && r.id > run.id && !(up == Stage::Load && r.dry_run));
         if newer {
-            return Some(format!("{} re-ran since", format!("{up:?}").to_lowercase()));
+            return Some(format!("{} re-ran since", stage_name(up)));
         }
     }
-    let modified = ov.config_modified.filter(|_| pos >= 2)?;
-    match chrono::DateTime::parse_from_rfc3339(&run.started_at) {
-        Ok(t) if modified > std::time::SystemTime::from(t) => Some("mapping changed since".into()),
-        Ok(_) => None,
+    match ov.config.as_ref()? {
+        Ok(cfg) => crate::fingerprint::changed(run.config_fp.as_deref(), cfg, stage),
         // Fails closed, like `preview_stale`.
-        Err(_) => Some("its start time could not be read".into()),
+        Err(_) => Some("porter.toml could not be read".into()),
     }
+}
+
+fn stage_name(s: Stage) -> String {
+    format!("{s:?}").to_lowercase()
 }
 
 type Running = Arc<Mutex<Option<RunInfo>>>;
@@ -386,28 +389,34 @@ impl Session {
         Some(Preview { counts, at })
     }
 
-    /// Why a preview can no longer be trusted: the data was re-normalised, or porter.toml
-    /// was edited, after it was made. Fails closed: anything that cannot be checked
-    /// (file times, run history, timestamps) counts as stale.
-    pub fn preview_stale(&self, p: &Preview) -> Option<&'static str> {
-        match std::fs::metadata(self.project.dir().join("porter.toml")).and_then(|m| m.modified()) {
-            Ok(m) if m > p.at => return Some("porter.toml was edited after it"),
-            Ok(_) => {}
-            Err(_) => return Some("porter.toml could not be checked"),
-        }
-        let Ok(runs) = self.project.store().runs(Stage::Normalise) else {
-            return Some("the run history could not be read");
+    /// Why a preview can no longer be trusted: the config the dry run used differs from
+    /// porter.toml now (only the sections load reads), or normalise or schema started
+    /// after it did. Fails closed: anything that cannot be checked counts as stale.
+    pub fn preview_stale(&self, _p: &Preview) -> Option<String> {
+        let cfg = match ProjectConfig::load(&self.project.dir().join("porter.toml")) {
+            Ok(c) => c,
+            Err(_) => return Some("porter.toml could not be read".into()),
         };
-        for r in &runs {
-            let Some(t) = r.ended_at.as_deref() else {
-                continue;
+        let store = self.project.store();
+        let Ok(loads) = store.runs(Stage::Load) else {
+            return Some("the run history could not be read".into());
+        };
+        let Some(dry) = loads.into_iter().rev().find(|r| r.dry_run) else {
+            return Some("there is no record of the dry run".into());
+        };
+        if dry.summary.as_ref().is_none_or(|s| s.interrupted) {
+            return Some("the last dry run did not finish".into());
+        }
+        if let Some(why) = crate::fingerprint::changed(dry.config_fp.as_deref(), &cfg, Stage::Load)
+        {
+            return Some(why);
+        }
+        for up in [Stage::Schema, Stage::Normalise] {
+            let Ok(runs) = store.runs(up) else {
+                return Some("the run history could not be read".into());
             };
-            match chrono::DateTime::parse_from_rfc3339(t) {
-                Ok(t) if std::time::SystemTime::from(t) > p.at => {
-                    return Some("normalise ran after it");
-                }
-                Ok(_) => {}
-                Err(_) => return Some("the run history has an unreadable timestamp"),
+            if runs.iter().any(|r| r.id > dry.id) {
+                return Some(format!("{} re-ran after it", stage_name(up)));
             }
         }
         None
@@ -441,7 +450,7 @@ impl Session {
         let cancel = CancellationToken::new();
         let env = Env {
             project: self.project.clone(),
-            config,
+            config: Mutex::new(config),
             events: self.events.clone(),
             cancel: cancel.clone(),
         };
@@ -457,9 +466,11 @@ impl Session {
         blocking(move || {
             let store = p.store();
             let mut o = Overview {
-                config_modified: std::fs::metadata(p.dir().join("porter.toml"))
-                    .and_then(|m| m.modified())
-                    .ok(),
+                config: Some(
+                    ProjectConfig::load(&p.dir().join("porter.toml"))
+                        .map(Arc::new)
+                        .map_err(|e| format!("{e:#}")),
+                ),
                 ..Default::default()
             };
             for stage in STAGES {
@@ -707,9 +718,40 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
 
 struct Env {
     project: Arc<Project>,
-    config: Arc<ProjectConfig>,
+    /// Replaced once analyse seeds `[mapping]`, so later steps run with the seed.
+    config: Mutex<Arc<ProjectConfig>>,
     events: EventSink,
     cancel: CancellationToken,
+}
+
+impl Env {
+    fn config(&self) -> Arc<ProjectConfig> {
+        self.config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// After a successful analyse: writes a `[mapping]` starting point if the user has
+    /// none, and runs the rest of the plan with it (`out.seeded` says it wrote one).
+    fn seed(&self, out: &Mutex<RunOutcome>) {
+        let seed = MappingConfig::seed_from(self.project.store());
+        match write_seed_if_empty(self.project.dir(), &seed) {
+            Ok(false) => {}
+            Ok(true) => {
+                lock_out(out).seeded = true;
+                match ProjectConfig::load(&self.project.dir().join("porter.toml")) {
+                    Ok(c) => *self.config.lock().unwrap_or_else(|e| e.into_inner()) = Arc::new(c),
+                    Err(e) => lock_out(out)
+                        .messages
+                        .push(format!("warning: could not re-read porter.toml: {e:#}")),
+                }
+            }
+            Err(e) => lock_out(out)
+                .messages
+                .push(format!("warning: could not seed mapping: {e:#}")),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -771,8 +813,9 @@ fn list(names: &[&str]) -> String {
 }
 
 async fn exec(env: &Env, step: Step, refresh: bool) -> Result<Summary> {
-    validate(&env.config, step)?;
-    let cfg = &env.config;
+    let config = env.config();
+    validate(&config, step)?;
+    let cfg = &config;
     let (p, c, e, k, s) = (
         env.project.clone(),
         cfg.clone(),
@@ -929,22 +972,16 @@ async fn drive(env: Env, plan: RunPlan) -> RunOutcome {
                 Err(e) => (1, Some(format!("{e:#}"))),
             };
             lock_out(out).per_stage.push((stage, code, err));
+            // Seed right after analyse, so the steps after it use (and record) the seed.
+            if matches!(step, Step::Analyse) && matches!(code, 0 | 2) {
+                env.seed(out);
+            }
             code
         }
     })
     .await;
     let mut out = out.into_inner().unwrap_or_else(|e| e.into_inner());
     out.code = code;
-    // After a successful analyse, write a `[mapping]` starting point if the user has none.
-    if matches!(code, 0 | 2) && steps.iter().any(|s| matches!(s, Step::Analyse)) {
-        let seed = MappingConfig::seed_from(env.project.store());
-        match write_seed_if_empty(env.project.dir(), &seed) {
-            Ok(wrote) => out.seeded = wrote,
-            Err(e) => out
-                .messages
-                .push(format!("warning: could not seed mapping: {e:#}")),
-        }
-    }
     // Reported once the stage before it has run to the end.
     let last = steps.last().map(|s| s.stage());
     out.skipped = skip.filter(|_| out.summaries.iter().any(|(s, _)| Some(*s) == last));
@@ -964,6 +1001,7 @@ mod tests {
                     ended_at: None,
                     summary,
                     dry_run: false,
+                    config_fp: None,
                 },
             )],
             ..Default::default()
@@ -1021,6 +1059,7 @@ mod tests {
                 ended_at: Some("2026-11-12T10:01:00.000Z".into()),
                 summary: Some(sum),
                 dry_run,
+                config_fp: None,
             },
         )
     }
@@ -1127,37 +1166,151 @@ mod tests {
     }
 
     #[test]
-    fn stale_by_mapping_from_normalise_on() {
-        let at = |iso: &str| {
-            Some(std::time::SystemTime::from(
-                chrono::DateTime::parse_from_rfc3339(iso).unwrap(),
-            ))
+    fn stale_by_config_names_the_section() {
+        let cfg = |to: &str| {
+            let mut c = ProjectConfig::default();
+            c.source.adapter = "wordpress".into();
+            c.mapping.types.insert(
+                "post".into(),
+                crate::mapping::TypeMap {
+                    to: Some(to.into()),
+                    ..Default::default()
+                },
+            );
+            Arc::new(c)
         };
-        let runs = vec![
-            done(Stage::Extract, "1", false, |_| {}),
-            done(Stage::Normalise, "2", false, |_| {}),
-            done(Stage::Load, "3", true, |_| {}),
-        ];
+        let old = cfg("posts");
+        let with_fp = |(stage, mut r): (Stage, RunRow)| {
+            r.config_fp = Some(crate::fingerprint::fingerprint(&old, stage));
+            (stage, r)
+        };
         let mut ov = Overview {
-            last_runs: runs,
-            config_modified: at("2026-11-12T11:00:00Z"),
+            last_runs: vec![
+                with_fp(done(Stage::Extract, "1", false, |_| {})),
+                with_fp(done(Stage::Normalise, "2", false, |_| {})),
+                with_fp(done(Stage::Load, "3", true, |_| {})),
+            ],
+            config: Some(Ok(old.clone())),
             ..Default::default()
         };
+        assert!(STAGES.iter().all(|s| stage_view(&ov, *s).stale.is_none()));
+        ov.config = Some(Ok(cfg("articles")));
         assert_eq!(
             stage_view(&ov, Stage::Extract).stale,
             None,
             "extract ignores mapping"
         );
         let n = stage_view(&ov, Stage::Normalise);
-        assert_eq!(n.stale.as_deref(), Some("mapping changed since"));
-        assert_eq!(n.state, StageState::Clean);
+        assert_eq!(
+            (n.state, n.stale.as_deref()),
+            (StageState::Clean, Some("mapping changed since"))
+        );
         let l = stage_view(&ov, Stage::Load);
         assert_eq!(
             (l.state, l.stale.as_deref()),
             (StageState::DryRun, Some("mapping changed since"))
         );
-        ov.config_modified = at("2026-11-12T09:00:00Z");
-        assert_eq!(stage_view(&ov, Stage::Normalise).stale, None);
+        // Unreadable porter.toml, or a run that recorded nothing: stale, failing closed.
+        ov.config = Some(Err("parse error".into()));
+        assert!(stage_view(&ov, Stage::Extract).stale.is_some());
+        ov.config = Some(Ok(old));
+        ov.last_runs[0].1.config_fp = None;
+        assert_eq!(
+            stage_view(&ov, Stage::Extract).stale.as_deref(),
+            Some("its config was not recorded")
+        );
+    }
+
+    /// A project with a payload destination, and a finished dry-run load that started with
+    /// the config as it was when `start` ran, after `edit` changed porter.toml.
+    fn dry_run_with(edit: impl FnOnce(&Path)) -> (tempfile::TempDir, Session) {
+        let d = tempfile::tempdir().unwrap();
+        Project::init(d.path(), "demo", "wordpress").unwrap();
+        let toml = d.path().join("porter.toml");
+        let text = std::fs::read_to_string(&toml).unwrap().replace(
+            "[destination]\n",
+            "[destination]\nadapter = \"payload\"\nurl = \"https://cms.example.com\"\n",
+        );
+        std::fs::write(
+            &toml,
+            format!("{text}\n[mapping.types.post]\nto = \"posts\"\n"),
+        )
+        .unwrap();
+        let s = Session::open(d.path()).unwrap();
+        let store = s.project.store();
+        let cfg = ProjectConfig::load(&toml).unwrap();
+        // The run records its config at the start...
+        let run = store
+            .begin_run_with(
+                Stage::Load,
+                Some(&crate::fingerprint::fingerprint(&cfg, Stage::Load)),
+            )
+            .unwrap();
+        store.mark_dry_run(run).unwrap();
+        // ...anything may change while it runs...
+        edit(d.path());
+        // ...and it finishes after.
+        store
+            .end_run(
+                run,
+                &Summary {
+                    done: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let dir = d.path().join("raw/load-preview");
+        std::fs::create_dir_all(dir.join("posts")).unwrap();
+        std::fs::write(dir.join("posts/a.json"), "{}").unwrap();
+        std::fs::write(dir.join(crate::destinations::payload::PREVIEW_DONE), "").unwrap();
+        (d, s)
+    }
+
+    fn edit_toml(dir: &Path, f: impl FnOnce(String) -> String) {
+        let p = dir.join("porter.toml");
+        std::fs::write(&p, f(std::fs::read_to_string(&p).unwrap())).unwrap();
+    }
+
+    #[test]
+    fn mapping_edit_during_a_dry_run_makes_it_stale() {
+        let (_d, s) = dry_run_with(|_| {});
+        let p = s.load_preview_counts().unwrap();
+        assert_eq!(s.preview_stale(&p), None, "fresh");
+        // The bug this guards: the edit lands mid-run, before the preview's .done marker.
+        let (_d, s) = dry_run_with(|d| edit_toml(d, |t| t.replace("\"posts\"", "\"articles\"")));
+        let p = s.load_preview_counts().unwrap();
+        assert_eq!(
+            s.preview_stale(&p).as_deref(),
+            Some("mapping changed since")
+        );
+    }
+
+    #[test]
+    fn hub_and_comment_edits_leave_a_dry_run_fresh() {
+        let (d, s) = dry_run_with(|_| {});
+        edit_toml(d.path(), |t| {
+            format!("# edited\n{t}\n[hub]\nurl = \"https://hub.example.com\"\nproject = \"demo\"\n")
+                .replace("name = \"demo\"", "name = \"renamed\"")
+        });
+        let p = s.load_preview_counts().unwrap();
+        assert_eq!(s.preview_stale(&p), None);
+    }
+
+    #[test]
+    fn schema_or_normalise_after_the_dry_run_makes_it_stale() {
+        let (_d, s) = dry_run_with(|_| {});
+        let p = s.load_preview_counts().unwrap();
+        s.project.store().begin_run(Stage::Schema).unwrap();
+        assert_eq!(
+            s.preview_stale(&p).as_deref(),
+            Some("schema re-ran after it")
+        );
+        let (_d, s) = dry_run_with(|_| {});
+        s.project.store().begin_run(Stage::Normalise).unwrap();
+        assert_eq!(
+            s.preview_stale(&p).as_deref(),
+            Some("normalise re-ran after it")
+        );
     }
 
     #[tokio::test]
@@ -1212,13 +1365,7 @@ mod tests {
 
     #[test]
     fn preview_stale_fails_closed_on_store_error() {
-        let d = tempfile::tempdir().unwrap();
-        crate::project::Project::init(d.path(), "demo", "wordpress").unwrap();
-        let s = Session::open(d.path()).unwrap();
-        let dir = d.path().join("raw/load-preview");
-        std::fs::create_dir_all(dir.join("posts")).unwrap();
-        std::fs::write(dir.join("posts/a.json"), "{}").unwrap();
-        std::fs::write(dir.join(crate::destinations::payload::PREVIEW_DONE), "").unwrap();
+        let (_d, s) = dry_run_with(|_| {});
         let p = s.load_preview_counts().unwrap();
         assert_eq!(s.preview_stale(&p), None);
         s.project.store().close().unwrap();
@@ -1226,6 +1373,11 @@ mod tests {
             s.preview_stale(&p).is_some(),
             "unreadable history reads as stale"
         );
+        // A preview with no dry-run row behind it (an older porter) is not trusted either.
+        let d = tempfile::tempdir().unwrap();
+        Project::init(d.path(), "demo", "wordpress").unwrap();
+        let s = Session::open(d.path()).unwrap();
+        assert!(s.preview_stale(&p).is_some());
     }
 
     /// The CLI re-reads porter.toml for every command; a session must too, or a run after

@@ -7,12 +7,53 @@ use uuid::Uuid;
 
 impl Store {
     pub fn begin_run(&self, stage: Stage) -> Result<RunId> {
+        self.begin_run_with(stage, None)
+    }
+
+    /// Starts a run, recording the fingerprint of the config it uses
+    /// (`fingerprint::fingerprint`). None reads as unknown, so stale.
+    pub fn begin_run_with(&self, stage: Stage, config_fp: Option<&str>) -> Result<RunId> {
         let id = RunId(Uuid::now_v7());
         self.conn().execute(
-            "INSERT INTO runs (id, stage, porter_version) VALUES (?1, ?2, ?3)",
-            params![id.0.to_string(), wire(&stage)?, env!("CARGO_PKG_VERSION")],
+            "INSERT INTO runs (id, stage, porter_version, config_fp) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                id.0.to_string(),
+                wire(&stage)?,
+                env!("CARGO_PKG_VERSION"),
+                config_fp
+            ],
         )?;
         Ok(id)
+    }
+
+    /// What one run left out, grouped: `(what, why, how many)`. `what` is the document
+    /// type, or the item kind for anything else; failed items group under "failed".
+    pub fn run_left_out(&self, run: &str, stage: Stage) -> Result<Vec<(String, String, u64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT CASE WHEN i.kind = 'document'
+                    THEN coalesce(json_extract(i.data, '$.type'), 'document') ELSE i.kind END,
+                    s.status
+             FROM statuses s JOIN items i ON i.id = s.item_id
+             WHERE s.run_id = ?1 AND s.stage = ?2 AND s.deleted_at IS NULL",
+        )?;
+        let mut out: Vec<(String, String, u64)> = vec![];
+        for row in stmt.query_map([run, &wire(&stage)?], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })? {
+            let (what, status) = row?;
+            let why = match serde_json::from_str(&status)? {
+                ItemStatus::Skipped { reason } => reason,
+                ItemStatus::Failed { .. } => "failed".into(),
+                ItemStatus::Done | ItemStatus::Partial { .. } => continue,
+            };
+            match out.iter_mut().find(|(w, r, _)| *w == what && *r == why) {
+                Some(e) => e.2 += 1,
+                None => out.push((what, why, 1)),
+            }
+        }
+        out.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| (&a.0, &a.1).cmp(&(&b.0, &b.1))));
+        Ok(out)
     }
 
     /// Marks a load run as a dry run: it wrote nothing to the destination.
@@ -170,6 +211,8 @@ pub struct RunRow {
     pub summary: Option<Summary>,
     /// A load that wrote nothing to the destination.
     pub dry_run: bool,
+    /// The config it ran with (`fingerprint::fingerprint`); None before v6 recorded it.
+    pub config_fp: Option<String>,
 }
 
 impl Store {
@@ -177,7 +220,7 @@ impl Store {
     pub fn runs(&self, stage: Stage) -> Result<Vec<RunRow>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, porter_version, started_at, ended_at, summary, dry_run FROM runs
+            "SELECT id, porter_version, started_at, ended_at, summary, dry_run, config_fp FROM runs
              WHERE stage = ?1 AND deleted_at IS NULL ORDER BY id",
         )?;
         let rows = stmt.query_map([wire(&stage)?], |r| {
@@ -188,11 +231,12 @@ impl Store {
                 r.get(3)?,
                 r.get::<_, Option<String>>(4)?,
                 r.get(5)?,
+                r.get::<_, Option<String>>(6)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, porter_version, started_at, ended_at, summary, dry_run) = row?;
+            let (id, porter_version, started_at, ended_at, summary, dry_run, config_fp) = row?;
             out.push(RunRow {
                 id,
                 porter_version,
@@ -200,6 +244,7 @@ impl Store {
                 ended_at,
                 summary: summary.map(|s| serde_json::from_str(&s)).transpose()?,
                 dry_run,
+                config_fp,
             });
         }
         Ok(out)
@@ -240,6 +285,37 @@ mod tests {
     }
 
     #[test]
+    fn v5_databases_migrate_to_v6_and_old_runs_have_no_fingerprint() {
+        use super::super::SCHEMA_V5;
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("project.db");
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(&format!(
+            "BEGIN; {SCHEMA} {SCHEMA_V2} {SCHEMA_V3} {SCHEMA_V4} {SCHEMA_V5} COMMIT;"
+        ))
+        .unwrap();
+        c.execute(
+            "INSERT INTO runs (id, stage, porter_version) VALUES ('0', 'load', '2.0.0')",
+            [],
+        )
+        .unwrap();
+        drop(c);
+        let s = Store::open(&path, d.path().join("media")).unwrap();
+        assert_eq!(s.runs(Stage::Load).unwrap()[0].config_fp, None, "unknown");
+        s.begin_run_with(Stage::Load, Some("source=ab")).unwrap();
+        assert_eq!(
+            s.runs(Stage::Load).unwrap()[1].config_fp.as_deref(),
+            Some("source=ab")
+        );
+        drop(s);
+        let c = rusqlite::Connection::open(&path).unwrap();
+        let v: i64 = c
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 6);
+    }
+
+    #[test]
     fn v4_databases_migrate_to_v5_with_the_content_indexes() {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("project.db");
@@ -258,7 +334,7 @@ mod tests {
         let v: i64 = c
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 5);
+        assert_eq!(v, 6, "and on to v6");
         for name in ["items_doc_parent", "items_doc_type"] {
             let n: i64 = c
                 .query_row(

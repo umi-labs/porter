@@ -231,6 +231,7 @@ mod tests {
                     ended_at: summary.as_ref().map(|_| "2026-11-12T10:01:00Z".into()),
                     summary,
                     dry_run: false,
+                    config_fp: None,
                 },
             ));
         }
@@ -431,6 +432,7 @@ mod tests {
                     ended_at: Some("2026-11-12T10:01:00Z".into()),
                     summary: sum(|_| {}),
                     dry_run: true,
+                    config_fp: None,
                 },
             )],
             ..Default::default()
@@ -482,7 +484,7 @@ mod tests {
         ov.last_runs[0].1 = newer;
         let out = stages_panel(&app);
         assert!(
-            out.contains("✓ normalise  clean ↻ stale: extract re"),
+            out.contains("✓ normalise  clean ↻ stale: extract "),
             "{out}"
         );
         insta::assert_snapshot!(out);

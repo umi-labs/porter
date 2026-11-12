@@ -80,7 +80,15 @@ pub struct ProjectWindow {
 impl ProjectWindow {
     pub fn new(session: Arc<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (bridge, rx) = Bridge::new(session);
-        let apply_input = cx.new(|cx| InputState::new(window, cx));
+        // The host is typed, never pasted: besides the `Paste` capture in the sheet, any
+        // change that adds more than one character at once (Services, text replacement,
+        // dictation) is refused. `typed` follows the accepted length.
+        let typed = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let apply_input = cx.new(|cx| {
+            let typed = typed.clone();
+            InputState::new(window, cx)
+                .validate(move |new, _| new.chars().count() <= typed.get() + 1)
+        });
         let mapping_inputs = views::mapping::Inputs::new(window, cx);
         let issues_filter =
             cx.new(|cx| InputState::new(window, cx).placeholder("Filter by message or kind"));
@@ -88,7 +96,10 @@ impl ProjectWindow {
         // Redraw on typing so the Apply button follows the box. Enter does nothing:
         // applying always takes a click.
         let subs = vec![
-            cx.subscribe(&apply_input, |_, _, _: &InputEvent, cx| cx.notify()),
+            cx.subscribe(&apply_input, move |_, input, _: &InputEvent, cx| {
+                typed.set(input.read(cx).value().chars().count());
+                cx.notify()
+            }),
             cx.subscribe(&issues_filter, |this, input, e: &InputEvent, cx| {
                 if matches!(e, InputEvent::Change) {
                     this.issues.text = input.read(cx).value().to_string();
@@ -963,6 +974,8 @@ fn overlay(card: impl IntoElement) -> gpui::Div {
         .items_center()
         .justify_center()
         .bg(hsla(0., 0., 0., 0.45))
+        // Modal: nothing beneath takes the mouse while it is up.
+        .occlude()
         .child(card)
 }
 

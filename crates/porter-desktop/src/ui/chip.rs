@@ -93,6 +93,8 @@ pub struct Look {
 
 impl Look {
     /// Stale is a modifier on the previous result, not a replacement: the same chip at 62%.
+    /// The overview dims the whole result block instead (chip and counts together).
+    #[allow(dead_code)]
     pub fn stale(self) -> Self {
         Self {
             dimmed: true,
@@ -225,12 +227,6 @@ impl Chip {
     #[allow(dead_code)] // for headers (D3)
     pub fn large(mut self) -> Self {
         self.large = true;
-        self
-    }
-
-    /// Draw as a previous result that no longer holds.
-    pub fn stale(mut self) -> Self {
-        self.look = self.look.stale();
         self
     }
 }

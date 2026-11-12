@@ -84,6 +84,32 @@ async fn session_all_stops_at_first_failure() {
     assert!(!out.per_stage.iter().any(|p| p.0 == Stage::Load));
 }
 
+/// The first Run all seeds `[mapping]` after analyse, and the stages after it run with the
+/// seed: nothing reads as stale once it ends.
+#[tokio::test]
+async fn first_run_all_is_not_stale() {
+    use porter_engine::session::stage_view;
+    let d = wxr_project("");
+    let s = Session::open(d.path()).unwrap();
+    let out = s
+        .run(RunPlan::All {
+            keep_going: false,
+            apply: false,
+        })
+        .unwrap()
+        .wait()
+        .await;
+    assert!(out.seeded, "{out:?}");
+    let ov = s.overview().await.unwrap();
+    for stage in [Stage::Analyse, Stage::Extract, Stage::Normalise] {
+        let v = stage_view(&ov, stage);
+        assert!(v.last_run.is_some(), "{stage:?} ran: {out:?}");
+        assert_eq!(v.stale, None, "{stage:?}");
+    }
+    let toml = std::fs::read_to_string(d.path().join("porter.toml")).unwrap();
+    assert!(toml.contains("[mapping"), "seeded: {toml}");
+}
+
 #[tokio::test]
 async fn items_paged() {
     let d = tempfile::tempdir().unwrap();

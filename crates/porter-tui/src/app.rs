@@ -1678,22 +1678,34 @@ mod tests {
         assert!(app.running.is_none());
     }
 
+    /// A finished dry-run load recorded with the config as it is now, and its preview.
+    fn dry_run(s: &Session, dir: &std::path::Path) {
+        let store = s.project().store();
+        let cfg = porter_engine::config::ProjectConfig::load(&dir.join("porter.toml")).unwrap();
+        let fp = porter_engine::fingerprint::fingerprint(&cfg, Stage::Load);
+        let run = store.begin_run_with(Stage::Load, Some(&fp)).unwrap();
+        store.mark_dry_run(run).unwrap();
+        store.end_run(run, &Default::default()).unwrap();
+        let p = dir.join("raw/load-preview");
+        std::fs::create_dir_all(p.join("posts")).unwrap();
+        std::fs::write(p.join("posts/a.json"), "{}").unwrap();
+        std::fs::write(p.join(".done"), "").unwrap();
+    }
+
     #[test]
     fn normalise_run_after_dry_run_makes_preview_stale() {
         let (app, d) = live_app();
         let s = app.session.clone().unwrap();
-        let dir = d.path().join("raw/load-preview");
-        std::fs::create_dir_all(dir.join("posts")).unwrap();
-        std::fs::write(dir.join("posts/a.json"), "{}").unwrap();
-        std::fs::write(dir.join(".done"), "").unwrap();
-        // porter.toml predates the dry run, so only a later normalise can make it stale.
+        dry_run(&s, d.path());
         let p = s.load_preview_counts().unwrap();
         assert_eq!(s.preview_stale(&p), None);
-        std::thread::sleep(std::time::Duration::from_millis(1100));
         let store = s.project().store();
         let run = store.begin_run(Stage::Normalise).unwrap();
         store.end_run(run, &Default::default()).unwrap();
-        assert_eq!(s.preview_stale(&p), Some("normalise ran after it"));
+        assert_eq!(
+            s.preview_stale(&p).as_deref(),
+            Some("normalise re-ran after it")
+        );
     }
 
     #[test]
@@ -1701,17 +1713,23 @@ mod tests {
         // The staleness rule itself lives in the session; the runtime feeds it to the prompt.
         let (app, d) = live_app();
         let s = app.session.clone().unwrap();
-        let dir = d.path().join("raw/load-preview");
-        std::fs::create_dir_all(dir.join("posts")).unwrap();
-        std::fs::write(dir.join("posts/a.json"), "{}").unwrap();
-        std::fs::write(dir.join(".done"), "").unwrap();
+        dry_run(&s, d.path());
         let p = s.load_preview_counts().unwrap();
         assert_eq!(s.preview_stale(&p), None);
-        std::thread::sleep(std::time::Duration::from_millis(30));
         let toml = d.path().join("porter.toml");
         let t = std::fs::read_to_string(&toml).unwrap();
-        std::fs::write(&toml, t + "\n# edited\n").unwrap();
-        assert!(s.preview_stale(&p).is_some());
+        // A comment is not a change to what load reads.
+        std::fs::write(&toml, t.clone() + "\n# edited\n").unwrap();
+        assert_eq!(s.preview_stale(&p), None);
+        std::fs::write(
+            &toml,
+            t + "\n[[redirects]]\nfrom = \"/a\"\nto = \"/b\"\ncode = 301\n",
+        )
+        .unwrap();
+        assert_eq!(
+            s.preview_stale(&p).as_deref(),
+            Some("redirects changed since")
+        );
         let info = crate::actions::preview_info(&s).unwrap();
         assert!(info.stale.is_some());
     }

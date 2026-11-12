@@ -463,6 +463,7 @@ mod tests {
             ended_at: summary.as_ref().map(|_| "2026-11-12T10:01:00Z".into()),
             summary,
             dry_run,
+            config_fp: None,
         }
     }
 

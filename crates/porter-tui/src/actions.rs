@@ -53,7 +53,7 @@ pub fn reload_after_edit(session: &Session, edited: Result<(), String>) -> Vec<S
 /// The last dry run with its staleness verdict, for the apply prompt.
 pub fn preview_info(s: &Session) -> Option<PreviewInfo> {
     let p = s.load_preview_counts()?;
-    let stale = s.preview_stale(&p).map(String::from);
+    let stale = s.preview_stale(&p);
     Some(PreviewInfo {
         counts: p.counts,
         at: p.at,

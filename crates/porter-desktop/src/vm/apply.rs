@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use porter_engine::session::{IssueQuery, RunPlan, Session, StageOpts};
 use porter_engine::stage::SchemaMode;
-use porter_model::{IssueKind, Resolution, Severity, Stage};
+use porter_model::{Resolution, Severity, Stage};
 
 /// The last dry run as the sheet needs it.
 #[derive(Clone, Debug, PartialEq)]
@@ -35,7 +35,7 @@ pub struct ApplyFacts {
 /// the UI thread.
 pub fn preview_info(s: &Session) -> Option<PreviewInfo> {
     let p = s.load_preview_counts()?;
-    let stale = s.preview_stale(&p).map(String::from);
+    let stale = s.preview_stale(&p);
     Some(PreviewInfo {
         counts: p.counts,
         at: p.at,
@@ -51,35 +51,21 @@ pub fn apply_facts(s: &Session) -> ApplyFacts {
         resolution: Some(Resolution::Open),
         ..Default::default()
     });
-    let mut not_written = vec![];
-    let counts = store.doc_types(&config.source.adapter).unwrap_or_default();
-    for (ty, m) in &config.mapping.types {
-        if m.to.is_some() {
-            continue;
-        }
-        let n = counts.iter().find(|(t, _)| t == ty).map_or(0, |(_, n)| *n);
-        let why = m.drop_reason.as_deref().unwrap_or("no reason given");
-        not_written.push(format!("{n} {ty} documents: dropped ({why})"));
-    }
-    if let Ok(issues) = &open {
-        let missing = issues
-            .iter()
-            .filter(|i| i.kind == IssueKind::MissingMedia)
-            .count();
-        if missing > 0 {
-            not_written.push(format!("{missing} media files that were never found"));
-        }
-    }
-    let failed = store
+    // Exactly what the dry run left out, from its own item statuses.
+    let not_written = match store
         .runs(Stage::Load)
-        .ok()
-        .and_then(|mut r| r.pop())
-        .filter(|r| r.dry_run)
-        .and_then(|r| r.summary)
-        .map_or(0, |s| s.failed);
-    if failed > 0 {
-        not_written.push(format!("{failed} items that failed in the dry run"));
-    }
+        .map(|r| r.into_iter().rev().find(|r| r.dry_run))
+    {
+        Ok(None) => vec![],
+        Ok(Some(dry)) => match store.run_left_out(&dry.id, Stage::Load) {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|(what, why, n)| format!("{n} {what}: {why}"))
+                .collect(),
+            Err(e) => vec![format!("could not be read: {e:#}")],
+        },
+        Err(e) => vec![format!("could not be read: {e:#}")],
+    };
     ApplyFacts {
         url: config.destination.url.clone(),
         preview: preview_info(s),

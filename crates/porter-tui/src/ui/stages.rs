@@ -160,8 +160,10 @@ pub fn render(app: &App, f: &mut Frame, area: Rect) {
                 }
                 (None, s) => state_text(s).into(),
             };
+            // Short form to fit the panel ("↻ stale: extract"); the detail pane says it all.
             if let Some(why) = &r.stale {
-                tail += &format!(" ↻ stale: {why}");
+                let what = why.split(' ').next().unwrap_or_default();
+                tail += &format!(" ↻ stale: {what}");
             }
             let mut line = Line::from(vec![
                 Span::raw(if sel { "> " } else { "  " }),

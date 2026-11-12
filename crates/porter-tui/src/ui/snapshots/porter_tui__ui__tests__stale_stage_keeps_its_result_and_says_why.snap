@@ -5,7 +5,7 @@ expression: out
 "┌Stages──────────────────────────────────┐"
 "│> · analyse    not run                  │"
 "│  ✓ extract    clean                    │"
-"│  ✓ normalise  clean ↻ stale: extract re│"
+"│  ✓ normalise  clean ↻ stale: extract   │"
 "│  · schema     not run                  │"
 "│  · load       not run                  │"
 "│  · verify     not run                  │"

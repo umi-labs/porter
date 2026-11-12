@@ -22,7 +22,8 @@ const SCHEMA_V2: &str = include_str!("schema_v2.sql");
 const SCHEMA_V3: &str = include_str!("schema_v3.sql");
 const SCHEMA_V4: &str = include_str!("schema_v4.sql");
 const SCHEMA_V5: &str = include_str!("schema_v5.sql");
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_V6: &str = include_str!("schema_v6.sql");
+const SCHEMA_VERSION: i64 = 6;
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
 /// Id of one stage run (UUIDv7).
@@ -44,17 +45,14 @@ impl Store {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         match version {
-            0 => conn.execute_batch(&format!(
-                "BEGIN; {SCHEMA} {SCHEMA_V2} {SCHEMA_V3} {SCHEMA_V4} {SCHEMA_V5} COMMIT;"
-            ))?,
-            1 => conn.execute_batch(&format!(
-                "BEGIN; {SCHEMA_V2} {SCHEMA_V3} {SCHEMA_V4} {SCHEMA_V5} COMMIT;"
-            ))?,
-            2 => conn.execute_batch(&format!(
-                "BEGIN; {SCHEMA_V3} {SCHEMA_V4} {SCHEMA_V5} COMMIT;"
-            ))?,
-            3 => conn.execute_batch(&format!("BEGIN; {SCHEMA_V4} {SCHEMA_V5} COMMIT;"))?,
-            4 => conn.execute_batch(&format!("BEGIN; {SCHEMA_V5} COMMIT;"))?,
+            // Each version runs the steps after it, in order, in one transaction.
+            v @ 0..6 => {
+                let steps = [
+                    SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6,
+                ];
+                let todo = steps[usize::try_from(v).unwrap_or(0)..].join("\n");
+                conn.execute_batch(&format!("BEGIN; {todo} COMMIT;"))?
+            }
             SCHEMA_VERSION => {}
             v => {
                 return Err(anyhow!(

@@ -117,6 +117,7 @@ mod tests {
             ended_at: Some("t1".into()),
             summary: Some(Default::default()),
             dry_run: true,
+            config_fp: None,
         };
         assert_eq!(history_row(&r).outcome, "dry run · nothing written");
     }
@@ -130,6 +131,7 @@ mod tests {
             ended_at: Some("t1".into()),
             summary: Some(Default::default()),
             dry_run: true,
+            config_fp: None,
         };
         // The history row is plain text with no tone: it carries no green or ✓, and the
         // outcome always says "dry run".

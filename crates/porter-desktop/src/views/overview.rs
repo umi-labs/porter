@@ -93,10 +93,8 @@ fn stage_card(w: &ProjectWindow, r: StageRow, cx: &mut Context<ProjectWindow>) -
     let i = stage as usize;
     let running = matches!(r.state, StageState::Running);
     let counts = r.counts();
-    let mut chip = Chip::new(ChipState::from(&r.state)).label(r.label.clone());
-    if r.stale.is_some() {
-        chip = chip.stale();
-    }
+    // Not `chip.stale()`: the block around it does the dimming, once.
+    let chip = Chip::new(ChipState::from(&r.state)).label(r.label.clone());
     // Stale is a modifier: the old chip and counts stay, dimmed, and the reason says why.
     let mut result = v_flex()
         .gap_1()

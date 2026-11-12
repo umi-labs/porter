@@ -154,7 +154,9 @@ where
     F: FnOnce(StageCtx) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
-    let run = project.store().begin_run(stage)?;
+    // Recorded at the start: what this run reads is what a later staleness check compares.
+    let fp = crate::fingerprint::fingerprint(&config, stage);
+    let run = project.store().begin_run_with(stage, Some(&fp))?;
     events.emit(Event::StageStarted { stage, run });
     let ctx = StageCtx {
         project: project.clone(),
