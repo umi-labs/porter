@@ -27,16 +27,13 @@ async function call<T>(url: string, body?: unknown): Promise<T> {
 }
 
 /** sha256 in a Web Worker, streaming: the main thread stays free and a 20 GB file is never held in memory. */
-function hashInWorker(file: File, onProgress: (done: number) => void) {
-  return new Promise<string>((resolve, reject) => {
-    const w = new Worker(new URL("./hash.worker.ts", import.meta.url), { type: "module" });
-    w.onmessage = (e: MessageEvent<{ progress?: number; sha256?: string; error?: string }>) => {
-      if (e.data.progress !== undefined) onProgress(e.data.progress);
-      else {
-        w.terminate();
-        if (e.data.sha256) resolve(e.data.sha256);
-        else reject(new Error(e.data.error ?? "hashing failed"));
-      }
+function hashInWorker(file: File) {
+  const w = new Worker(new URL("./hash.worker.ts", import.meta.url), { type: "module" });
+  const promise = new Promise<string>((resolve, reject) => {
+    w.onmessage = (e: MessageEvent<{ sha256?: string; error?: string }>) => {
+      w.terminate();
+      if (e.data.sha256) resolve(e.data.sha256);
+      else reject(new Error(e.data.error ?? "hashing failed"));
     };
     w.onerror = (e) => {
       w.terminate();
@@ -44,6 +41,17 @@ function hashInWorker(file: File, onProgress: (done: number) => void) {
     };
     w.postMessage(file);
   });
+  promise.catch(() => {});
+  return { promise, terminate: () => w.terminate() };
+}
+
+/** sha256 of one part (at most 16 MiB, so held in memory): hex for the server, base64 for the S3 header. */
+async function digestPart(blob: Blob) {
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()));
+  return {
+    hex: Array.from(bytes, (x) => x.toString(16).padStart(2, "0")).join(""),
+    b64: btoa(String.fromCharCode(...bytes)),
+  };
 }
 
 export function Uploader({
@@ -65,6 +73,7 @@ export function Uploader({
   const [pct, setPct] = useState(0);
   const [activeId, setActiveId] = useState<string | null>(null);
   const abort = useRef(false);
+  const stopHash = useRef<(() => void) | null>(null);
 
   const refresh = useCallback(() => call<Row[]>(api).then(setRows, (e) => setError(e.message)), [api]);
   useEffect(() => {
@@ -132,8 +141,8 @@ export function Uploader({
       }
       setActiveId(id);
       const uploadId = id;
-      const hash = hashInWorker(file, () => {});
-      hash.catch(() => {});
+      const hasher = hashInWorker(file);
+      stopHash.current = hasher.terminate;
 
       let doneBytes = 0;
       const size = (n: number) => Math.min(partSize, file.size - (n - 1) * partSize);
@@ -141,29 +150,41 @@ export function Uploader({
       setPct(Math.floor((doneBytes / file.size) * 100));
       const missing = Array.from({ length: count }, (_, i) => i + 1).filter((n) => !have.has(n));
 
+      const sums = new Map<number, { hex: string; b64: string }>();
+      const presign = async (ns: number[]) =>
+        (
+          await call<{ urls: Record<string, string> }>(`${api}/${uploadId}/parts`, {
+            parts: ns.map((n) => ({ part_number: n, sha256: sums.get(n)?.hex })),
+          })
+        ).urls;
       const sendPart = async (n: number, url: string) => {
         const blob = file.slice((n - 1) * partSize, n * partSize);
         for (let attempt = 0; ; attempt++) {
           try {
-            const r = await fetch(url, { method: "PUT", body: blob });
+            // S3 rejects the part unless it hashes to the signed checksum. A stalled connection times out.
+            const r = await fetch(url, {
+              method: "PUT",
+              body: blob,
+              headers: { "x-amz-checksum-sha256": sums.get(n)?.b64 ?? "" },
+              signal: AbortSignal.timeout(120_000),
+            });
             if (!r.ok) throw new Error(`part ${n}: HTTP ${r.status}`);
             return;
           } catch (e) {
-            if (attempt >= PART_RETRIES - 1) throw e;
+            if (abort.current || attempt >= PART_RETRIES - 1) throw e;
             await sleep(500 * 2 ** attempt);
-            // URLs expire after 15 minutes, so ask for a fresh one for the retry.
-            url = (
-              await call<{ urls: Record<string, string> }>(`${api}/${uploadId}/parts`, { part_numbers: [n] })
-            ).urls[n];
+            // URLs expire after 15 minutes, so ask for a fresh one for the retry (itself retried by the loop).
+            try {
+              url = (await presign([n]))[n];
+            } catch {}
           }
         }
       };
       for (let i = 0; i < missing.length; i += PARALLEL) {
         if (abort.current) return;
         const group = missing.slice(i, i + PARALLEL);
-        const { urls } = await call<{ urls: Record<string, string> }>(`${api}/${uploadId}/parts`, {
-          part_numbers: group,
-        });
+        for (const n of group) sums.set(n, await digestPart(file.slice((n - 1) * partSize, n * partSize)));
+        const urls = await presign(group);
         await Promise.all(
           group.map(async (n) => {
             await sendPart(n, urls[n]);
@@ -172,14 +193,16 @@ export function Uploader({
           }),
         );
       }
+      if (abort.current) return;
       setStatus("Hashing");
-      const sha256 = await hash;
+      const sha256 = await hasher.promise;
       await call(`${api}/${uploadId}/complete`, { sha256 });
       remember(null);
       setStatus("Uploaded; verifying");
       setFile(null);
       setActiveId(null);
     } catch (e) {
+      stopHash.current?.();
       // Progress is kept in localStorage: pick the same file again and press Resume.
       setError((e as Error).message);
       setStatus("");
@@ -191,6 +214,7 @@ export function Uploader({
 
   async function cancel() {
     abort.current = true;
+    stopHash.current?.();
     const id = activeId ?? saved();
     if (!id) return;
     try {

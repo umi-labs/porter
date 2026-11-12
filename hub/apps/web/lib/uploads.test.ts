@@ -13,16 +13,18 @@ import { runMigrations } from "@porter-hub/db/migrate";
 import { freshDb } from "@porter-hub/db/test-helper";
 import { verifyUpload } from "@porter-hub/storage";
 import { eq } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { makeApi } from "./api";
 import { sha256Blob } from "./hash-stream";
 import * as store from "./storage";
-import { PART_SIZE, sanitizeFilename } from "./uploads";
+import { hexToBase64 } from "./storage";
+import { MAX_OPEN_UPLOADS, PART_SIZE, sanitizeFilename } from "./uploads";
 
 let fresh: Awaited<ReturnType<typeof freshDb>>;
 let conn: ReturnType<typeof connect>;
 let api: ReturnType<typeof makeApi>;
 let pid: string;
+let betaPid: string;
 
 const USERS = ["owner", "dev", "viewer", "client", "client2", "stranger"];
 const req = (as: string | null, body?: unknown) =>
@@ -37,9 +39,20 @@ const json = async (r: Response) => (await r.json()) as Record<string, any>;
 const idp = (id: string) => ({ ...slug, id });
 
 const create = (as: string, body: object) => api.createUpload(req(as, body), slug);
+const partBody = (as: string, parts: { part_number: number; sha256: string }[]) => req(as, { parts });
+/** Presigns part n for `data`'s sha256 (the way the browser does), then PUTs `body` (default: data) to it. */
+const putPartRaw = async (as: string, id: string, n: number, data: Buffer, body = data, headers = true) => {
+  const { urls } = await json(
+    await api.uploadPartUrls(partBody(as, [{ part_number: n, sha256: sha(data) }]), idp(id)),
+  );
+  return fetch(urls[n], {
+    method: "PUT",
+    body: new Uint8Array(body),
+    headers: headers ? { "x-amz-checksum-sha256": hexToBase64(sha(data)) } : {},
+  });
+};
 const putPart = async (as: string, id: string, n: number, data: Buffer) => {
-  const { urls } = await json(await api.uploadPartUrls(req(as, { part_numbers: [n] }), idp(id)));
-  const r = await fetch(urls[n], { method: "PUT", body: new Uint8Array(data) });
+  const r = await putPartRaw(as, id, n, data);
   expect(r.status).toBe(200);
   expect(r.headers.get("etag")).toBeTruthy();
 };
@@ -59,9 +72,12 @@ const data = randomBytes(PART_SIZE + 4 * 1024 * 1024);
 const parts = [data.subarray(0, PART_SIZE), data.subarray(PART_SIZE)];
 /** Uploads every part and completes with `hash`. */
 async function full(as: string, filename = "site.sql.gz", purpose = "dump", hash = sha(data)) {
-  const c = await json(await create(as, { filename, size: data.length, purpose }));
+  const cr = await create(as, { filename, size: data.length, purpose });
+  expect(cr.status).toBe(201);
+  const c = await json(cr);
   for (const [i, p] of parts.entries()) await putPart(as, c.id, i + 1, p);
   const done = await api.completeUpload(req(as, { sha256: hash }), idp(c.id));
+  expect(done.status).toBe(202);
   return { id: c.id as string, done };
 }
 
@@ -78,13 +94,18 @@ beforeAll(async () => {
   await conn.db
     .insert(member)
     .values({ id: "m-o", organizationId: "umi-org", userId: "owner", role: "member", createdAt: now });
-  const [p] = await conn.db
+  const [p, bp] = await conn.db
     .insert(project)
-    .values([{ orgId: "umi-org", name: "Acme", slug: "acme" }])
+    .values([
+      { orgId: "umi-org", name: "Acme", slug: "acme" },
+      { orgId: "umi-org", name: "Beta", slug: "beta" },
+    ])
     .returning();
   pid = p.id;
+  betaPid = bp.id;
   await conn.db.insert(projectMember).values([
     { projectId: pid, userId: "owner", role: "owner" },
+    { projectId: betaPid, userId: "owner", role: "owner" },
     { projectId: pid, userId: "dev", role: "developer" },
     { projectId: pid, userId: "viewer", role: "viewer" },
     { projectId: pid, userId: "client", role: "client" },
@@ -94,6 +115,10 @@ beforeAll(async () => {
     const id = r.headers.get("x-user");
     return id ? { id } : null;
   });
+});
+afterEach(async () => {
+  // Open uploads count against a per-user cap; don't let one test's leftovers break the next.
+  await conn.db.update(upload).set({ state: "aborted" }).where(eq(upload.state, "uploading"));
 });
 afterAll(async () => {
   await conn?.client.end();
@@ -105,7 +130,12 @@ describe("permissions", () => {
     ["create", ["viewer"], (a) => create(a as string, { filename: "a.sql", size: 1, purpose: "dump" })],
     ["list", [], (a) => api.listUploads(req(a), slug)],
     ["get", [], (a) => api.getUpload(req(a), idp(randomUUID()))],
-    ["parts", ["viewer"], (a) => api.uploadPartUrls(req(a, { part_numbers: [1] }), idp(randomUUID()))],
+    [
+      "parts",
+      ["viewer"],
+      (a) =>
+        api.uploadPartUrls(req(a, { parts: [{ part_number: 1, sha256: sha(data) }] }), idp(randomUUID())),
+    ],
     [
       "complete",
       ["viewer"],
@@ -227,21 +257,81 @@ describe("multipart flow", () => {
     );
   });
 
-  test("part urls: batches of at most 100, within the part count", async () => {
+  test("part urls: batches of at most 100, within the part count, sha256 required", async () => {
     const c = await json(await create("client", { filename: "a.sql", size: data.length, purpose: "dump" }));
-    expect(
-      (
-        await api.uploadPartUrls(
-          req("client", { part_numbers: Array.from({ length: 101 }, (_, i) => i + 1) }),
-          idp(c.id),
-        )
-      ).status,
-    ).toBe(400);
-    expect((await api.uploadPartUrls(req("client", { part_numbers: [3] }), idp(c.id))).status).toBe(400);
-    expect((await api.uploadPartUrls(req("client", { part_numbers: [] }), idp(c.id))).status).toBe(400);
-    const ok = await json(await api.uploadPartUrls(req("client", { part_numbers: [1, 2] }), idp(c.id)));
+    const ask = (b: object) => api.uploadPartUrls(req("client", b), idp(c.id));
+    const part = (n: number) => ({ part_number: n, sha256: sha(data) });
+    expect((await ask({ parts: Array.from({ length: 101 }, (_, i) => part(i + 1)) })).status).toBe(400);
+    expect((await ask({ parts: [part(3)] })).status).toBe(400);
+    expect((await ask({ parts: [] })).status).toBe(400);
+    expect((await ask({ part_numbers: [1] })).status).toBe(400); // checksums are mandatory
+    expect((await ask({ parts: [{ part_number: 1, sha256: "nope" }] })).status).toBe(400);
+    const ok = await json(await ask({ parts: [part(1), part(2)] }));
     expect(Object.keys(ok.urls)).toEqual(["1", "2"]);
-    await api.abortUpload(req("client", {}), idp(c.id));
+    expect(ok.urls[1]).toContain("x-amz-checksum-sha256"); // signed header
+  });
+
+  test("a corrupted part is rejected by storage (per-part sha256)", async () => {
+    const c = await json(await create("client", { filename: "a.sql", size: data.length, purpose: "dump" }));
+    const bad = Buffer.from(parts[0]);
+    bad[1234] ^= 0xff; // same length, one byte off
+    expect((await putPartRaw("client", c.id, 1, parts[0], bad)).status).toBe(400);
+    // No checksum header at all is refused too: the header is signed.
+    expect((await putPartRaw("client", c.id, 1, parts[0], parts[0], false)).status).toBeGreaterThanOrEqual(
+      400,
+    );
+    // A part of another length is refused: Content-Length is signed.
+    expect(
+      (await putPartRaw("client", c.id, 1, parts[0], parts[0].subarray(0, 1000))).status,
+    ).toBeGreaterThanOrEqual(400);
+    const g = await json(await api.getUpload(req("client"), idp(c.id)));
+    expect(g.parts).toEqual([]);
+    // The right bytes are accepted, and the retry overwrites nothing bad.
+    await putPart("client", c.id, 1, parts[0]);
+    expect((await json(await api.getUpload(req("client"), idp(c.id)))).parts).toEqual([
+      { part_number: 1, size: PART_SIZE },
+    ]);
+    // ListParts carries the stored checksum, so complete can re-verify it.
+    const [u] = await conn.db.select().from(upload).where(eq(upload.id, c.id));
+    const [lp] = await store.listParts(u.objectKey, u.multipartId as string);
+    expect(lp.checksumSha256).toBe(hexToBase64(sha(parts[0])));
+  });
+
+  test("complete refuses a part of the wrong size (no presign, straight to storage)", async () => {
+    const c = await json(
+      await create("client", { filename: "short.sql", size: data.length, purpose: "dump" }),
+    );
+    await putPart("client", c.id, 1, parts[0]);
+    const [u] = await conn.db.select().from(upload).where(eq(upload.id, c.id));
+    const short = parts[1].subarray(0, 1024 * 1024);
+    const url = await store.presignPart(u.objectKey, u.multipartId as string, 2, sha(short), short.length);
+    const r = await fetch(url, {
+      method: "PUT",
+      body: new Uint8Array(short),
+      headers: { "x-amz-checksum-sha256": hexToBase64(sha(short)) },
+    });
+    expect(r.status).toBe(200);
+    const done = await api.completeUpload(req("client", { sha256: sha(data) }), idp(c.id));
+    expect(done.status).toBe(409);
+    expect((await json(done)).bad_parts).toEqual([2]);
+    expect((await settledState(c.id)).state).toBe("uploading"); // nothing assembled, can retry part 2
+    await putPart("client", c.id, 2, parts[1]);
+    expect((await api.completeUpload(req("client", { sha256: sha(data) }), idp(c.id))).status).toBe(202);
+  });
+
+  test("at most 5 open uploads per user per project", async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < MAX_OPEN_UPLOADS; i++) {
+      const r = await create("client2", { filename: `o${i}.sql`, size: 1, purpose: "dump" });
+      expect(r.status).toBe(201);
+      ids.push((await json(r)).id);
+    }
+    const over = await create("client2", { filename: "o.sql", size: 1, purpose: "dump" });
+    expect(over.status).toBe(409);
+    // Another user is unaffected, and finishing/aborting one frees a slot.
+    expect((await create("client", { filename: "o.sql", size: 1, purpose: "dump" })).status).toBe(201);
+    expect((await api.abortUpload(req("client2", {}), idp(ids[0]))).status).toBe(200);
+    expect((await create("client2", { filename: "o.sql", size: 1, purpose: "dump" })).status).toBe(201);
   });
 
   test("hash mismatch marks upload failed", async () => {
@@ -260,23 +350,6 @@ describe("multipart flow", () => {
     });
   });
 
-  test("size mismatch at completion fails the upload and deletes the object", async () => {
-    // Declares 20 MiB but only 17 MiB arrive: both parts exist, so the server only learns from HEAD.
-    const c = await json(
-      await create("client", { filename: "short.sql", size: data.length, purpose: "dump" }),
-    );
-    await putPart("client", c.id, 1, parts[0]);
-    await putPart("client", c.id, 2, parts[1].subarray(0, 1024 * 1024));
-    const r = await api.completeUpload(req("client", { sha256: sha(data) }), idp(c.id));
-    expect(r.status).toBe(422);
-    const b = await json(r);
-    expect(b).toMatchObject({ state: "failed", declared: data.length, actual: PART_SIZE + 1024 * 1024 });
-    const [u] = await conn.db.select().from(upload).where(eq(upload.id, c.id));
-    expect(u.state).toBe("failed");
-    expect(await store.head(u.objectKey)).toBeNull();
-    expect(await actions(c.id)).toContain("upload.failed");
-  });
-
   test("abort aborts the multipart upload; only the uploader or a pusher may abort", async () => {
     const c = await json(await create("client", { filename: "a.sql", size: data.length, purpose: "dump" }));
     await putPart("client", c.id, 1, parts[0]);
@@ -290,13 +363,114 @@ describe("multipart flow", () => {
       name: "NoSuchUpload",
     });
     expect((await api.abortUpload(req("dev", {}), idp(c.id))).status).toBe(409);
-    expect((await api.uploadPartUrls(req("client", { part_numbers: [1] }), idp(c.id))).status).toBe(409);
+    expect(
+      (await api.uploadPartUrls(req("client", { parts: [{ part_number: 1, sha256: sha(data) }] }), idp(c.id)))
+        .status,
+    ).toBe(409);
     expect(await actions(c.id)).toContain("upload.abort");
   });
 
   test("a client can abort their own upload", async () => {
     const c = await json(await create("client", { filename: "a.sql", size: 5, purpose: "dump" }));
     expect((await api.abortUpload(req("client", {}), idp(c.id))).status).toBe(200);
+  });
+
+  /** A `verifying` row pointing at `key`, as if complete had just run. */
+  const verifyingRow = async (key: string, size: number, hash = sha(data)) => {
+    const [row] = await conn.db
+      .insert(upload)
+      .values({
+        projectId: pid,
+        uploaderId: "client",
+        filename: "x.sql",
+        size,
+        sha256: hash,
+        objectKey: key,
+        state: "verifying",
+        purpose: "dump",
+      })
+      .returning();
+    return row;
+  };
+  const objectOf = async () => {
+    const { id } = await full("client");
+    const u = await settled(id, ["ready"]);
+    await conn.db.update(upload).set({ state: "aborted" }).where(eq(upload.id, id));
+    return u.objectKey;
+  };
+  const stateOf = async (id: string) => (await settledState(id)).state;
+
+  test("verifyUpload is the size authority: a wrong declared size fails and deletes", async () => {
+    const key = await objectOf();
+    const row = await verifyingRow(key, data.length + 1);
+    expect(await verifyUpload(conn.db, store, row.id)).toBe("failed");
+    expect(await stateOf(row.id)).toBe("failed");
+    expect(await store.head(key)).toBeNull();
+    const a = (await conn.db.select().from(auditLog).where(eq(auditLog.targetId, row.id))).find(
+      (x) => x.action === "upload.failed",
+    );
+    expect(a?.detail).toMatchObject({
+      reason: "size mismatch",
+      declared: data.length + 1,
+      actual: data.length,
+    });
+  });
+
+  test("verifyUpload fails an object larger than the max", async () => {
+    const key = await objectOf();
+    const row = await verifyingRow(key, data.length);
+    expect(await verifyUpload(conn.db, store, row.id, 1000)).toBe("failed");
+    expect(await store.head(key)).toBeNull();
+  });
+
+  test("verifyUpload: a missing object is a real failure", async () => {
+    const row = await verifyingRow(`projects/${pid}/uploads/${randomUUID()}`, data.length);
+    expect(await verifyUpload(conn.db, store, row.id)).toBe("failed");
+    expect(await actions(row.id)).toContain("upload.failed");
+  });
+
+  test("verifyUpload: a transport error leaves the row verifying and deletes nothing", async () => {
+    const key = await objectOf();
+    const row = await verifyingRow(key, data.length);
+    const deleted: string[] = [];
+    const flaky = {
+      getStream: async () => {
+        throw Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+      },
+      deleteObject: async (k: string) => void deleted.push(k),
+    };
+    await expect(verifyUpload(conn.db, flaky, row.id)).rejects.toThrow("ECONNRESET");
+    // Also when it breaks mid-stream.
+    const { Readable } = await import("node:stream");
+    const midway = {
+      ...flaky,
+      getStream: async () =>
+        Readable.from(
+          (async function* () {
+            yield Buffer.from("partial");
+            throw new Error("socket hang up");
+          })(),
+        ),
+    };
+    await expect(verifyUpload(conn.db, midway, row.id)).rejects.toThrow("socket hang up");
+    expect(deleted).toEqual([]);
+    expect(await stateOf(row.id)).toBe("verifying");
+    expect(await store.head(key)).not.toBeNull();
+    // The sweep retries and succeeds.
+    expect(await verifyUpload(conn.db, store, row.id)).toBe("ready");
+  });
+
+  test("a throw after the claim reports 502 with state verifying", async () => {
+    const spy = vi.spyOn(store, "head").mockRejectedValueOnce(new Error("storage blip"));
+    const c = await json(await create("client", { filename: "a.sql", size: data.length, purpose: "dump" }));
+    for (const [i, p] of parts.entries()) await putPart("client", c.id, i + 1, p);
+    const r = await api.completeUpload(req("client", { sha256: sha(data) }), idp(c.id));
+    spy.mockRestore();
+    expect(r.status).toBe(502);
+    expect((await json(r)).state).toBe("verifying");
+    expect(await stateOf(c.id)).toBe("verifying");
+    // The sweep verifies it, size included.
+    expect(await verifyUpload(conn.db, store, c.id)).toBe("ready");
   });
 
   test("verifyUpload is idempotent and leaves non-verifying uploads alone", async () => {
@@ -326,13 +500,21 @@ describe("visibility and download", () => {
     expect(ids).toContain(clientUp);
     expect(ids).not.toContain(devUp);
     expect((await api.getUpload(req("client"), idp(devUp))).status).toBe(404);
-    expect((await api.uploadPartUrls(req("client", { part_numbers: [1] }), idp(devUp))).status).toBe(404);
+    expect(
+      (
+        await api.uploadPartUrls(
+          req("client", { parts: [{ part_number: 1, sha256: sha(data) }] }),
+          idp(devUp),
+        )
+      ).status,
+    ).toBe(404);
     expect((await api.downloadUpload(req("client"), idp(devUp))).status).toBe(403);
     // Not even their own.
     expect((await api.downloadUpload(req("client"), idp(clientUp))).status).toBe(403);
     // Another client sees neither.
     const l2 = (await (await api.listUploads(req("client2"), slug)).json()) as { id: string }[];
-    expect(l2).toEqual([]);
+    expect(l2.map((u) => u.id)).not.toContain(clientUp);
+    expect(l2.map((u) => u.id)).not.toContain(devUp);
     expect((await api.getUpload(req("client2"), idp(clientUp))).status).toBe(404);
   });
 
@@ -364,7 +546,34 @@ describe("visibility and download", () => {
     await api.abortUpload(req("client", {}), idp(c.id));
   });
 
-  test("unknown or other-project ids are 404, bad ids 400", async () => {
+  test("another project's upload is 404 on every route, and another client's too", async () => {
+    const b = await json(
+      await api.createUpload(req("owner", { filename: "b.sql", size: 1, purpose: "dump" }), { slug: "beta" }),
+    );
+    expect(b.id).toBeTruthy();
+    const here = idp(b.id); // acme's slug, beta's upload id
+    const p1 = { parts: [{ part_number: 1, sha256: sha(data) }] };
+    for (const r of [
+      await api.getUpload(req("owner"), here),
+      await api.uploadPartUrls(req("owner", p1), here),
+      await api.completeUpload(req("owner", { sha256: sha(data) }), here),
+      await api.abortUpload(req("owner", {}), here),
+      await api.downloadUpload(req("owner"), here),
+    ])
+      expect(r.status).toBe(404);
+    // The same on beta's own slug works, so the 404s above are the project scope and nothing else.
+    expect((await api.getUpload(req("owner"), { slug: "beta", id: b.id })).status).toBe(200);
+    const acme = (await (await api.listUploads(req("owner"), slug)).json()) as { id: string }[];
+    expect(acme.map((u) => u.id)).not.toContain(b.id);
+    // Another client, same project.
+    expect((await api.getUpload(req("client2"), idp(clientUp))).status).toBe(404);
+    expect((await api.abortUpload(req("client2", {}), idp(clientUp))).status).toBe(404);
+    expect((await api.downloadUpload(req("client2"), idp(clientUp))).status).toBe(403);
+    expect((await api.uploadPartUrls(req("client2", p1), idp(clientUp))).status).toBe(404);
+    expect((await api.completeUpload(req("client2", { sha256: sha(data) }), idp(clientUp))).status).toBe(404);
+  });
+
+  test("unknown ids are 404, bad ids 400", async () => {
     expect((await api.getUpload(req("owner"), idp(randomUUID()))).status).toBe(404);
     expect((await api.getUpload(req("owner"), idp("nope"))).status).toBe(400);
   });
