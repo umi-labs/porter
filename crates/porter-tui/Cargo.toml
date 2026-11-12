@@ -19,6 +19,8 @@ futures.workspace = true
 porter-model.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+open = "5.4.5"
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile.workspace = true

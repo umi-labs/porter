@@ -28,6 +28,7 @@ fn text(app: &App, h: usize) -> String {
         Some(DetailView::Issues(l)) => issue_list_text(l, h),
         Some(DetailView::Issue(i)) => issue_text(i, h),
         Some(DetailView::Item(d)) => item_text(d, h),
+        Some(DetailView::Notice(t)) => format!("porter.toml\n\n{t}"),
         None => match app.focus {
             Panel::Stages => stage_text(app),
             Panel::Project => project_text(app),

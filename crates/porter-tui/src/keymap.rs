@@ -16,6 +16,7 @@ pub enum Scope {
     Detail,
     Filter,
     ConfirmQuit,
+    ConfirmApply,
     Resolve,
     Help,
 }
@@ -30,6 +31,7 @@ impl Scope {
             Scope::Detail => "Detail",
             Scope::Filter => "filter box",
             Scope::ConfirmQuit => "quit prompt",
+            Scope::ConfirmApply => "apply prompt",
             Scope::Resolve => "resolve box",
             Scope::Help => "help",
         }
@@ -65,6 +67,7 @@ pub enum Action {
     Help,
     Quit,
     ConfirmYes,
+    ApplyYes,
     CloseModal,
     ResolveNext,
     ResolvePrev,
@@ -137,6 +140,23 @@ pub const BINDINGS: &[Binding] = &[
         A::CloseModal,
         "keep running",
         "n stay",
+    ),
+    // Apply prompt (exclusive). Any other key cancels, see `app::key`.
+    b(
+        S::ConfirmApply,
+        &[ch('y')],
+        "y",
+        A::ApplyYes,
+        "write to the live CMS",
+        "y apply",
+    ),
+    b(
+        S::ConfirmApply,
+        &[ch('n'), kc(KeyCode::Esc)],
+        "n/esc",
+        A::CloseModal,
+        "cancel (any other key too)",
+        "n cancel",
     ),
     // Resolve modal (exclusive; typing edits the note).
     b(
@@ -446,7 +466,7 @@ pub const BINDINGS: &[Binding] = &[
         &[ch('L')],
         "L",
         A::LoadApply,
-        "load, apply",
+        "load, apply (asks first)",
         "",
     ),
     b(S::Anywhere, &[ch('v')], "v", A::Verify, "verify", ""),
@@ -505,6 +525,7 @@ pub const BINDINGS: &[Binding] = &[
 pub fn active(app: &App) -> Vec<Scope> {
     match &app.modal {
         Some(Modal::ConfirmQuit) => return vec![S::ConfirmQuit],
+        Some(Modal::ConfirmApply(_)) => return vec![S::ConfirmApply],
         Some(Modal::Resolve(_)) => return vec![S::Resolve],
         None => {}
     }
@@ -522,7 +543,7 @@ pub fn active(app: &App) -> Vec<Scope> {
     let mut v = vec![];
     match app.detail.last() {
         Some(DetailView::Issues(_) | DetailView::Issue(_)) => v.extend([S::DetailIssue, S::Detail]),
-        Some(DetailView::Item(_)) => v.push(S::Detail),
+        Some(DetailView::Item(_) | DetailView::Notice(_)) => v.push(S::Detail),
         None => {}
     }
     match app.focus {
@@ -547,14 +568,6 @@ pub fn lookup(scopes: &[Scope], k: &KeyEvent) -> Option<Action> {
             })
             .map(|b| b.action)
     })
-}
-
-/// The help text of an action (for messages about it).
-pub fn what(a: Action) -> &'static str {
-    BINDINGS
-        .iter()
-        .find(|b| b.action == a)
-        .map_or("", |b| b.what)
 }
 
 /// The footer line for the current state.

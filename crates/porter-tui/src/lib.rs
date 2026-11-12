@@ -1,6 +1,7 @@
 #![deny(clippy::unwrap_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+mod actions;
 mod app;
 mod keymap;
 mod lists;

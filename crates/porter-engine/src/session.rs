@@ -11,9 +11,10 @@ use crate::stage::{SchemaMode, run_stage};
 use crate::store::RunRow;
 use anyhow::{Result, bail};
 use porter_model::{Issue, ItemId, ItemKind, ItemStatus, Resolution, Severity, SourceRef, Stage};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -190,7 +191,7 @@ type Running = Arc<Mutex<Option<RunInfo>>>;
 
 pub struct Session {
     project: Arc<Project>,
-    config: Arc<ProjectConfig>,
+    config: RwLock<Arc<ProjectConfig>>,
     events: EventSink,
     running: Running,
 }
@@ -199,7 +200,7 @@ impl Session {
     pub fn open(dir: &Path) -> Result<Session> {
         let project = Project::open(dir)?;
         Ok(Session {
-            config: Arc::new(project.config().clone()),
+            config: RwLock::new(Arc::new(project.config().clone())),
             project: Arc::new(project),
             events: EventSink::new(4096),
             running: Arc::default(),
@@ -210,21 +211,42 @@ impl Session {
         &self.project
     }
 
-    pub fn config(&self) -> &ProjectConfig {
-        &self.config
+    /// The config in use now; a snapshot, so a later `reload_config` does not change it.
+    pub fn config(&self) -> Arc<ProjectConfig> {
+        self.config
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Re-reads `porter.toml`. Returns the validation messages (or the parse error);
     /// on a parse error the previous config stays in use.
-    pub fn reload_config(&mut self) -> Vec<String> {
+    pub fn reload_config(&self) -> Vec<String> {
         match ProjectConfig::load(&self.project.dir().join("porter.toml")) {
             Ok(c) => {
                 let msgs = c.validate();
-                self.config = Arc::new(c);
+                *self.config.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(c);
                 msgs
             }
             Err(e) => vec![format!("{e:#}")],
         }
+    }
+
+    /// Items per collection in the last dry-run load preview; None if none was written.
+    pub fn load_preview_counts(&self) -> Option<BTreeMap<String, u64>> {
+        let dir = self.project.raw_dir("load-preview");
+        let mut out = BTreeMap::new();
+        for e in std::fs::read_dir(dir).ok()?.flatten() {
+            let n = std::fs::read_dir(e.path()).map_or(0, |d| {
+                d.flatten()
+                    .filter(|f| f.path().extension().is_some_and(|x| x == "json"))
+                    .count() as u64
+            });
+            if n > 0 {
+                out.insert(e.file_name().to_string_lossy().into_owned(), n);
+            }
+        }
+        (!out.is_empty()).then_some(out)
     }
 
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Event> {
@@ -248,7 +270,7 @@ impl Session {
         let cancel = CancellationToken::new();
         let env = Env {
             project: self.project.clone(),
-            config: self.config.clone(),
+            config: self.config(),
             events: self.events.clone(),
             cancel: cancel.clone(),
         };
@@ -732,5 +754,33 @@ mod tests {
         let out = h.wait().await;
         assert_eq!(out.code, 1);
         assert!(out.messages[0].contains("boom"), "{:?}", out.messages);
+    }
+
+    #[test]
+    fn reload_config_through_shared_ref_and_preview_counts() {
+        let d = tempfile::tempdir().unwrap();
+        Project::init(d.path(), "demo", "wordpress").unwrap();
+        let s = Arc::new(Session::open(d.path()).unwrap());
+        assert_eq!(s.config().project.name, "demo");
+        assert_eq!(s.load_preview_counts(), None);
+        let toml = std::fs::read_to_string(d.path().join("porter.toml")).unwrap();
+        std::fs::write(
+            d.path().join("porter.toml"),
+            toml.replace("name = \"demo\"", "name = \"renamed\""),
+        )
+        .unwrap();
+        s.reload_config();
+        assert_eq!(s.config().project.name, "renamed");
+        std::fs::write(d.path().join("porter.toml"), "not [toml").unwrap();
+        assert!(!s.reload_config().is_empty());
+        assert_eq!(s.config().project.name, "renamed", "bad parse keeps old");
+        let p = d.path().join("raw/load-preview");
+        std::fs::create_dir_all(p.join("posts")).unwrap();
+        std::fs::create_dir_all(p.join("media")).unwrap();
+        std::fs::write(p.join("posts/a.json"), "{}").unwrap();
+        std::fs::write(p.join("posts/b.json"), "{}").unwrap();
+        let c = s.load_preview_counts().unwrap();
+        assert_eq!(c.get("posts"), Some(&2));
+        assert!(!c.contains_key("media"));
     }
 }

@@ -11,6 +11,12 @@ pub fn restore() {
     let _ = execute!(stdout(), LeaveAlternateScreen, Show);
 }
 
+/// Re-enters raw mode and the alternate screen after `restore`, e.g. when an editor exits.
+pub fn resume() -> std::io::Result<()> {
+    enable_raw_mode()?;
+    execute!(stdout(), EnterAlternateScreen)
+}
+
 /// Restores the terminal when dropped, so every exit path (return, `?`, unwind) cleans up.
 pub struct Guard;
 

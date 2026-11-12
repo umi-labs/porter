@@ -19,7 +19,36 @@ pub fn render(app: &App, f: &mut Frame, area: Rect) {
     let lines: Vec<Line> = BINDINGS
         .iter()
         .skip(app.help_scroll.min(max))
-        .map(|b| Line::raw(format!("{:<9} {:<38} {}", b.shown, b.what, b.scope.name())))
+        .map(|b| Line::raw(line(b)))
         .collect();
     f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Wide enough for the longest description; the panel (78 wide) still fits the scope.
+const WHAT: usize = 44;
+
+/// One help row; a long description is cut with … so it never runs into the scope column.
+fn line(b: &crate::keymap::Binding) -> String {
+    let what = if b.what.chars().count() > WHAT {
+        let cut: String = b.what.chars().take(WHAT - 1).collect();
+        format!("{cut}…")
+    } else {
+        b.what.to_string()
+    };
+    format!("{:<9} {what:<WHAT$} {}", b.shown, b.scope.name())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scope_column_lines_up_for_every_binding() {
+        for b in BINDINGS {
+            let l = line(b);
+            let scope: String = l.chars().skip(9 + 1 + WHAT + 1).collect();
+            assert_eq!(scope, b.scope.name(), "{l}");
+            assert!(b.what.chars().count() <= WHAT, "{} would be cut", b.what);
+        }
+    }
 }

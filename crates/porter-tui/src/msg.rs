@@ -5,6 +5,8 @@ use porter_engine::session::{
     IssueQuery, ItemDetail, ItemQuery, ItemRow, Overview, Page, Paged, RunOutcome, RunPlan,
 };
 use porter_model::{Issue, ItemId, Resolution};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 pub enum Msg {
@@ -40,6 +42,12 @@ pub enum DataMsg {
     },
     Item(Box<ItemDetail>),
     Resolved(Result<(Uuid, Resolution), String>),
+    /// Items per collection in the last dry-run preview; None when there was none.
+    Preview(Option<BTreeMap<String, u64>>),
+    /// What reloading porter.toml after an edit found ("config OK" when nothing).
+    Config(Vec<String>),
+    /// A report was written and opened (its path), or why not, verbatim.
+    Reported(Result<PathBuf, String>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,8 +55,6 @@ pub enum RefreshScope {
     All,
 }
 
-// OpenEditor, OpenReport and Copy are constructed by Task 6; remove this allow then.
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Cmd {
     Run(RunPlan),
@@ -71,6 +77,8 @@ pub enum Cmd {
     },
     Item(ItemId),
     Resolve(Uuid, Resolution),
+    /// Read the dry-run preview counts the apply confirmation shows.
+    PreviewCounts,
     OpenEditor,
     OpenReport(String),
     Copy(String),

@@ -1,3 +1,4 @@
+use crate::actions;
 use crate::app::{App, update};
 use crate::lists::{ALL_KINDS, Group, Mode, issue_filter};
 use crate::msg::{Cmd, DataMsg, Msg, RefreshScope};
@@ -45,6 +46,15 @@ pub async fn run_tui(dir: &Path) -> Result<i32> {
             for c in std::mem::take(&mut cmds) {
                 if matches!(c, Cmd::Quit) {
                     quit = true;
+                } else if matches!(c, Cmd::OpenEditor) {
+                    // Drop the stream so the editor, not us, reads the keyboard.
+                    drop(events);
+                    let msgs = edit_config(&app, &mut terminal);
+                    events = EventStream::new();
+                    if let Some(m) = msgs {
+                        let _ = tx.send(Msg::Data(m));
+                    }
+                    app.dirty = true;
                 } else {
                     exec(c, &app, &tx, &mut run);
                 }
@@ -89,6 +99,26 @@ pub async fn run_tui(dir: &Path) -> Result<i32> {
         eprintln!("{n}");
     }
     Ok(code)
+}
+
+/// Suspends the TUI, runs the editor on porter.toml, restores the TUI, then reloads the
+/// config. None when there is no project.
+fn edit_config(
+    app: &App,
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+) -> Option<DataMsg> {
+    let session = app.session.as_ref()?;
+    term::restore();
+    let edited = actions::run_editor(
+        &actions::editor_command(),
+        &session.project().dir().join("porter.toml"),
+    );
+    let resumed = term::resume().and_then(|_| terminal.clear());
+    let mut msgs = actions::reload_after_edit(session, edited);
+    if let Err(e) = resumed {
+        msgs.push(format!("could not restore the terminal: {e}"));
+    }
+    Some(DataMsg::Config(msgs))
 }
 
 /// The run in flight: its cancel token and the task that waits for it.
@@ -214,8 +244,32 @@ fn exec(cmd: Cmd, app: &App, tx: &mpsc::UnboundedSender<Msg>, run: &mut RunSlot)
                 let _ = tx.send(Msg::Data(DataMsg::Resolved(m)));
             });
         }
-        // Wired up with the panels in later tasks.
-        Cmd::OpenEditor | Cmd::OpenReport(_) | Cmd::Copy(_) | Cmd::Quit => {}
+        Cmd::PreviewCounts => {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let c = tokio::task::spawn_blocking(move || session.load_preview_counts())
+                    .await
+                    .unwrap_or(None);
+                let _ = tx.send(Msg::Data(DataMsg::Preview(c)));
+            });
+        }
+        Cmd::OpenReport(name) => {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let r = tokio::task::spawn_blocking(move || actions::open_report(&session, &name))
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                let _ = tx.send(Msg::Data(DataMsg::Reported(r)));
+            });
+        }
+        Cmd::Copy(id) => {
+            use std::io::Write;
+            let mut out = std::io::stdout();
+            let _ = out.write_all(actions::osc52(&id).as_bytes());
+            let _ = out.flush();
+        }
+        // Handled in the loop, which owns the terminal.
+        Cmd::OpenEditor | Cmd::Quit => {}
     }
 }
 

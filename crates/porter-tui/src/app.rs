@@ -8,7 +8,7 @@ use porter_engine::session::{
 };
 use porter_engine::stage::SchemaMode;
 use porter_model::{Issue, ItemStatus, Resolution, Severity, Stage};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -89,6 +89,8 @@ pub struct Panels {
 
 /// What the Detail pane shows when it has been entered with Enter; Esc pops.
 pub enum DetailView {
+    /// A plain message (the result of re-checking porter.toml).
+    Notice(String),
     Issues(IssueList),
     Issue(Issue),
     Item(Box<ItemDetail>),
@@ -104,9 +106,18 @@ pub struct ResolveModal {
     pub error: Option<String>,
 }
 
+/// What `L` is about to write, shown before anything runs.
+#[derive(Debug, PartialEq)]
+pub struct ApplyModal {
+    pub url: String,
+    /// Items per collection from the last dry run; None when there was none.
+    pub counts: Option<BTreeMap<String, u64>>,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Modal {
     ConfirmQuit,
+    ConfirmApply(ApplyModal),
     Resolve(ResolveModal),
 }
 
@@ -368,6 +379,11 @@ fn key(app: &mut App, k: KeyEvent) -> Vec<Cmd> {
     }
     match keymap::lookup(&keymap::active(app), &k) {
         Some(a) => perform(app, a, k),
+        // Only `y` confirms an apply; every other key backs out.
+        None if matches!(app.modal, Some(Modal::ConfirmApply(_))) => {
+            app.modal = None;
+            vec![]
+        }
         None => typed(app, k),
     }
 }
@@ -426,10 +442,50 @@ fn perform(app: &mut App, a: Action, k: KeyEvent) -> Vec<Cmd> {
             app.help = false;
             app.help_scroll = 0;
         }
-        // Later tasks replace these with the real thing.
-        Action::LoadDry | Action::LoadApply | Action::Report | Action::Edit | Action::Copy => {
-            app.push_log(format!("{}: not available yet", keymap::what(a)));
+        Action::LoadDry => {
+            return app.start(RunPlan::Stage(
+                Stage::Load,
+                StageOpts {
+                    refresh: false,
+                    apply: false,
+                    schema_mode: SchemaMode::Check,
+                },
+            ));
         }
+        // Apply is never started from here: the counts are read first, then `y` confirms.
+        Action::LoadApply => {
+            if app.session.is_none() {
+                return vec![];
+            }
+            if app.running.is_some() {
+                app.push_log("a stage is already running".into());
+                return vec![];
+            }
+            return vec![Cmd::PreviewCounts];
+        }
+        Action::ApplyYes => return apply_confirmed(app),
+        Action::Report => {
+            let name = match (app.focus, app.panels.stages.selected()) {
+                (Panel::Stages, Stage::Extract) => "extract",
+                (Panel::Stages, Stage::Verify) => "verify",
+                _ => "analysis",
+            };
+            return vec![Cmd::OpenReport(name.into())];
+        }
+        Action::Edit => {
+            if app.running.is_some() {
+                app.push_log("a stage is running: not opening the editor until it ends".into());
+                return vec![];
+            }
+            return vec![Cmd::OpenEditor];
+        }
+        Action::Copy => match selected_id(app) {
+            Some(id) => {
+                app.push_log(format!("copied {id} (OSC 52: needs terminal support)"));
+                return vec![Cmd::Copy(id)];
+            }
+            None => app.push_log("nothing selected to copy".into()),
+        },
         Action::Filter => {
             if let Some(f) = filter_mut(app) {
                 f.editing = true;
@@ -562,6 +618,25 @@ fn on_data(app: &mut App, d: DataMsg) -> Vec<Cmd> {
             }
             return app.refresh_cmds();
         }
+        DataMsg::Preview(counts) => {
+            let url = app
+                .session
+                .as_ref()
+                .map(|s| s.config().destination.url.clone())
+                .unwrap_or_default();
+            app.modal = Some(Modal::ConfirmApply(ApplyModal { url, counts }));
+        }
+        DataMsg::Config(msgs) => {
+            for m in &msgs {
+                app.push_log(format!("porter.toml: {m}"));
+            }
+            if matches!(app.detail.last(), Some(DetailView::Notice(_))) {
+                app.detail.pop();
+            }
+            app.detail.push(DetailView::Notice(msgs.join("\n")));
+        }
+        DataMsg::Reported(Ok(p)) => app.push_log(format!("opened {}", p.display())),
+        DataMsg::Reported(Err(e)) => app.push_log(format!("error: {e}")),
         DataMsg::Resolved(Err(e)) => app.push_log(format!("could not resolve: {e}")),
     }
     vec![]
@@ -751,6 +826,40 @@ fn resolve_confirm(app: &mut App) -> Vec<Cmd> {
     let id = m.issue;
     app.modal = None;
     vec![Cmd::Resolve(id, r)]
+}
+
+/// `y` in the apply prompt: runs the real load, but only when a dry run showed what it
+/// would write.
+fn apply_confirmed(app: &mut App) -> Vec<Cmd> {
+    let Some(Modal::ConfirmApply(m)) = app.modal.take() else {
+        return vec![];
+    };
+    if m.counts.is_none() {
+        app.push_log("apply refused: no dry run yet — press l first".into());
+        return vec![];
+    }
+    app.start(RunPlan::Stage(
+        Stage::Load,
+        StageOpts {
+            refresh: false,
+            apply: true,
+            schema_mode: SchemaMode::Check,
+        },
+    ))
+}
+
+/// The id of what the focused list or Detail view has selected.
+fn selected_id(app: &App) -> Option<String> {
+    match app.detail.last() {
+        Some(DetailView::Issue(i)) => return Some(i.id.to_string()),
+        Some(DetailView::Issues(l)) => return l.win.at(l.sel).map(|i| i.id.to_string()),
+        Some(DetailView::Item(d)) => return Some(d.row.id.to_string()),
+        _ => {}
+    }
+    match app.focus {
+        Panel::Items => app.panels.items.selected().map(|r| r.id.to_string()),
+        _ => None,
+    }
 }
 
 fn quit(app: &mut App) -> Vec<Cmd> {
@@ -1083,5 +1192,188 @@ mod tests {
         };
         assert_eq!(l.sel, 0);
         assert_eq!(app.panels.stages.sel, 0, "stages did not move");
+    }
+
+    fn apply_cmd() -> Cmd {
+        Cmd::Run(RunPlan::Stage(
+            porter_model::Stage::Load,
+            StageOpts {
+                refresh: false,
+                apply: true,
+                schema_mode: SchemaMode::Check,
+            },
+        ))
+    }
+
+    fn counts() -> std::collections::BTreeMap<String, u64> {
+        [("posts".to_string(), 12u64), ("media".to_string(), 3)].into()
+    }
+
+    #[test]
+    fn l_is_a_dry_run() {
+        let (mut app, _d) = live_app();
+        assert!(matches!(
+            press(&mut app, KeyCode::Char('l')).as_slice(),
+            [Cmd::Run(RunPlan::Stage(porter_model::Stage::Load, o))] if !o.apply
+        ));
+    }
+
+    #[test]
+    fn apply_needs_explicit_y() {
+        for other in [
+            KeyCode::Enter,
+            KeyCode::Esc,
+            KeyCode::Char('n'),
+            KeyCode::Char('L'),
+            KeyCode::Char(' '),
+        ] {
+            let (mut app, _d) = live_app();
+            assert_eq!(press(&mut app, KeyCode::Char('L')), [Cmd::PreviewCounts]);
+            assert!(app.modal.is_none(), "nothing writes before the counts land");
+            update(&mut app, Msg::Data(DataMsg::Preview(Some(counts()))));
+            let Some(Modal::ConfirmApply(m)) = &app.modal else {
+                panic!("{:?}", app.modal)
+            };
+            assert_eq!(m.counts, Some(counts()));
+            assert!(press(&mut app, other).is_empty(), "{other:?}");
+            assert!(app.modal.is_none() && app.running.is_none(), "{other:?}");
+        }
+        let (mut app, _d) = live_app();
+        press(&mut app, KeyCode::Char('L'));
+        update(&mut app, Msg::Data(DataMsg::Preview(Some(counts()))));
+        assert_eq!(press(&mut app, KeyCode::Char('y')), [apply_cmd()]);
+        assert!(app.modal.is_none() && app.running.is_some());
+    }
+
+    #[test]
+    fn apply_without_dry_run_says_so() {
+        let (mut app, _d) = live_app();
+        press(&mut app, KeyCode::Char('L'));
+        update(&mut app, Msg::Data(DataMsg::Preview(None)));
+        assert!(matches!(&app.modal, Some(Modal::ConfirmApply(m)) if m.counts.is_none()));
+        assert!(press(&mut app, KeyCode::Char('y')).is_empty());
+        assert!(app.running.is_none() && app.modal.is_none());
+        assert!(
+            app.log
+                .back()
+                .is_some_and(|l| l.0.contains("press l first")),
+            "refusal is logged"
+        );
+    }
+
+    #[test]
+    fn apply_refused_while_running() {
+        let (mut app, _d) = live_app();
+        press(&mut app, KeyCode::Char('l'));
+        assert!(press(&mut app, KeyCode::Char('L')).is_empty());
+        assert!(
+            app.log
+                .back()
+                .is_some_and(|l| l.0.contains("already running"))
+        );
+    }
+
+    #[test]
+    fn editor_never_opens_during_a_run() {
+        let (mut app, _d) = live_app();
+        assert_eq!(press(&mut app, KeyCode::Char('e')), [Cmd::OpenEditor]);
+        press(&mut app, KeyCode::Char('R'));
+        assert!(press(&mut app, KeyCode::Char('e')).is_empty());
+        assert!(app.log.back().is_some_and(|l| l.0.contains("running")));
+    }
+
+    #[test]
+    fn config_messages_show_in_detail() {
+        let (mut app, _d) = live_app();
+        update(
+            &mut app,
+            Msg::Data(DataMsg::Config(vec!["config OK".into()])),
+        );
+        assert!(matches!(app.detail.last(), Some(DetailView::Notice(t)) if t == "config OK"));
+        update(
+            &mut app,
+            Msg::Data(DataMsg::Config(vec!["a".into(), "b".into()])),
+        );
+        assert!(matches!(app.detail.last(), Some(DetailView::Notice(t)) if t == "a\nb"));
+        press(&mut app, KeyCode::Esc);
+        assert!(app.detail.is_empty());
+    }
+
+    #[test]
+    fn report_follows_the_focused_stage() {
+        let (mut app, _d) = live_app();
+        assert_eq!(
+            press(&mut app, KeyCode::Char('o')),
+            [Cmd::OpenReport("analysis".into())]
+        );
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(
+            press(&mut app, KeyCode::Char('o')),
+            [Cmd::OpenReport("extract".into())]
+        );
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(
+            press(&mut app, KeyCode::Char('o')),
+            [Cmd::OpenReport("verify".into())]
+        );
+    }
+
+    #[test]
+    fn y_copies_the_selected_id() {
+        let mut app = App::new(None, (80, 24));
+        app.focus = Panel::Issues;
+        assert!(
+            press(&mut app, KeyCode::Char('y')).is_empty(),
+            "nothing selected"
+        );
+        let i = Issue {
+            id: Uuid::from_u128(7),
+            kind: porter_model::IssueKind::MissingMedia,
+            severity: Severity::Error,
+            item: None,
+            stage: porter_model::Stage::Load,
+            message: "m".into(),
+            details: serde_json::Value::Null,
+            resolution: Resolution::Open,
+        };
+        app.detail.push(DetailView::Issue(i.clone()));
+        assert_eq!(
+            press(&mut app, KeyCode::Char('y')),
+            [Cmd::Copy(i.id.to_string())]
+        );
+    }
+
+    #[test]
+    fn filter_typing_wins_over_detail_keys() {
+        use crate::lists::{IssueList, Mode};
+        let mut app = App::new(None, (80, 24));
+        let mut win = Window::new(10);
+        win.reset(1);
+        win.apply(
+            1,
+            0,
+            porter_engine::session::Paged {
+                rows: vec![],
+                total: 5,
+            },
+        );
+        app.detail.push(DetailView::Issues(IssueList {
+            kind: porter_model::IssueKind::MissingMedia,
+            mode: Mode::All,
+            win,
+            sel: 2,
+        }));
+        app.focus = Panel::Issues;
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.panels.issues.filter.text, "j");
+        let Some(DetailView::Issues(l)) = app.detail.last() else {
+            panic!()
+        };
+        assert_eq!(l.sel, 2, "j typed into the filter did not move the list");
     }
 }

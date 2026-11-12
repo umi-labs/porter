@@ -6,6 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
+mod confirm;
 mod detail;
 mod filter;
 mod footer;
@@ -77,6 +78,7 @@ pub fn view(app: &App, f: &mut Frame) {
                 r,
             );
         }
+        Some(Modal::ConfirmApply(m)) => confirm::apply(m, f, area),
         Some(Modal::Resolve(m)) => modal::resolve(m, f, area),
         None => {}
     }
@@ -772,21 +774,31 @@ mod tests {
         );
     }
 
-    #[test]
-    fn stubs_say_not_available_yet() {
-        let (mut app, _d) = lists_app();
-        for c in ['l', 'L', 'o', 'e'] {
-            press_key(&mut app, KeyCode::Char(c));
-            assert!(
-                app.log
-                    .back()
-                    .is_some_and(|l| l.0.ends_with("not available yet")),
-                "{c}"
-            );
-        }
-    }
-
     fn press_key(app: &mut App, c: KeyCode) {
         update(app, Msg::Key(KeyEvent::new(c, KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn apply_modal_names_destination_and_counts() {
+        use crate::app::ApplyModal;
+        let (mut app, _d) = lists_app();
+        let m = |counts| {
+            Some(Modal::ConfirmApply(ApplyModal {
+                url: "https://cms.example.com".into(),
+                counts,
+            }))
+        };
+        app.modal = m(Some([("posts".to_string(), 12u64)].into()));
+        let out = render(&app, 80, 24);
+        for s in [
+            "live CMS",
+            "https://cms.example.com",
+            "posts: 12",
+            "any other key",
+        ] {
+            assert!(out.contains(s), "{s}\n{out}");
+        }
+        app.modal = m(None);
+        assert!(render(&app, 80, 24).contains("press l first"));
     }
 }
