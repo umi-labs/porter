@@ -407,6 +407,7 @@ fn perform(app: &mut App, a: Action, k: KeyEvent) -> Vec<Cmd> {
         Action::Verify => return app.start_stage(Stage::Verify),
         Action::Cancel => return app.cancel(),
         Action::CtrlC => {
+            app.help = false;
             // First press cancels a run; a second (or an idle press) quits.
             if app.running.is_some() && !app.cancelling {
                 return app.cancel();
@@ -457,6 +458,13 @@ fn perform(app: &mut App, a: Action, k: KeyEvent) -> Vec<Cmd> {
         Action::ResolveNext | Action::ResolvePrev => {
             if let Some(Modal::Resolve(m)) = &mut app.modal {
                 m.choice = (m.choice + if a == Action::ResolveNext { 1 } else { 2 }) % 3;
+            }
+        }
+        Action::ResolveBackspace => {
+            if let Some(Modal::Resolve(m)) = &mut app.modal
+                && m.choice == 0
+            {
+                m.note.pop();
             }
         }
         Action::ResolveConfirm => return resolve_confirm(app),
@@ -1010,5 +1018,70 @@ mod tests {
                 .could_not_run_of(porter_model::Stage::Analyse),
             Some("no such file: export.xml")
         );
+    }
+
+    #[test]
+    fn resolve_note_backspace_works() {
+        let mut app = App::new(None, (80, 24));
+        app.modal = Some(Modal::Resolve(ResolveModal {
+            issue: Uuid::nil(),
+            title: "t".into(),
+            choice: 0,
+            note: String::new(),
+            error: None,
+        }));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Backspace);
+        let Some(Modal::Resolve(m)) = &app.modal else {
+            panic!()
+        };
+        assert_eq!(m.note, "a");
+    }
+
+    #[test]
+    fn ctrl_c_works_under_help() {
+        let mut app = App::new(None, (80, 24));
+        app.help = true;
+        let c = update(
+            &mut app,
+            Msg::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        );
+        assert!(app.quit && !app.help && c.contains(&Cmd::Quit));
+    }
+
+    #[test]
+    fn detail_list_keys_work_whatever_the_focus() {
+        use crate::lists::{IssueList, Mode};
+        let mut app = App::new(None, (80, 24));
+        let mut win = Window::new(10);
+        win.reset(1);
+        win.apply(
+            1,
+            0,
+            porter_engine::session::Paged {
+                rows: vec![],
+                total: 5,
+            },
+        );
+        app.detail.push(DetailView::Issues(IssueList {
+            kind: porter_model::IssueKind::MissingMedia,
+            mode: Mode::All,
+            win,
+            sel: 0,
+        }));
+        app.focus = Panel::Project;
+        press(&mut app, KeyCode::Char('j'));
+        let Some(DetailView::Issues(l)) = app.detail.last() else {
+            panic!()
+        };
+        assert_eq!(l.sel, 1);
+        app.focus = Panel::Stages;
+        press(&mut app, KeyCode::Char('k'));
+        let Some(DetailView::Issues(l)) = app.detail.last() else {
+            panic!()
+        };
+        assert_eq!(l.sel, 0);
+        assert_eq!(app.panels.stages.sel, 0, "stages did not move");
     }
 }
