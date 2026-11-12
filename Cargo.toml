@@ -1,6 +1,13 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# porter-desktop pulls in GPUI; build it explicitly with `cargo build -p porter-desktop`.
+default-members = [
+    "crates/porter-model",
+    "crates/porter-engine",
+    "crates/porter-cli",
+    "crates/porter-tui",
+]
 
 [workspace.package]
 version = "2.0.0"

@@ -23,9 +23,29 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - run: cargo build --workspace --locked
-      - run: cargo test --workspace --locked
-      - run: cargo clippy --workspace --all-targets
+      # Default members only: porter-desktop (GPUI) builds in the desktop-macos job.
+      - run: cargo build --locked
+      - run: cargo test --locked
+      - run: cargo clippy --all-targets
+
+  desktop-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-desktop-${{ hashFiles('**/Cargo.lock') }}
+      - run: cargo build -p porter-desktop --locked
+      - run: cargo test -p porter-desktop --locked
+      - run: cargo clippy -p porter-desktop --all-targets
 
   # Windows is a release target: unix-only code must stay behind #[cfg(unix)].
   windows-check:
@@ -42,7 +62,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo update && cargo build --workspace
+      - run: cargo update && cargo build
 
   payload-golden:
     runs-on: ubuntu-latest

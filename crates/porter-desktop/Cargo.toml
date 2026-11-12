@@ -1,0 +1,23 @@
+[package]
+name = "porter-desktop"
+description = "Native desktop app for Porter, built on GPUI."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+porter-engine = { path = "../porter-engine" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+dirs = "6"
+# Pinned exactly: GPUI is pre-1.0 and breaks its API between releases. See README.md before bumping.
+gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
+gpui-component = "=0.5.1"
+
+[dev-dependencies]
+tempfile.workspace = true
