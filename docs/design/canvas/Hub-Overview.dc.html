@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hub project overview</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+a{color:#3E4FD6}a:hover{color:#2A37A8}
+</style>
+</helmet>
+<div style="min-height:1120px;background:#F7F7F8;color:#18181B;font-family:Inter,system-ui,sans-serif;font-size:15px;line-height:1.55">
+
+<header style="background:#FFFFFF;border-bottom:1px solid #E3E3E8">
+<div style="max-width:1200px;margin:0 auto;padding:0 24px;display:flex;align-items:center;gap:16px;min-height:56px;flex-wrap:wrap">
+<a href="#" style="display:flex;align-items:center;gap:8px;text-decoration:none;color:#18181B;font-weight:600">
+<span style="width:26px;height:26px;border-radius:7px;background:#18181B;display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h11l-3-3M20 17H9l3 3"></path></svg></span>Porter</a>
+<span style="color:#CFCFD6" aria-hidden="true">/</span>
+<a href="#" style="color:#565662;text-decoration:none;font-size:14px">Projects</a>
+<span style="color:#CFCFD6" aria-hidden="true">/</span>
+<span style="font-size:14px;font-weight:600">Seaview Hotels</span>
+<span style="flex:1"></span>
+<span style="font-size:13px;color:#565662">{{who}}</span>
+<span style="width:32px;height:32px;border-radius:50%;background:#ECEEFC;color:#3E4FD6;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">{{initials}}</span>
+</div>
+<nav aria-label="Project" style="max-width:1200px;margin:0 auto;padding:0 24px;display:flex;gap:4px;overflow-x:auto">
+<sc-for list="{{tabs}}" as="tb" hint-placeholder-count="7">
+<a href="{{tb.href}}" style="padding:10px 12px;font-size:14px;font-weight:{{tb.w}};color:{{tb.fg}};text-decoration:none;border-bottom:2px solid {{tb.bd}};white-space:nowrap">{{tb.label}}</a>
+</sc-for>
+</nav>
+</header>
+
+<main style="max-width:1200px;margin:0 auto;padding:28px 24px 64px;display:flex;flex-direction:column;gap:20px">
+
+<div style="display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap">
+<div style="flex:1 1 400px;display:flex;flex-direction:column;gap:4px">
+<h1 style="margin:0;font-size:28px;line-height:1.2;font-weight:600;letter-spacing:-0.01em">Seaview Hotels</h1>
+<span style="color:#565662;font-size:14px">WordPress → Payload · <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:13px">cms.seaviewhotels.co.uk</span></span>
+</div>
+<sc-if value="{{isDev}}" hint-placeholder-val="{{true}}">
+<div style="display:flex;gap:8px">
+<a href="Hub-RunLog.dc.html" style="height:40px;display:flex;align-items:center;padding:0 16px;border-radius:8px;background:#3E4FD6;color:#FFFFFF;font-size:14px;font-weight:600;text-decoration:none">Run on hub…</a>
+</div>
+</sc-if>
+</div>
+
+<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:10px;font-size:14px">
+<span style="height:24px;display:inline-flex;align-items:center;padding:0 8px;border-radius:6px;background:#18181B;color:#FFFFFF;font-size:13px;font-weight:600">v3</span>
+<span>Pushed by <b style="font-weight:600">Isaac Sneddon-Jenkins</b> from porter 2.0.0-beta.4</span>
+<span style="color:#565662">2 hours ago</span>
+<span style="flex:1"></span>
+<span style="font-size:13px;color:#565662">This page shows v3 as pushed. It doesn’t update until someone pushes again.</span>
+<sc-if value="{{isDev}}" hint-placeholder-val="{{true}}"><a href="#" style="font-size:13px">All versions (3)</a></sc-if>
+</div>
+
+<div role="status" style="display:flex;gap:14px;align-items:flex-start;padding:16px 18px;border-radius:10px;border:1px solid {{bannerBd}};background:{{bannerBg}}">
+<span style="width:22px;height:22px;flex:none;border-radius:50%;background:{{bannerIcon}};color:#FFFFFF;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px">!</span>
+<div style="display:flex;flex-direction:column;gap:2px">
+<span style="font-weight:600;font-size:16px">{{bannerTitle}}</span>
+<span style="color:#3F3F46">{{bannerBody}}</span>
+</div>
+</div>
+
+<section style="background:#FFFFFF;border:1px solid #E3E3E8;border-radius:10px;padding:20px;display:flex;flex-direction:column;gap:14px">
+<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap"><h2 style="margin:0;font-size:16px;font-weight:600">Pipeline</h2><span style="font-size:13px;color:#565662">Six stages, left to right. Only a green stage has written its result.</span></div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
+<sc-for list="{{stages}}" as="s" hint-placeholder-count="6">
+<div style="border:1px solid #E3E3E8;border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0">
+<span style="font-size:13px;color:#565662">{{s.n}} · <b style="color:#18181B;font-weight:600">{{s.name}}</b></span>
+<span style="display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px 0 6px;border-radius:6px;border:1px {{s.c.bs}} {{s.c.bd}};background:{{s.c.bg}};color:{{s.c.fg}};font-size:13px;font-weight:500;white-space:nowrap;align-self:flex-start;max-width:100%;box-sizing:border-box"><span style="width:14px;height:14px;flex:none;box-sizing:border-box;border-radius:{{s.c.gr}};border:1.5px {{s.c.gbs}} {{s.c.gbd}};background:{{s.c.gbg}};color:{{s.c.gfg}};display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;line-height:1">{{s.c.g}}</span><span style="overflow:hidden;text-overflow:ellipsis">{{s.c.label}}</span></span>
+<span style="font-size:13px;color:#565662">{{s.sub}}</span>
+</div>
+</sc-for>
+</div>
+</section>
+
+<div style="display:flex;gap:20px;flex-wrap:wrap">
+<section style="flex:1 1 420px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:10px;padding:20px;display:flex;flex-direction:column;gap:12px;min-width:0">
+<h2 style="margin:0;font-size:16px;font-weight:600">What’s been found</h2>
+<sc-for list="{{coverage}}" as="c" hint-placeholder-count="5">
+<div style="display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;gap:8px;font-size:14px"><span style="flex:1;font-weight:500">{{c.label}}</span><span style="font-variant-numeric:tabular-nums">{{c.ready}}</span><span style="color:#565662;font-variant-numeric:tabular-nums">of {{c.total}} ready</span></div>
+<div style="height:8px;border-radius:4px;background:#EFEFF2;overflow:hidden;display:flex"><div style="width:{{c.pct}}%;background:#3F3F46"></div><div style="width:{{c.badPct}}%;background:#C42B2B"></div></div>
+<span style="font-size:13px;color:{{c.noteFg}}">{{c.note}}</span>
+</div>
+</sc-for>
+<span style="font-size:13px;color:#565662">“Ready” means extracted and converted without problems. It does not mean it’s on the new site.</span>
+</section>
+
+<section style="flex:1 1 360px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:10px;padding:20px;display:flex;flex-direction:column;gap:12px;min-width:0">
+<div style="display:flex;align-items:baseline;gap:8px"><h2 style="margin:0;font-size:16px;font-weight:600;flex:1">Issues</h2><sc-if value="{{isDev}}" hint-placeholder-val="{{true}}"><a href="#" style="font-size:13px">Open issues table</a></sc-if></div>
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px">
+<div style="padding:12px;border-radius:8px;background:#FDECEC;display:flex;flex-direction:column"><span style="font-size:24px;font-weight:600;color:#C42B2B;font-variant-numeric:tabular-nums">52</span><span style="font-size:13px;color:#8E1F1F">{{errLabel}}</span></div>
+<div style="padding:12px;border-radius:8px;background:#FFF3DC;display:flex;flex-direction:column"><span style="font-size:24px;font-weight:600;color:#9A5800;font-variant-numeric:tabular-nums">50</span><span style="font-size:13px;color:#7A4600">{{warnLabel}}</span></div>
+<div style="padding:12px;border-radius:8px;background:#EFEFF2;display:flex;flex-direction:column"><span style="font-size:24px;font-weight:600;color:#3F3F46;font-variant-numeric:tabular-nums">1</span><span style="font-size:13px;color:#565662">info</span></div>
+</div>
+<sc-if value="{{isDev}}" hint-placeholder-val="{{true}}">
+<div style="display:flex;flex-direction:column;font-size:14px">
+<sc-for list="{{kinds}}" as="k" hint-placeholder-count="5">
+<a href="#" style="display:flex;gap:8px;padding:7px 0;border-top:1px solid #EFEFF2;color:#18181B;text-decoration:none"><span style="flex:1;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:13px">{{k.kind}}</span><span style="color:{{k.fg}};font-weight:600;font-variant-numeric:tabular-nums">{{k.n}}</span></a>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{isClient}}" hint-placeholder-val="{{false}}">
+<span style="font-size:14px;color:#3F3F46">Your Umi team is working through these. Details stay with the team; you’ll see the counts drop as they’re fixed. Anything that needs your help will show up under Uploads.</span>
+</sc-if>
+</section>
+</div>
+
+<section style="background:#FFFFFF;border:1px solid #E3E3E8;border-radius:10px;padding:20px;display:flex;flex-direction:column;gap:10px">
+<h2 style="margin:0;font-size:16px;font-weight:600">Reports from v3</h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">
+<sc-for list="{{reports}}" as="r" hint-placeholder-count="4">
+<a href="#" style="display:flex;flex-direction:column;gap:2px;padding:14px;border:1px solid #E3E3E8;border-radius:10px;text-decoration:none;color:#18181B;min-height:44px">
+<span style="font-weight:600;font-size:14px">{{r.title}}</span>
+<span style="font-size:13px;color:#565662">{{r.sub}}</span>
+</a>
+</sc-for>
+</div>
+</section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"role":{"editor":"enum","options":["developer","client"],"default":"developer"},"$preview":{"width":1280,"height":1120}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const role = this.props.role ?? 'developer';
+    const isDev = role === 'developer';
+    const C = {
+      clean:{label:'Clean · written',fg:'#17803D',bg:'#E6F5EB',bd:'#E6F5EB',bs:'solid',g:'✓',gfg:'#FFFFFF',gbg:'#17803D',gbd:'#17803D',gbs:'solid',gr:'50%'},
+      warnings:{label:'Done · warnings',fg:'#9A5800',bg:'#FFF3DC',bd:'#FFF3DC',bs:'solid',g:'!',gfg:'#9A5800',gbg:'transparent',gbd:'#9A5800',gbs:'solid',gr:'3px'},
+      errors:{label:'12 errors',fg:'#C42B2B',bg:'#FDECEC',bd:'#C42B2B',bs:'solid',g:'!',gfg:'#FFFFFF',gbg:'#C42B2B',gbd:'#C42B2B',gbs:'solid',gr:'50%'},
+      dry:{label:'Dry run · not written',fg:'#3B4A6B',bg:'repeating-linear-gradient(135deg,#EEF1F7 0 6px,#E2E7F0 6px 8px)',bd:'#8391B0',bs:'dashed',g:'',gfg:'#3B4A6B',gbg:'transparent',gbd:'#3B4A6B',gbs:'dashed',gr:'50%'},
+      skipped:{label:'Skipped',fg:'#565662',bg:'transparent',bd:'#E3E3E8',bs:'solid',g:'–',gfg:'#565662',gbg:'transparent',gbd:'#6E6E7A',gbs:'solid',gr:'50%'}
+    };
+    const stages = [
+      ['1','Analyse','clean','1,964 items found'],['2','Extract','warnings','1,960 of 1,964 fetched'],['3','Normalise','errors','1,948 converted'],
+      ['4','Schema','warnings','2 mismatches'],['5','Load','dry','Would write 4,415'],['6','Verify','skipped','Waits for a real load']
+    ].map(([n,name,k,sub]) => ({n,name,c:C[k],sub: isDev ? sub : (k==='dry' ? 'Rehearsed, nothing moved yet' : sub)}));
+    const coverage = [
+      ['Pages',86,86,0,'All pages converted.',0],['News posts',412,412,0,'All posts converted.',0],['Rooms',48,44,4,'4 rooms have prices we can’t read yet.',1],
+      ['Images and files',2131,2104,27,'27 files are missing from the old site.',1],['Old web addresses',1612,1571,41,'41 old links don’t lead anywhere yet.',1]
+    ].map(([label,total,ready,bad,note,isBad]) => ({label,total:total.toLocaleString('en-GB'),ready:ready.toLocaleString('en-GB'),pct:(ready/total*100).toFixed(1),badPct:(bad/total*100).toFixed(1),note,noteFg:isBad?'#8E1F1F':'#565662'}));
+    const kinds = [['missing-media','27 errors','#C42B2B'],['unresolved-link','9 errors · 14 warnings','#C42B2B'],['unsupported-block','6 errors','#C42B2B'],['unmapped-field','31 warnings','#9A5800'],['+ 6 more kinds','',  '#565662']].map(([kind,n,fg]) => ({kind,n,fg}));
+    const reports = isDev
+      ? [['Analysis','reports/analysis.html · v3'],['Extract','reports/extract.html · v3'],['Load (dry run)','Would write 4,415 · v3'],['Schema spec','Payload collections · v3']]
+      : [['What we found on your site','Analysis · 2 hours ago'],['Rehearsal of the move','Dry run · nothing written'],['Old addresses and where they go','1,612 web addresses']];
+    const tabsAll = [['Overview',1,1],['Issues',0,0],['URLs',0,0],['Reports',0,1],['Runs',0,0],['Uploads',0,1],['Settings',0,0]];
+    const tabs = tabsAll.filter(x => isDev || x[2]).map(([label,on]) => ({label,href:label==='Uploads'?'Hub-Uploads.dc.html':(label==='Runs'?'Hub-RunLog.dc.html':(label==='Settings'?'Hub-Share.dc.html':'#')),w:on?600:500,fg:on?'#18181B':'#565662',bd:on?'#18181B':'transparent'}));
+    return { isDev, isClient: !isDev, stages, coverage, kinds, reports, tabs,
+      who: isDev ? 'Developer' : 'Client · Seaview Hotels', initials: isDev ? 'IS' : 'MR',
+      bannerBg: '#FDECEC', bannerBd: '#F3BDBD', bannerIcon: '#C42B2B',
+      bannerTitle: isDev ? 'Not ready to apply. Nothing has been written to the new site.' : 'In progress. Nothing has moved to your new site yet.',
+      bannerBody: isDev ? '52 open errors in v3. Load has only been dry-run, so verify hasn’t run either.' : 'We’ve copied and converted most of your content and rehearsed the move. 52 things need fixing before we move it for real.',
+      errLabel: isDev ? 'errors' : 'to fix', warnLabel: isDev ? 'warnings' : 'to review' };
+  }
+}
+</script>
+</body>
+</html>

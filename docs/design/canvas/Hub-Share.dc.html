@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hub share links</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+a{color:#3E4FD6}a:hover{color:#2A37A8}
+</style>
+</helmet>
+<div style="min-height:1080px;background:#F7F7F8;color:#18181B;font-family:Inter,system-ui,sans-serif;font-size:15px;line-height:1.55">
+
+<header style="background:#FFFFFF;border-bottom:1px solid #E3E3E8">
+<div style="max-width:1200px;margin:0 auto;padding:0 24px;display:flex;align-items:center;gap:16px;min-height:56px;flex-wrap:wrap">
+<span style="display:flex;align-items:center;gap:8px;font-weight:600"><span style="width:26px;height:26px;border-radius:7px;background:#18181B;display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h11l-3-3M20 17H9l3 3"></path></svg></span>Porter</span>
+<span style="color:#CFCFD6" aria-hidden="true">/</span>
+<a href="Hub-Overview.dc.html" style="font-size:14px;font-weight:600;color:#18181B;text-decoration:none">Seaview Hotels</a>
+<span style="color:#CFCFD6" aria-hidden="true">/</span>
+<span style="font-size:14px;color:#565662">Settings</span>
+<span style="flex:1"></span>
+<span style="width:32px;height:32px;border-radius:50%;background:#ECEEFC;color:#3E4FD6;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">IS</span>
+</div>
+</header>
+
+<div style="max-width:1200px;margin:0 auto;padding:28px 24px 64px;display:flex;gap:28px;flex-wrap:wrap">
+<nav aria-label="Settings" style="flex:1 1 180px;max-width:200px;display:flex;flex-direction:column;gap:2px">
+<a href="#" style="padding:8px 12px;border-radius:8px;color:#565662;text-decoration:none;font-size:14px">Members and roles</a>
+<a href="#" aria-current="page" style="padding:8px 12px;border-radius:8px;background:#EFEFF2;color:#18181B;text-decoration:none;font-size:14px;font-weight:600">Share links</a>
+<a href="#secrets" style="padding:8px 12px;border-radius:8px;color:#565662;text-decoration:none;font-size:14px">Run secrets</a>
+<a href="#" style="padding:8px 12px;border-radius:8px;color:#565662;text-decoration:none;font-size:14px">Retention</a>
+</nav>
+
+<main style="flex:999 1 640px;min-width:0;display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;flex-direction:column;gap:4px">
+<h1 style="margin:0;font-size:28px;line-height:1.2;font-weight:600;letter-spacing:-0.01em">Share links</h1>
+<span style="color:#3F3F46">Let someone without an account see this project. Every link expires, and you can revoke it at any time.</span>
+</div>
+
+<section aria-labelledby="once" style="background:#FFFFFF;border:2px solid #3E4FD6;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:14px">
+<div style="display:flex;gap:10px;align-items:flex-start">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3E4FD6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;margin-top:2px"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>
+<div style="display:flex;flex-direction:column">
+<h2 id="once" style="margin:0;font-size:16px;font-weight:600">Copy this link now. It won’t be shown again.</h2>
+<span style="font-size:14px;color:#3F3F46">We only keep a fingerprint of it. If you lose it, revoke it and make a new one.</span>
+</div>
+</div>
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+<label style="flex:1 1 360px;min-width:0;display:flex;align-items:center;height:44px;padding:0 12px;border:1px solid #CFCFD6;border-radius:8px;background:#F7F7F8">
+<span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Share link</span>
+<input readonly value="https://porter.umidigital.co.uk/s/sl_7Hq2xKp9VmR4tLw8Ne3cYb6Dz" style="border:0;outline:0;background:transparent;flex:1;min-width:0;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:14px;color:#18181B">
+</label>
+<button onClick="{{copy}}" style="height:44px;padding:0 18px;border-radius:8px;border:1px solid #3E4FD6;background:#3E4FD6;color:#FFFFFF;font:inherit;font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>{{copyLabel}}</button>
+</div>
+<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:14px;color:#3F3F46">
+<span><span style="color:#565662">Label</span> · For Seaview marketing team</span>
+<span><span style="color:#565662">Scope</span> · Reports only</span>
+<span><span style="color:#565662">Expires</span> · 19 Nov 2026, 10:42</span>
+</div>
+<div style="display:flex;justify-content:flex-end"><button style="height:40px;padding:0 16px;border-radius:8px;border:1px solid #CFCFD6;background:#FFFFFF;font:inherit;font-size:14px;font-weight:600">I’ve copied it</button></div>
+</section>
+
+<section style="background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:16px">
+<h2 style="margin:0;font-size:16px;font-weight:600">New share link</h2>
+<fieldset style="border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:8px">
+<legend style="font-size:14px;font-weight:600;padding:0;margin-bottom:8px">What can they see?</legend>
+<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">
+<label style="display:flex;gap:10px;align-items:flex-start;padding:14px;border:2px solid #3E4FD6;border-radius:10px;background:#F6F7FE;cursor:pointer">
+<input type="radio" name="scope" checked style="margin-top:4px;accent-color:#3E4FD6">
+<span style="display:flex;flex-direction:column"><span style="font-weight:600">Reports only</span><span style="font-size:14px;color:#565662">Overview and porter’s HTML reports. No issues, URLs or raw data.</span></span>
+</label>
+<label style="display:flex;gap:10px;align-items:flex-start;padding:14px;border:1px solid #CFCFD6;border-radius:10px;cursor:pointer">
+<input type="radio" name="scope" style="margin-top:4px;accent-color:#3E4FD6">
+<span style="display:flex;flex-direction:column"><span style="font-weight:600">Read-only project</span><span style="font-size:14px;color:#565662">Everything a viewer sees, including issues and URL tables. Not for clients.</span></span>
+</label>
+</div>
+</fieldset>
+<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+<label style="flex:1 1 280px;display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:600">Label
+<input placeholder="Who is it for?" style="height:44px;padding:0 12px;border:1px solid #CFCFD6;border-radius:8px;font:inherit;font-weight:400">
+</label>
+<label style="flex:0 1 200px;display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:600">Expires after
+<select style="height:44px;padding:0 10px;border:1px solid #CFCFD6;border-radius:8px;font:inherit;font-weight:400;background:#FFFFFF"><option>24 hours</option><option selected>7 days</option><option>30 days</option><option>90 days</option></select>
+</label>
+<button style="height:44px;padding:0 18px;border-radius:8px;border:1px solid #18181B;background:#18181B;color:#FFFFFF;font:inherit;font-size:14px;font-weight:600">Create link</button>
+</div>
+<span style="font-size:13px;color:#565662">There’s no “never expires”. 90 days is the longest.</span>
+</section>
+
+<section style="background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;overflow:hidden">
+<div style="padding:16px 20px;border-bottom:1px solid #E3E3E8"><h2 style="margin:0;font-size:16px;font-weight:600">Links</h2></div>
+<div style="overflow-x:auto">
+<div style="min-width:760px">
+<div style="display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1.2fr) minmax(0,1fr) 100px;gap:12px;padding:10px 20px;background:#F7F7F8;font-size:13px;font-weight:600;color:#565662">
+<span>Label</span><span>Scope</span><span>Created by</span><span>Expires</span><span>Last used</span><span></span>
+</div>
+<sc-for list="{{links}}" as="l" hint-placeholder-count="4">
+<div style="display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1.2fr) minmax(0,1fr) 100px;gap:12px;padding:0 20px;min-height:52px;align-items:center;border-top:1px solid #EFEFF2;font-size:14px;color:{{l.fg}}">
+<span style="font-weight:500;text-decoration:{{l.deco}};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{l.label}}</span>
+<span>{{l.scope}}</span>
+<span>{{l.by}}</span>
+<span style="color:{{l.expFg}};font-weight:{{l.expW}}">{{l.exp}}</span>
+<span>{{l.used}}</span>
+<sc-if value="{{l.active}}" hint-placeholder-val="{{true}}"><button style="height:36px;padding:0 12px;border-radius:8px;border:1px solid #E3B0B0;background:#FFFFFF;color:#C42B2B;font:inherit;font-size:14px;font-weight:600">Revoke</button></sc-if>
+<sc-if value="{{l.inactive}}" hint-placeholder-val="{{false}}"><span style="font-size:13px;color:#565662">{{l.state}}</span></sc-if>
+</div>
+</sc-for>
+</div>
+</div>
+</section>
+
+<div style="display:flex;gap:20px;flex-wrap:wrap">
+<section id="secrets" style="flex:1 1 380px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:12px;min-width:0">
+<div style="display:flex;flex-direction:column"><h2 style="margin:0;font-size:16px;font-weight:600">Run secrets</h2><span style="font-size:14px;color:#565662">Used by hub runs. Write-only: once saved, nobody can read them back, including you.</span></div>
+<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid #EFEFF2;flex-wrap:wrap">
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:13px;flex:1;min-width:180px">PORTER_WP_PASSWORD</span>
+<span style="font-size:13px;color:#565662">Set by Isaac · 3 Nov</span>
+<button style="height:36px;padding:0 12px;border-radius:8px;border:1px solid #CFCFD6;background:#FFFFFF;font:inherit;font-size:14px">Replace</button>
+</div>
+<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid #EFEFF2;flex-wrap:wrap">
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:13px;flex:1;min-width:180px">PORTER_PAYLOAD_API_KEY</span>
+<span style="font-size:13px;color:#9A5800;font-weight:600">Not set</span>
+<button style="height:36px;padding:0 12px;border-radius:8px;border:1px solid #CFCFD6;background:#FFFFFF;font:inherit;font-size:14px">Add value</button>
+</div>
+</section>
+
+<section style="flex:1 1 380px;display:flex;flex-direction:column;gap:8px;min-width:0">
+<span style="font-size:13px;font-weight:600;color:#565662">What a recipient sees at /s/…</span>
+<div style="border:1px solid #E3E3E8;border-radius:12px;overflow:hidden;background:#FFFFFF">
+<div style="padding:10px 16px;background:#18181B;color:#FFFFFF;font-size:13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+<span style="font-weight:600">Shared view · read-only</span>
+<span style="opacity:0.8">Shared by Umi · expires in 6 days (19 Nov)</span>
+</div>
+<div style="padding:16px;display:flex;flex-direction:column;gap:8px">
+<span style="font-size:18px;font-weight:600">Seaview Hotels</span>
+<div style="height:10px;width:70%;border-radius:4px;background:#EFEFF2"></div>
+<div style="height:10px;width:50%;border-radius:4px;background:#EFEFF2"></div>
+<span style="font-size:13px;color:#565662">Reports only: Overview and 3 reports. No sign-in, no editing, no uploads.</span>
+</div>
+</div>
+</section>
+</div>
+
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1080}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { copied: false }; }
+  renderVals() {
+    const links = [
+      ['For Seaview marketing team','Reports only','Isaac S-J','19 Nov 2026 · in 6 days','Never','active'],
+      ['Seaview board review','Reports only','Sophia','14 Nov 2026 · in 2 days','Today, 09:12','soon'],
+      ['Agency handover (Positive Internet)','Read-only project','Isaac S-J','2 Nov 2026','30 Oct','expired'],
+      ['Old staging preview','Read-only project','Sophia','—','12 Oct','revoked']
+    ].map(([label,scope,by,exp,used,st]) => {
+      const active = st==='active'||st==='soon';
+      return {label,scope,by,exp,used,active,inactive:!active,
+        state: st==='expired' ? 'Expired' : 'Revoked 14 Oct',
+        fg: active ? '#18181B' : '#565662', deco: st==='revoked' ? 'line-through' : 'none',
+        expFg: st==='soon' ? '#9A5800' : (active ? '#18181B' : '#565662'), expW: st==='soon' ? 600 : 400};
+    });
+    return { links, copied: this.state.copied, copyLabel: this.state.copied ? 'Copied' : 'Copy link', copy: () => this.setState({ copied: true }) };
+  }
+}
+</script>
+</body>
+</html>

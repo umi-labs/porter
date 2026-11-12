@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Desktop edge states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#3E4FD6}a:hover{color:#2A37A8}
+</style>
+</helmet>
+<div style="min-height:1560px;background:#F7F7F8;color:#18181B;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;font-size:13px;line-height:1.4;padding:32px;box-sizing:border-box">
+<div style="max-width:1376px;margin:0 auto;display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+<h1 style="margin:0;font-size:20px;font-weight:600">Desktop: empty, loading, error and long-content states</h1>
+<span style="color:#565662">Engine errors are shown verbatim in mono. Empty states name the command that fills them.</span>
+</div>
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px">
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:11px;font-weight:600;color:#565662">LAUNCHER · EMPTY</span>
+<div style="height:240px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:20px;text-align:center">
+<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#565662" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+<span style="font-weight:600">No recent projects</span>
+<span style="color:#565662;max-width:280px">Open a folder that has a porter.toml, or start a new one.</span>
+<div style="display:flex;gap:6px"><button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid #3E4FD6;background:#3E4FD6;color:#FFFFFF;font:inherit;font-size:12px;font-weight:600">Open folder…</button><button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid #CFCFD6;background:#FFFFFF;color:#18181B;font:inherit;font-size:12px">New project…</button></div>
+<span style="font-size:11px;color:#565662;font-family:ui-monospace,'SF Mono',Menlo,monospace">same as: porter init &lt;name&gt; --adapter wordpress</span>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:11px;font-weight:600;color:#565662">LAUNCHER · PROJECT WON’T OPEN</span>
+<div style="height:240px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:8px;padding:16px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box">
+<div style="display:flex;gap:8px;align-items:center"><span style="width:14px;height:14px;border-radius:50%;background:#C42B2B;color:#FFFFFF;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800">✕</span><span style="font-weight:600">Couldn’t open Creative Twists</span></div>
+<span style="color:#565662">porter.toml has a problem. Nothing was changed.</span>
+<pre style="margin:0;padding:10px;border-radius:6px;background:#FDECEC;color:#8E1F1F;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;white-space:pre-wrap">error: unknown key `destinaton` in porter.toml, line 14
+  did you mean `destination`?</pre>
+<div style="display:flex;gap:6px;margin-top:auto"><button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid #CFCFD6;background:#FFFFFF;font:inherit;font-size:12px">Open porter.toml</button><button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid #CFCFD6;background:#FFFFFF;font:inherit;font-size:12px">Remove from recents</button></div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:11px;font-weight:600;color:#565662">LAUNCHER · LONG NAME AND PATH, 340PX WIDE</span>
+<div style="height:240px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:8px;padding:16px;display:flex;flex-direction:column;gap:12px;box-sizing:border-box">
+<div style="width:340px;max-width:100%;border:1px solid #E3E3E8;border-radius:6px;padding:8px 10px;display:flex;flex-direction:column;gap:2px;background:#ECEEFC">
+<span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">The Magical Christmas Adventure — 4 Kingdoms booking site and the legacy Lapland microsite</span>
+<div style="display:flex;min-width:0;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#565662"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:0 1 auto">/Users/isj/Desktop/work/clients/the-magical-christmas-adventure/2026</span><span style="white-space:nowrap;flex:none">/porter/tmca-umbraco…</span></div>
+</div>
+<span style="font-size:12px;color:#565662">Name: end ellipsis. Path: head shrinks first, last two segments stay readable (the tail itself end-truncates only if it alone overflows). Full path in the tooltip and the window title.</span>
+<span style="font-size:11px;color:#565662;font-family:ui-monospace,'SF Mono',Menlo,monospace">GPUI: flex row, head .overflow_hidden().text_ellipsis(), tail .flex_none()</span>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:11px;font-weight:600;color:#565662">OVERVIEW · LOADING</span>
+<div style="height:240px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:8px;padding:16px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box">
+<span style="font-size:12px;color:#565662">Reading project.db…</span>
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px">
+<div style="height:84px;border-radius:6px;border:1px solid #E3E3E8;padding:8px;display:flex;flex-direction:column;gap:6px;box-sizing:border-box"><div style="width:60%;height:10px;border-radius:3px;background:#EFEFF2"></div><div style="width:80%;height:18px;border-radius:4px;background:#EFEFF2"></div><div style="width:50%;height:8px;border-radius:3px;background:#EFEFF2"></div></div>
+<div style="height:84px;border-radius:6px;border:1px solid #E3E3E8;padding:8px;display:flex;flex-direction:column;gap:6px;box-sizing:border-box"><div style="width:60%;height:10px;border-radius:3px;background:#EFEFF2"></div><div style="width:80%;height:18px;border-radius:4px;background:#EFEFF2"></div><div style="width:50%;height:8px;border-radius:3px;background:#EFEFF2"></div></div>
+<div style="height:84px;border-radius:6px;border:1px solid #E3E3E8;padding:8px;display:flex;flex-direction:column;gap:6px;box-sizing:border-box"><div style="width:60%;height:10px;border-radius:3px;background:#EFEFF2"></div><div style="width:80%;height:18px;border-radius:4px;background:#EFEFF2"></div><div style="width:50%;height:8px;border-radius:3px;background:#EFEFF2"></div></div>
+</div>
+<span style="font-size:12px;color:#565662">Skeletons are flat, never shimmering (no animation in GPUI). Chips never render until the real state is known, so a loading card can’t be mistaken for “not run”.</span>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:11px;font-weight:600;color:#565662">OVERVIEW · DESTINATION NOT SET</span>
+<div style="height:240px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:8px;padding:16px;display:flex;flex-direction:column;gap:12px;box-sizing:border-box">
+<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+<span style="font-weight:600">Creative Twists</span>
+<span style="display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:4px;background:#EFEFF2;font-size:12px;color:#565662">WordPress → <span style="border:1px dashed #8391B0;border-radius:3px;padding:0 4px;color:#3B4A6B">destination not set</span></span>
+</div>
+<div style="display:flex;gap:6px;flex-wrap:wrap">
+<button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid #3E4FD6;background:#3E4FD6;color:#FFFFFF;font:inherit;font-size:12px;font-weight:600">Set destination…</button>
+<button disabled style="height:28px;padding:0 10px;border-radius:6px;border:1px solid #E3E3E8;background:#FFFFFF;color:#6E6E7A;font:inherit;font-size:12px">Load (dry run)</button>
+<button disabled style="height:28px;padding:0 10px;border-radius:6px;border:1px dashed #CFCFD6;background:transparent;color:#6E6E7A;font:inherit;font-size:12px">Apply load…</button>
+</div>
+<span style="color:#565662;font-size:12px">Analyse, extract and normalise still run. Schema, load and verify show “Not run · needs a destination” instead of looking idle.</span>
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#565662">[destination] is missing from porter.toml</span>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:11px;font-weight:600;color:#565662">OVERVIEW · STAGE FAILED (EXIT 1)</span>
+<div style="height:240px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:8px;padding:16px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box">
+<div style="display:flex;align-items:center;gap:8px"><span style="font-size:11px;color:#565662">2</span><span style="font-weight:600;flex:1">Extract</span><span style="display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px 0 5px;border-radius:4px;background:#C42B2B;color:#FFFFFF;font-size:12px;font-weight:500"><span style="width:13px;height:13px;border-radius:50%;background:#FFFFFF;color:#C42B2B;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800">✕</span>Failed</span></div>
+<pre style="margin:0;padding:10px;border-radius:6px;background:#FDECEC;color:#8E1F1F;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;white-space:pre-wrap">wp-rest: 401 Unauthorized from www.seaviewhotels.co.uk
+PORTER_WP_PASSWORD is not set</pre>
+<span style="font-size:12px;color:#565662">0 items fetched. Previous extract (2 days ago) is kept and marked stale, not shown as current.</span>
+<div style="display:flex;gap:6px;margin-top:auto"><button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid #CFCFD6;background:#FFFFFF;font:inherit;font-size:12px">Run again</button><button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid #CFCFD6;background:#FFFFFF;font:inherit;font-size:12px">Open run log</button></div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:11px;font-weight:600;color:#565662">OVERVIEW · INTERRUPTED (EXIT 3)</span>
+<div style="height:240px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:8px;padding:16px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box">
+<div style="display:flex;align-items:center;gap:8px"><span style="font-size:11px;color:#565662">2</span><span style="font-weight:600;flex:1">Extract</span><span style="display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px 0 5px;border-radius:4px;background:#F2EBFC;color:#7339BD;font-size:12px;font-weight:500"><span style="width:13px;height:13px;box-sizing:border-box;border-radius:50%;border:1.5px solid #7339BD;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800">‖</span>Interrupted at 41%</span></div>
+<div style="height:4px;border-radius:2px;background:#EFEFF2;overflow:hidden;display:flex"><div style="width:41%;background:#7339BD"></div></div>
+<span style="font-size:12px">805 of 1,964 fetched · cancelled by you 6m ago</span>
+<span style="font-size:12px;color:#565662">Resume skips what’s already in raw/. Later stages keep their old results, marked stale.</span>
+<div style="display:flex;gap:6px;margin-top:auto"><button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid #3E4FD6;background:#3E4FD6;color:#FFFFFF;font:inherit;font-size:12px;font-weight:600">Resume</button><button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid #CFCFD6;background:#FFFFFF;font:inherit;font-size:12px">Start over (--refresh)</button></div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:11px;font-weight:600;color:#565662">MAPPING · EMPTY</span>
+<div style="height:240px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:20px;text-align:center;box-sizing:border-box">
+<span style="font-weight:600">Nothing to map yet</span>
+<span style="color:#565662;max-width:300px">Analyse finds the source types and fields, then seeds [mapping] in porter.toml with defaults for you to edit here.</span>
+<button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid #3E4FD6;background:#3E4FD6;color:#FFFFFF;font:inherit;font-size:12px;font-weight:600">Run analyse</button>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:11px;font-weight:600;color:#565662">MAPPING · LOAD BLOCKED BY MAPPING</span>
+<div style="height:240px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:8px;padding:16px;display:flex;flex-direction:column;gap:8px;box-sizing:border-box">
+<span style="font-weight:600;color:#C42B2B">Load can’t run: 4 mapping errors</span>
+<a href="#" style="display:flex;gap:8px;font-size:12px;text-decoration:none;color:#18181B"><span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;width:150px">rooms.occupancy</span><span style="color:#565662">required, no source</span></a>
+<a href="#" style="display:flex;gap:8px;font-size:12px;text-decoration:none;color:#18181B"><span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;width:150px">acf.price_from</span><span style="color:#565662">3 values aren’t numbers</span></a>
+<a href="#" style="display:flex;gap:8px;font-size:12px;text-decoration:none;color:#18181B"><span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;width:150px">tribe_events</span><span style="color:#565662">dropped without a reason</span></a>
+<a href="#" style="display:flex;gap:8px;font-size:12px;text-decoration:none;color:#18181B"><span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;width:150px">elementor:slides</span><span style="color:#565662">converter-missing</span></a>
+<span style="font-size:12px;color:#565662;margin-top:auto">Each line jumps to its row. F8 cycles through them.</span>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:11px;font-weight:600;color:#565662">URLS · EMPTY FILTER</span>
+<div style="height:240px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:20px;text-align:center;box-sizing:border-box">
+<span style="font-weight:600">No redirect chains in the route table</span>
+<span style="color:#565662;max-width:300px">All 1,612 old URLs reach a document directly or in one hop. This is from porter’s model; the live site hasn’t been checked yet.</span>
+<button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid #CFCFD6;background:#FFFFFF;font:inherit;font-size:12px">Clear filter</button>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:11px;font-weight:600;color:#565662">URLS · LOADING</span>
+<div style="height:240px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:8px;padding:16px;display:flex;flex-direction:column;gap:8px;box-sizing:border-box">
+<span style="font-size:12px">Building route table · 840 of 1,612</span>
+<div style="height:4px;border-radius:2px;background:#EFEFF2;overflow:hidden;display:flex"><div style="width:52%;background:#3E4FD6"></div></div>
+<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+<div style="height:20px;border-radius:3px;background:#F3F3F5"></div><div style="height:20px;border-radius:3px;background:#F3F3F5"></div><div style="height:20px;border-radius:3px;background:#F3F3F5"></div><div style="height:20px;border-radius:3px;background:#F3F3F5"></div><div style="height:20px;border-radius:3px;background:#F3F3F5"></div>
+</div>
+<span style="font-size:12px;color:#565662">Rows appear as they are resolved; filter counts read “…” until done.</span>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:11px;font-weight:600;color:#565662">URLS · VERY LONG URL (HOVER)</span>
+<div style="height:240px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:8px;padding:16px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box">
+<div style="display:flex;min-width:0;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;border:1px solid #E3E3E8;border-radius:4px;padding:5px 8px"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:0 1 auto">/blog/2019/06/14/a-weekend-on-the-north-cornish-coast-what-to-pack</span><span style="white-space:nowrap;flex:none">-and-how-to-get-there/</span></div>
+<div style="padding:10px;border-radius:8px;background:#18181B;color:#EDEDF0;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;word-break:break-all;box-shadow:0 8px 24px rgba(0,0,0,0.2)">/blog/2019/06/14/a-weekend-on-the-north-cornish-coast-what-to-pack-where-to-eat-and-how-to-get-there/?utm_source=newsletter&amp;utm_campaign=june</div>
+<span style="font-size:12px;color:#565662">Tooltip wraps the full URL, including query strings that crawl kept. ⌘C copies it.</span>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:11px;font-weight:600;color:#565662">APPLY · BLOCKED (STALE DRY RUN)</span>
+<div style="height:240px;background:#17171A;color:#EDEDF0;border:1px solid #3A3A42;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box">
+<span style="font-weight:600">Apply load to the destination</span>
+<div style="display:flex;gap:8px;align-items:flex-start;font-size:12px"><span style="width:14px;height:14px;flex:none;border-radius:50%;background:#FF7A7A;color:#2A0F0F;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800">!</span><span><b>The dry run is stale.</b> Mapping changed 3 minutes after it ran (acf.price_from). Its counts no longer describe what Apply would write.</span></div>
+<span style="font-size:12px;color:#A3A3AE">There’s no confirm field until a fresh dry run exists.</span>
+<div style="display:flex;gap:6px;margin-top:auto;justify-content:flex-end"><button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid #3A3A42;background:transparent;color:#EDEDF0;font:inherit;font-size:12px">Cancel</button><button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid #8C98FF;background:#8C98FF;color:#0E1030;font:inherit;font-size:12px;font-weight:600">Run dry run now</button></div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:11px;font-weight:600;color:#565662">AFTER APPLY · THE FIRST GREEN</span>
+<div style="height:240px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:8px;padding:16px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box">
+<div style="display:flex;align-items:center;gap:8px"><span style="font-size:11px;color:#565662">5</span><span style="font-weight:600;flex:1">Load</span><span style="display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px 0 5px;border-radius:4px;background:#E6F5EB;color:#17803D;font-size:12px;font-weight:500"><span style="width:13px;height:13px;border-radius:50%;background:#17803D;color:#FFFFFF;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800">✓</span>Clean · written</span></div>
+<span style="font-size:12px">4,415 written to cms.seaviewhotels.co.uk · 0 write-failed</span>
+<div style="display:flex;align-items:center;gap:8px"><span style="font-size:11px;color:#565662">6</span><span style="font-weight:600;flex:1">Verify</span><span style="display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px 0 5px;border-radius:4px;border:1px dashed #CFCFD6;color:#565662;font-size:12px;font-weight:500"><span style="width:13px;height:13px;box-sizing:border-box;border-radius:50%;border:1.5px solid #6E6E7A"></span>Not run</span></div>
+<span style="font-size:12px;color:#565662">Load being green says the writes landed. Only verify can say they’re wired correctly, so the project header reads “Loaded, not yet verified” until it runs.</span>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:11px;font-weight:600;color:#565662">CONTENT · DOCUMENT DETAIL WITH PROBLEMS</span>
+<div style="height:240px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:8px;box-sizing:border-box;font-size:12px">
+<span style="font-weight:600;font-size:13px">The Harbour Suite <span style="color:#565662;font-weight:400">· room 112</span></span>
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#565662">/rooms/the-harbour-suite/ → /rooms/the-harbour-suite</span>
+<div style="display:flex;gap:10px;flex-wrap:wrap">
+<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:50%;background:#17803D"></span>analyse</span>
+<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:50%;background:#17803D"></span>extract</span>
+<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:50%;background:linear-gradient(90deg,#9A5800 50%,transparent 50%);border:1.5px solid #9A5800;box-sizing:border-box"></span>normalise</span>
+<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:9px;height:9px;border-radius:50%;border:1.5px dashed #3B4A6B;box-sizing:border-box"></span>load (would write)</span>
+</div>
+<div style="padding:8px;border:1px solid #E3E3E8;border-radius:6px;line-height:1.6">Our largest suite looks across the harbour. Book a <span style="text-decoration:underline;text-decoration-color:#3E4FD6">spa treatment</span> <span style="font-size:10px;color:#565662">✓ /spa</span> or see <span style="text-decoration:underline wavy #C42B2B;color:#C42B2B">winter offers</span> <span style="font-size:10px;color:#C42B2B">✕ unresolved: /?p=4812</span></div>
+<span style="color:#C42B2B">2 issues: unresolved-link · missing-media (gallery image 4 of 12)</span>
+</div>
+</div>
+
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1560}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

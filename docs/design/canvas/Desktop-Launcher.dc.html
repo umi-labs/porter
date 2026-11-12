@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Porter launcher</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#3E4FD6}a:hover{color:#2A37A8}
+</style>
+</helmet>
+<div style="min-height:800px;background:{{t.page}};padding:32px;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;font-size:13px;line-height:1.4;color:{{t.text}}">
+<div style="max-width:960px;margin:0 auto;background:{{t.bg}};border:1px solid {{t.border}};border-radius:12px;overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,0.18)">
+
+<div style="height:38px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid {{t.border}};background:{{t.surface}}">
+<span style="width:12px;height:12px;border-radius:50%;background:{{t.borderStrong}}"></span>
+<span style="width:12px;height:12px;border-radius:50%;background:{{t.borderStrong}}"></span>
+<span style="width:12px;height:12px;border-radius:50%;background:{{t.borderStrong}}"></span>
+<span style="flex:1;text-align:center;font-size:12px;color:{{t.muted}};font-weight:500">Porter</span>
+<span style="width:52px"></span>
+</div>
+
+<div style="display:flex;flex-wrap:wrap;min-height:560px">
+<div style="flex:1 1 260px;max-width:300px;padding:28px 24px;border-right:1px solid {{t.border}};display:flex;flex-direction:column;gap:20px;background:{{t.surface}}">
+<div style="display:flex;align-items:center;gap:10px">
+<div style="width:36px;height:36px;border-radius:9px;background:{{t.text}};display:flex;align-items:center;justify-content:center">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="{{t.bg}}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h11l-3-3M20 17H9l3 3"></path></svg>
+</div>
+<div style="display:flex;flex-direction:column">
+<span style="font-size:15px;font-weight:600">Porter</span>
+<span style="font-size:11px;color:{{t.muted}}">2.0.0-beta.4</span>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:6px">
+<button style="height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;border-radius:6px;border:1px solid {{t.accent}};background:{{t.accent}};color:{{t.onAccent}};font:inherit;font-weight:500;cursor:pointer">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+<span style="flex:1;text-align:left">Open folder…</span><span style="font-size:11px;opacity:0.8">⌘O</span>
+</button>
+<button style="height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;border-radius:6px;border:1px solid {{t.borderStrong}};background:{{t.bg}};color:{{t.text}};font:inherit;font-weight:500;cursor:pointer">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+<span style="flex:1;text-align:left">New project…</span><span style="font-size:11px;color:{{t.muted}}">⌘N</span>
+</button>
+</div>
+<div style="margin-top:auto;display:flex;flex-direction:column;gap:6px;font-size:12px;color:{{t.muted}}">
+<span>Each project is a folder with porter.toml and project.db.</span>
+<span style="display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:50%;background:{{t.muted}}"></span>Hub: signed in as isaac@umi</span>
+</div>
+</div>
+
+<div style="flex:999 1 480px;min-width:0;padding:20px 24px;display:flex;flex-direction:column;gap:12px">
+<div style="display:flex;align-items:center;gap:12px">
+<h1 style="margin:0;font-size:15px;font-weight:600;flex:1">Recent projects</h1>
+<label style="display:flex;align-items:center;gap:6px;height:28px;padding:0 8px;border:1px solid {{t.borderStrong}};border-radius:6px;background:{{t.panel}};width:220px">
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{t.muted}}" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+<span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Filter projects</span>
+<input placeholder="Filter" style="border:0;outline:0;background:transparent;font:inherit;font-size:12px;color:{{t.text}};flex:1;min-width:0">
+<span style="font-size:11px;color:{{t.muted}}">⌘F</span>
+</label>
+</div>
+
+<div style="display:flex;flex-direction:column;border:1px solid {{t.border}};border-radius:8px;overflow:hidden">
+<sc-for list="{{recents}}" as="p" hint-placeholder-count="6">
+<a href="Desktop-Overview.dc.html" style="display:flex;align-items:center;gap:12px;padding:10px 12px;border-bottom:1px solid {{t.border}};background:{{p.rowBg}};color:{{t.text}};text-decoration:none;min-width:0">
+<span style="width:28px;height:28px;flex:none;border-radius:6px;background:{{t.panel}};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:{{t.muted}}">{{p.initial}}</span>
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+<div style="display:flex;align-items:center;gap:8px;min-width:0">
+<span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0">{{p.name}}</span>
+<span style="flex:none;font-size:11px;color:{{t.muted}}">{{p.route}}</span>
+</div>
+<div style="display:flex;min-width:0;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:{{p.pathColor}}" title="{{p.full}}">
+<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:0 1 auto">{{p.head}}</span>
+<span style="white-space:nowrap;flex:none">{{p.tail}}</span>
+</div>
+</div>
+<span style="flex:none;display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 7px 0 5px;border-radius:4px;border:1px {{p.s.bs}} {{p.s.bd}};background:{{p.s.bg}};color:{{p.s.fg}};font-size:11px;font-weight:500;white-space:nowrap"><span style="width:12px;height:12px;box-sizing:border-box;border-radius:{{p.s.gr}};border:1.5px {{p.s.gbs}} {{p.s.gbd}};background:{{p.s.gbg}};color:{{p.s.gfg}};display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:800;line-height:1">{{p.s.g}}</span>{{p.s.label}}</span>
+<span style="flex:none;width:64px;text-align:right;font-size:11px;color:{{t.muted}}">{{p.when}}</span>
+</a>
+</sc-for>
+</div>
+<div style="display:flex;gap:16px;font-size:11px;color:{{t.muted}}">
+<span>↑↓ select</span><span>↵ open</span><span>⌘⌫ remove from list</span><span style="margin-left:auto">Paths truncate in the middle; hover for the full path</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":false},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const dark = this.props.dark ?? false;
+    const L = {page:'#DADAE0',bg:'#FFFFFF',surface:'#F7F7F8',panel:'#EFEFF2',hover:'#F3F4FD',border:'#E3E3E8',borderStrong:'#CFCFD6',text:'#18181B',muted:'#565662',faint:'#6E6E7A',accent:'#3E4FD6',accentBg:'#ECEEFC',onAccent:'#FFFFFF',okFg:'#17803D',okBg:'#E6F5EB',okOn:'#FFFFFF',warnFg:'#9A5800',warnBg:'#FFF3DC',errFg:'#C42B2B',errBg:'#FDECEC',errOn:'#FFFFFF',errSolid:'#C42B2B',intFg:'#7339BD',intBg:'#F2EBFC',dryFg:'#3B4A6B',dryBorder:'#8391B0',dryHatch:'repeating-linear-gradient(135deg,#EEF1F7 0 6px,#E2E7F0 6px 8px)',staleBg:'#F1F1F4'};
+    const D = {page:'#0A0A0B',bg:'#111113',surface:'#17171A',panel:'#1E1E22',hover:'#1A1C2E',border:'#2A2A30',borderStrong:'#3A3A42',text:'#EDEDF0',muted:'#A3A3AE',faint:'#8C8C98',accent:'#8C98FF',accentBg:'#1E2142',onAccent:'#0E1030',okFg:'#4ADE80',okBg:'#0F2A19',okOn:'#0B1F12',warnFg:'#F5B83D',warnBg:'#2B210C',errFg:'#FF7A7A',errBg:'#301515',errOn:'#2A0F0F',errSolid:'#B42A2A',intFg:'#C3A3FF',intBg:'#231B33',dryFg:'#AEBBDA',dryBorder:'#56648A',dryHatch:'repeating-linear-gradient(135deg,#1A1F2B 0 6px,#222939 6px 8px)',staleBg:'#1C1C20'};
+    const t = dark ? D : L;
+    const S = {
+      clean:{label:'Applied · verified',fg:t.okFg,bg:t.okBg,bd:t.okBg,bs:'solid',g:'✓',gfg:t.okOn,gbg:t.okFg,gbd:t.okFg,gbs:'solid',gr:'50%'},
+      errors:{label:'52 errors',fg:t.errFg,bg:t.errBg,bd:t.errFg,bs:'solid',g:'!',gfg:t.errOn,gbg:t.errFg,gbd:t.errFg,gbs:'solid',gr:'50%'},
+      dry:{label:'Dry run only',fg:t.dryFg,bg:t.dryHatch,bd:t.dryBorder,bs:'dashed',g:'',gfg:t.dryFg,gbg:'transparent',gbd:t.dryFg,gbs:'dashed',gr:'50%'},
+      interrupted:{label:'Extract interrupted',fg:t.intFg,bg:t.intBg,bd:t.intBg,bs:'solid',g:'‖',gfg:t.intFg,gbg:'transparent',gbd:t.intFg,gbs:'solid',gr:'50%'},
+      notrun:{label:'Not run',fg:t.muted,bg:'transparent',bd:t.borderStrong,bs:'dashed',g:'',gfg:t.muted,gbg:'transparent',gbd:t.faint,gbs:'solid',gr:'50%'},
+      missing:{label:'Folder not found',fg:'#FFFFFF',bg:t.errSolid,bd:t.errSolid,bs:'solid',g:'✕',gfg:t.errSolid,gbg:'#FFFFFF',gbd:'#FFFFFF',gbs:'solid',gr:'50%'}
+    };
+    const raw = [
+      ['Seaview Hotels','WordPress → Payload','/Users/isj/Clients/Umi/Seaview Hotels/2026 rebuild/migration/seaview-porter','errors','12m ago'],
+      ['Turquoise Holidays','WordPress → Payload','/Users/isj/Clients/Umi/Turquoise Holidays/website-v4/data-migration/turq-porter','dry','Yesterday'],
+      ['The Magical Christmas Adventure — 4 Kingdoms booking site and the legacy Lapland microsite','Umbraco → Payload','/Users/isj/Desktop/work/clients/the-magical-christmas-adventure/2026/porter/tmca-umbraco-to-payload-full-content-migration','interrupted','3 days ago'],
+      ['Creative Twists','WordPress → not set','/Users/isj/Desktop/work/clients/creative-twists/porter','notrun','Last week'],
+      ['Positive Internet','WordPress → Payload','/Volumes/Archive/2025/positive-internet/porter','missing','Oct 2'],
+      ['Harbour Spa','WordPress → Payload','/Users/isj/Clients/Umi/Harbour Spa/porter','clean','Sep 18']
+    ];
+    const recents = raw.map(([name,route,full,k,when],i) => {
+      const parts = full.split('/');
+      const tail = '/' + parts.slice(-2).join('/');
+      const head = parts.slice(0,-2).join('/');
+      return {name,route,full,head,tail,when,initial:name[0],s:S[k],
+        rowBg: i===0 ? t.hover : t.bg,
+        pathColor: k==='missing' ? t.errFg : t.muted};
+    });
+    return { t, recents };
+  }
+}
+</script>
+</body>
+</html>
