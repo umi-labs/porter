@@ -53,8 +53,15 @@ pub enum ConnectorConfig {
         max_media_bytes: u64,
     },
     WpRest {
-        #[serde(flatten)]
-        extra: toml::Table,
+        /// Site root, e.g. `https://example.com`.
+        url: String,
+        /// `basic`, `bearer` or `apikey`; the credentials themselves come from the
+        /// `PORTER_WP_*` env vars or the keyring entry, never from this file.
+        #[serde(default)]
+        auth: Option<String>,
+        /// Keyring entry name (service `porter`, account = this name).
+        #[serde(default)]
+        keyring: Option<String>,
     },
     Wxr {
         /// WordPress export file; relative paths resolve against the project folder.

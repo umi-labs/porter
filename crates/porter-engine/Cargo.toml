@@ -28,6 +28,7 @@ scraper.workspace = true
 quick-xml.workspace = true
 globset.workspace = true
 regex.workspace = true
+keyring.workspace = true
 
 [dev-dependencies]
 wiremock.workspace = true
