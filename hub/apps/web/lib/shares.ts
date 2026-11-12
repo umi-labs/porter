@@ -43,17 +43,20 @@ export async function createShare(db: Db, actor: Actor, slug: string, input: unk
 
 export async function listShares(db: Db, actor: Actor, slug: string) {
   const { project: p } = await access(db, actor, slug, "share");
-  return db
+  const rows = await db
     .select({
       id: shareLink.id,
       scope: shareLink.scope,
       expiresAt: shareLink.expiresAt,
       revokedAt: shareLink.revokedAt,
       createdAt: shareLink.createdAt,
+      tokenHash: shareLink.tokenHash,
     })
     .from(shareLink)
     .where(eq(shareLink.projectId, p.id))
     .orderBy(desc(shareLink.createdAt));
+  // The token is never shown again; a short prefix of its hash tells links apart.
+  return rows.map(({ tokenHash, ...r }) => ({ ...r, fingerprint: tokenHash.slice(0, 8) }));
 }
 
 export async function revokeShare(db: Db, actor: Actor, slug: string, id: string) {
@@ -75,7 +78,7 @@ export async function revokeShare(db: Db, actor: Actor, slug: string, id: string
 export async function resolveShare(db: Db, token: string) {
   if (token.length > 100) return null;
   const [row] = await db
-    .select({ project, scope: shareLink.scope })
+    .select({ project, scope: shareLink.scope, expiresAt: shareLink.expiresAt })
     .from(shareLink)
     .innerJoin(project, eq(project.id, shareLink.projectId))
     .where(

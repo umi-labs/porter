@@ -1,7 +1,8 @@
 import { getDb } from "@porter-hub/db";
 import { notFound } from "next/navigation";
+import { PageTitle } from "../../../../components/ui/frame";
 import { pageNum } from "../../../../lib/snapshot-reader";
-import { IssuesView, NoSnapshot, Shell } from "../../../../lib/view-parts";
+import { IssuesView, NoSnapshot } from "../../../../lib/view-parts";
 import { loadShare } from "../../../../lib/views";
 
 export const dynamic = "force-dynamic";
@@ -18,12 +19,13 @@ export default async function SharedIssues({
   const v = await loadShare(getDb(), token, "issues");
   if (!v) notFound();
   return (
-    <Shell title={`${v.project.name}: issues`}>
+    <>
+      <PageTitle title="Issues" sub={<a href={`/s/${token}`}>Back to the overview</a>} />
       {v.snap ? (
         <IssuesView snap={v.snap} page={page} base={`/s/${token}/issues`} full={false} />
       ) : (
         <NoSnapshot />
       )}
-    </Shell>
+    </>
   );
 }

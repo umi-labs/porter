@@ -1,6 +1,8 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // apps/web's tsconfig keeps JSX for Next ("preserve"); component tests need it compiled.
+  oxc: { jsx: { runtime: "automatic" } },
   test: {
     include: ["packages/**/*.test.ts", "apps/**/*.test.ts"],
     testTimeout: 30000,

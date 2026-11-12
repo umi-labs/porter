@@ -13,5 +13,10 @@ export async function loadProject(db: Db, actor: Actor, slug: string, action: "v
 export async function loadShare(db: Db, token: string, page: SharePage) {
   const link = await resolveShare(db, token);
   if (!link || !shareAllows(link.scope, page)) return null;
-  return { project: link.project, scope: link.scope, snap: await latestSnapshot(db, link.project.id) };
+  return {
+    project: link.project,
+    scope: link.scope,
+    expiresAt: link.expiresAt,
+    snap: await latestSnapshot(db, link.project.id),
+  };
 }

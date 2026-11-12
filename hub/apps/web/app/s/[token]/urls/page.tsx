@@ -1,7 +1,8 @@
 import { getDb } from "@porter-hub/db";
 import { notFound } from "next/navigation";
+import { PageTitle } from "../../../../components/ui/frame";
 import { pageNum } from "../../../../lib/snapshot-reader";
-import { NoSnapshot, Shell, UrlsView } from "../../../../lib/view-parts";
+import { NoSnapshot, UrlsView } from "../../../../lib/view-parts";
 import { loadShare } from "../../../../lib/views";
 
 export const dynamic = "force-dynamic";
@@ -18,8 +19,9 @@ export default async function SharedUrls({
   const v = await loadShare(getDb(), token, "urls");
   if (!v) notFound();
   return (
-    <Shell title={`${v.project.name}: URLs`}>
+    <>
+      <PageTitle title="URLs" sub={<a href={`/s/${token}`}>Back to the overview</a>} />
       {v.snap ? <UrlsView snap={v.snap} page={page} base={`/s/${token}/urls`} /> : <NoSnapshot />}
-    </Shell>
+    </>
   );
 }

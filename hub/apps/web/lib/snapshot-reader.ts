@@ -8,6 +8,7 @@ import { projectVersion } from "@porter-hub/db";
 import { extractTarZst } from "@porter-hub/storage/tar";
 import { desc, eq } from "drizzle-orm";
 import type { Db } from "./permissions";
+import { parseSummary, stageViews } from "./stage-state";
 import { getStream } from "./storage";
 
 // node:sqlite (built in, no native build) and zlib's zstd both need Node >= 22.15; the Dockerfile must use at least that.
@@ -108,18 +109,32 @@ export const pageNum = (s: unknown) => {
 };
 
 export function overview(dir: string) {
+  const last = withDb(dir, (q) => {
+    const m = new Map<string, Row>();
+    for (const r of q("SELECT * FROM runs WHERE deleted_at IS NULL ORDER BY id")) m.set(String(r.stage), r);
+    return [...m.values()];
+  });
   return {
-    stages: withDb(dir, (q) => {
-      const last = new Map<string, Row>();
-      for (const r of q("SELECT * FROM runs WHERE deleted_at IS NULL ORDER BY id"))
-        last.set(String(r.stage), r);
-      return [...last.values()].map((r) => ({
+    stages:
+      last?.map((r) => ({
         stage: String(r.stage),
         startedAt: String(r.started_at),
         endedAt: r.ended_at == null ? null : String(r.ended_at),
         dryRun: r.dry_run === 1,
-      }));
-    }),
+      })) ?? null,
+    /** Each pipeline stage's state, derived like porter does (lib/stage-state.ts). */
+    views:
+      last &&
+      stageViews(
+        last.map((r) => ({
+          id: String(r.id),
+          stage: String(r.stage),
+          startedAt: String(r.started_at),
+          endedAt: r.ended_at == null ? null : String(r.ended_at),
+          summary: parseSummary(r.summary),
+          dryRun: "dry_run" in r ? r.dry_run === 1 : null,
+        })),
+      ),
     issueCounts: withDb(dir, (q) =>
       q(
         `SELECT kind, severity, count(*) AS n FROM issues
