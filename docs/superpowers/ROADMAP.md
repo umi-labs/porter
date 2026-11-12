@@ -133,6 +133,13 @@ Not fixed in 1.x (all superseded by 2.0):
 - 10 dependency vulnerabilities through `reqwest 0.11`
 - library unusable with fresh dependency resolution
 
+## Isaac's instructions, 2026-11-11 evening
+- Keep building without stopping: engine phase 1, then the terminal UI, the desktop app and the hub.
+- With Isaac offline, Claude makes the design calls for the terminal UI, desktop app and hub itself and records them as rulings for review. Each still gets a written design and plan before code.
+- **The hub is deployed with Docker on Dokploy.**
+- **The hub uses Better Auth for authentication.** Better Auth is a TypeScript library, so the hub's web/auth layer is TypeScript. It drives porter through the headless CLI's `--json` event stream and the project folder, and the engine stays Rust. This replaces the engine design's `porter-hub` Rust crate idea, and is recorded as a ruling in the hub design.
+- No pushes, deploys or releases without Isaac. All work stays on local branches.
+
 ## Open items
 
 - [ ] Decide whether to fix and release `porter clean` in 1.x now, while 2.0 is built.
