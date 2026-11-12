@@ -185,3 +185,101 @@ impl Store {
         Ok(out)
     }
 }
+
+impl Store {
+    /// One page of live items in insertion order, with the number that match. `kind`
+    /// narrows by kind; `text` keeps rows whose source id, url or title contains it
+    /// (case-insensitive). Rows are `(id, kind, label, title)`: the label is the url,
+    /// else the source id.
+    #[allow(clippy::type_complexity)]
+    pub fn item_page(
+        &self,
+        kind: Option<ItemKind>,
+        text: Option<&str>,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<(ItemId, ItemKind, String, Option<String>)>, u64)> {
+        const WHERE: &str = "WHERE deleted_at IS NULL AND (?1 IS NULL OR kind = ?1)
+             AND (?2 IS NULL OR instr(lower(source_id || ' ' || coalesce(url, '') || ' ' ||
+                  coalesce(json_extract(data, '$.title'), '')), lower(?2)) > 0)";
+        let kind = kind.map(|k| k.as_str());
+        let conn = self.conn();
+        let total: i64 = conn.query_row(
+            &format!("SELECT COUNT(*) FROM items {WHERE}"),
+            params![kind, text],
+            |r| r.get(0),
+        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, kind, coalesce(url, source_id),
+                    CASE WHEN json_type(data, '$.title') = 'text' THEN json_extract(data, '$.title') END
+             FROM items {WHERE} ORDER BY rowid LIMIT ?3 OFFSET ?4"
+        ))?;
+        let rows = stmt.query_map(
+            params![
+                kind,
+                text,
+                i64::try_from(limit).unwrap_or(i64::MAX),
+                i64::try_from(offset).unwrap_or(i64::MAX)
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, kind, label, title) = row?;
+            out.push((id.parse()?, super::from_wire(kind)?, label, title));
+        }
+        Ok((out, u64::try_from(total).unwrap_or(0)))
+    }
+
+    /// The item's status in every stage that wrote one.
+    pub fn item_statuses(&self, id: ItemId) -> Result<Vec<(Stage, ItemStatus)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT stage, status FROM statuses WHERE item_id = ?1 AND deleted_at IS NULL",
+        )?;
+        let rows = stmt.query_map([id.to_string()], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (stage, status) = row?;
+            out.push((super::from_wire(stage)?, serde_json::from_str(&status)?));
+        }
+        Ok(out)
+    }
+
+    /// The item's kind, source identity and stored data, if it is live.
+    #[allow(clippy::type_complexity)]
+    pub fn item_source(
+        &self,
+        id: ItemId,
+    ) -> Result<Option<(ItemKind, SourceRef, serde_json::Value)>> {
+        let row: Option<(String, String, String, Option<String>, String)> = self
+            .conn()
+            .query_row(
+                "SELECT kind, connector, source_id, url, data FROM items WHERE id = ?1 AND deleted_at IS NULL",
+                [id.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .optional()?;
+        row.map(|(kind, connector, source_id, url, data)| {
+            Ok((
+                super::from_wire(kind)?,
+                SourceRef {
+                    connector,
+                    source_id,
+                    url,
+                },
+                serde_json::from_str(&data)?,
+            ))
+        })
+        .transpose()
+    }
+}

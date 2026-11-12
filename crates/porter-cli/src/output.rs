@@ -1,8 +1,9 @@
 //! Output discipline: with `--json` stdout carries only NDJSON; everything human
 //! (event lines, logs, errors) goes to stderr.
 
-use porter_engine::events::{Event, EventSink};
+use porter_engine::events::Event;
 use serde::Serialize;
+use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 
@@ -79,17 +80,14 @@ fn render(e: &Event) -> String {
     }
 }
 
-/// Drains the event sink: NDJSON to stdout with `--json`, else one line per
-/// event on stderr. Call `finish` before exiting so nothing is lost.
+/// Drains an event receiver: NDJSON to stdout with `--json`, else one line per
+/// event on stderr. Drop every sender, then call `finish`, so nothing is lost.
 pub struct Printer {
-    sink: EventSink,
     task: JoinHandle<()>,
 }
 
 impl Printer {
-    pub fn start(json: bool) -> Printer {
-        let sink = EventSink::new(4096);
-        let mut rx = sink.subscribe();
+    pub fn start(json: bool, mut rx: Receiver<Event>) -> Printer {
         let task = tokio::spawn(async move {
             loop {
                 match rx.recv().await {
@@ -100,16 +98,11 @@ impl Printer {
                 }
             }
         });
-        Printer { sink, task }
+        Printer { task }
     }
 
-    pub fn sink(&self) -> EventSink {
-        self.sink.clone()
-    }
-
-    /// Drops the sender and waits for the printer to drain the channel.
+    /// Waits for the printer to drain the channel (it ends once the senders are dropped).
     pub async fn finish(self) {
-        drop(self.sink);
         let _ = self.task.await;
     }
 }
