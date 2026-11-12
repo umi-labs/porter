@@ -2453,9 +2453,11 @@ dependencies = [
  "porter-engine",
  "porter-model",
  "ratatui",
+ "serde_json",
  "tempfile",
  "tokio",
  "tokio-util",
+ "uuid",
 ]
 
 [[package]]

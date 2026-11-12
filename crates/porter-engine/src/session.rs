@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 pub use crate::store::IssueFilter as IssueQuery;
 
-const STAGES: [Stage; 6] = [
+pub const STAGES: [Stage; 6] = [
     Stage::Analyse,
     Stage::Extract,
     Stage::Normalise,
@@ -154,6 +154,36 @@ pub struct Overview {
     pub open_errors: u64,
     pub open_warnings: u64,
     pub open_infos: u64,
+}
+
+/// What a stage's last run honestly amounts to. `Running` and `CouldNotRun` are live
+/// states the front end overlays; `stage_state` only derives the stored ones.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StageState {
+    Never,
+    Running,
+    Clean,
+    Warnings,
+    Errors,
+    Interrupted,
+    CouldNotRun(String),
+}
+
+/// Same rules as `exit_code`: failed items or error issues are never Clean.
+pub fn stage_state(overview: &Overview, stage: Stage) -> StageState {
+    let Some((_, run)) = overview.last_runs.iter().find(|(s, _)| *s == stage) else {
+        return StageState::Never;
+    };
+    // A run row with no summary started and never ended (crash/kill): not a success.
+    let Some(sum) = &run.summary else {
+        return StageState::Interrupted;
+    };
+    match exit_code(sum) {
+        3 => StageState::Interrupted,
+        2 => StageState::Errors,
+        _ if sum.warnings > 0 => StageState::Warnings,
+        _ => StageState::Clean,
+    }
 }
 
 type Running = Arc<Mutex<Option<RunInfo>>>;
@@ -603,7 +633,55 @@ async fn drive(env: Env, plan: RunPlan) -> RunOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_loop, worse};
+    fn ov(stage: Stage, summary: Option<Summary>) -> Overview {
+        Overview {
+            last_runs: vec![(
+                stage,
+                RunRow {
+                    id: "r".into(),
+                    porter_version: "0".into(),
+                    started_at: "t".into(),
+                    ended_at: None,
+                    summary,
+                },
+            )],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn stage_state_from_summary() {
+        let s = |f: fn(&mut Summary)| {
+            let mut x = Summary::default();
+            f(&mut x);
+            Some(x)
+        };
+        let st = |sum| stage_state(&ov(Stage::Load, sum), Stage::Load);
+        assert_eq!(
+            stage_state(&Overview::default(), Stage::Load),
+            StageState::Never
+        );
+        assert_eq!(
+            stage_state(&ov(Stage::Load, None), Stage::Analyse),
+            StageState::Never
+        );
+        assert_eq!(st(s(|x| x.done = 5)), StageState::Clean);
+        assert_eq!(st(s(|x| x.warnings = 1)), StageState::Warnings);
+        assert_eq!(st(s(|x| x.errors = 1)), StageState::Errors);
+        assert_eq!(st(s(|x| x.failed = 1)), StageState::Errors);
+        assert_eq!(
+            st(s(|x| {
+                x.errors = 2;
+                x.warnings = 3
+            })),
+            StageState::Errors
+        );
+        assert_eq!(st(s(|x| x.interrupted = true)), StageState::Interrupted);
+        // Started but never ended: not a success.
+        assert_eq!(st(None), StageState::Interrupted);
+    }
+
+    use super::*;
     use tokio_util::sync::CancellationToken;
 
     #[tokio::test]
