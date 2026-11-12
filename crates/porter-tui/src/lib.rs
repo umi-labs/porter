@@ -3,6 +3,8 @@
 
 mod actions;
 mod app;
+#[cfg(test)]
+mod e2e_tests;
 mod keymap;
 mod lists;
 #[cfg(test)]

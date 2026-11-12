@@ -135,8 +135,8 @@ fn edit_config(
 
 /// The run in flight: its cancel token and the task that waits for it.
 #[derive(Default)]
-struct RunSlot {
-    cancel: Option<CancellationToken>,
+pub(crate) struct RunSlot {
+    pub(crate) cancel: Option<CancellationToken>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -166,7 +166,13 @@ async fn finish_run(
     })
 }
 
-fn exec(cmd: Cmd, app: &App, tx: &mpsc::UnboundedSender<Msg>, run: &mut RunSlot, dir: &Path) {
+pub(crate) fn exec(
+    cmd: Cmd,
+    app: &App,
+    tx: &mpsc::UnboundedSender<Msg>,
+    run: &mut RunSlot,
+    dir: &Path,
+) {
     if let Cmd::SaveSetup(values) = cmd {
         let (tx, dir) = (tx.clone(), dir.to_path_buf());
         tokio::spawn(async move {

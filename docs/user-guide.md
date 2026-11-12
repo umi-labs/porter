@@ -90,6 +90,147 @@ Or do it all: `porter run --apply` (add `--continue` to keep going past a stage 
 - `porter clean`: delete `raw/`, `media/`, `reports/` and `project.db` (never `porter.toml`).
 - Ctrl-C stops cleanly with exit code 3; run the same command to resume.
 
+## Terminal UI
+
+`porter tui` is the same engine as the commands above, in a full-screen view. Four panels (Project, Stages, Issues, Items) sit on the left, a Detail pane on the right and the log along the bottom. Running `porter` with no subcommand opens it when stdin and stdout are both a terminal; otherwise it prints help, so scripts are unaffected. It works at 80x24, honours `NO_COLOR` and uses your terminal's own colours. The terminal is restored when you quit, on a panic and on SIGTERM.
+
+### Setup
+In a folder without `porter.toml` the TUI opens a setup form instead of the project. Move between fields with `j`/`k`, tab or the arrow keys, press `enter` to type into a field (`enter` or `esc` finishes), and `space` or the arrow keys to choose among options. Optional connector sections open from their `use` field. `ctrl-s` writes `porter.toml` and opens the project straight away. Setup never overwrites an existing `porter.toml`, round-trips every connector, and shows validation problems next to the field that caused them. There is no field for secrets: the form shows the environment variable a connector reads and whether it is set, and a pasted secret is rejected.
+
+### Running and reading
+Focus the Stages panel, move to a stage and press `space` to run it; `R` runs all stages, `v` verifies, `c` cancels the running stage. Progress and counts update live, then settle to the stored result of the run (clean, warnings, errors, interrupted, or could not run). Issues are grouped by kind; `enter` drills into a group and then an issue, `x` resolves it with a note, `g` jumps to its item, `/` filters, `f` cycles all, open and errors only. `o` opens the HTML report and `e` suspends the TUI to edit `porter.toml` in `$VISUAL`/`$EDITOR`, then re-checks it. `y` on an item or issue copies its id to the clipboard (OSC 52, so it needs a terminal that supports it).
+
+### Loading
+`l` runs a load dry run. `L` opens an apply prompt that shows the item counts from the last dry run and writes to the live CMS only after you press `y`; any other key cancels. The prompt re-reads the dry run when you press `y` and refuses to apply from a missing or stale one, so a fresh dry run is always required first. Quitting while a stage runs asks first and then cancels the run cleanly, so it can be resumed.
+
+### Every key
+
+**Anywhere**
+
+| Key | Does |
+| --- | --- |
+| `tab` | focus the next panel |
+| `S-tab` | focus the previous panel |
+| `1-4` | focus a panel by number |
+| `R` | run all stages |
+| `l` | load, dry run |
+| `L` | load, apply (asks first) |
+| `v` | verify |
+| `ctrl-c` | cancel the run; again to quit |
+| `c` | cancel the running stage |
+| `o` | open the HTML report |
+| `e` | edit porter.toml |
+| `@` | show or hide the log |
+| `?` | this help |
+| `q` | quit (asks first if a stage runs) |
+
+**Stages**
+
+| Key | Does |
+| --- | --- |
+| `j/↓` | move down |
+| `k/↑` | move up |
+| `space` | run the selected stage |
+
+**Issues, Items**
+
+| Key | Does |
+| --- | --- |
+| `j/↓` | move down |
+| `k/↑` | move up |
+| `pgdn` | move a page down |
+| `pgup` | move a page up |
+| `enter` | open in Detail, drill in |
+| `/` | filter (fuzzy, incremental) |
+| `f` | cycle all, open, errors only |
+| `esc` | clear the filter |
+| `y` | copy the item or issue id |
+
+**Open issue**
+
+| Key | Does |
+| --- | --- |
+| `j/↓` | move in the open issue list |
+| `k/↑` | move up in the open issue list |
+| `pgdn` | page down in the open list |
+| `pgup` | page up in the open list |
+| `enter` | open the issue, or its item |
+| `x` | resolve the issue |
+| `g` | jump to the issue's item |
+
+**Detail**
+
+| Key | Does |
+| --- | --- |
+| `esc` | close Detail, go back |
+
+**Filter box**
+
+| Key | Does |
+| --- | --- |
+| `enter` | apply the filter |
+| `esc` | clear the filter |
+| `backspace` | delete a character |
+
+**Resolve box**
+
+| Key | Does |
+| --- | --- |
+| `↓/tab` | next choice |
+| `↑/S-tab` | previous choice |
+| `enter` | confirm the resolution |
+| `backspace` | delete a note character |
+| `esc` | cancel |
+
+**Apply prompt**
+
+| Key | Does |
+| --- | --- |
+| `y` | write to the live CMS |
+| `n/esc` | cancel (any other key too) |
+
+**Quit prompt**
+
+| Key | Does |
+| --- | --- |
+| `y` | cancel the run and quit |
+| `n/esc` | keep running |
+
+**Help**
+
+| Key | Does |
+| --- | --- |
+| `j/↓` | scroll down |
+| `k/↑` | scroll up |
+| `?/esc` | close help |
+| `ctrl-c` | close help, cancel the run; again to quit |
+
+**Setup**
+
+| Key | Does |
+| --- | --- |
+| `j/↓/tab` | next field |
+| `k/↑/S-tab` | previous field |
+| `enter` | type into the field, or pick the next choice |
+| `space/→` | next choice |
+| `←` | previous choice |
+| `ctrl-s` | write porter.toml and open the project |
+| `ctrl-c` | quit |
+| `q` | quit |
+
+**Setup field**
+
+| Key | Does |
+| --- | --- |
+| `enter/esc` | finish typing in the field |
+| `backspace` | delete a character |
+| `ctrl-s` | write porter.toml and open the project |
+| `ctrl-c` | quit |
+
+**Honesty notes.** The TUI shows the engine's own outcomes: a stage is only shown as clean when the stored run was clean, and engine errors are printed verbatim. Load never applies by default: `l` is a dry run, and `L` opens a prompt that shows the last dry run's counts and applies only after an explicit `y` (any other key cancels). The prompt re-reads the dry run when you press `y` and refuses if it is stale or missing, so run `l` first and again after changing anything. The TUI never asks for secrets: the setup form shows which environment variable a connector reads and whether it is set, and rejects a pasted secret.
+
+**Status.** The TUI is tested against a real project (an end-to-end test drives `analyse` on the WXR fixture) and against a fake terminal, but its author has not yet exercised it in a real terminal. Please report rough edges.
+
 ## Scripts and CI
 
 ```bash

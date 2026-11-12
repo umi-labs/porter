@@ -251,6 +251,61 @@ A field mapped with neither `to` nor `drop = true` is an error. Source fields wi
 
 Mapping onto collections that already exist is the normal case: many source types can map to one collection, neutral field paths map to destination field paths, and builder blocks map to your own block slugs.
 
+## Terminal UI
+
+`porter tui` opens an interactive view of a project: stages, issues and items, with a log of the run in progress. Running bare `porter` (no subcommand) does the same when both stdin and stdout are a terminal; in a script or pipe it prints help instead. `--project <dir>` picks the folder. It works at 80x24, honours `NO_COLOR`, and uses your terminal's colours. It uses the engine directly; it never shells out to `porter`.
+
+If the folder has no `porter.toml`, a setup form opens instead: fill in the project, source and destination fields (`ctrl-s` writes `porter.toml` and opens the project; it never overwrites an existing file).
+
+The main keys (`?` shows the full list in the app):
+
+**Anywhere**
+
+| Key | Does |
+| --- | --- |
+| `tab` | focus the next panel |
+| `S-tab` | focus the previous panel |
+| `1-4` | focus a panel by number |
+| `R` | run all stages |
+| `l` | load, dry run |
+| `L` | load, apply (asks first) |
+| `v` | verify |
+| `ctrl-c` | cancel the run; again to quit |
+| `c` | cancel the running stage |
+| `o` | open the HTML report |
+| `e` | edit porter.toml |
+| `@` | show or hide the log |
+| `?` | this help |
+| `q` | quit (asks first if a stage runs) |
+
+**Stages**
+
+| Key | Does |
+| --- | --- |
+| `j/↓` | move down |
+| `k/↑` | move up |
+| `space` | run the selected stage |
+
+**Issues, Items**
+
+| Key | Does |
+| --- | --- |
+| `j/↓` | move down |
+| `k/↑` | move up |
+| `pgdn` | move a page down |
+| `pgup` | move a page up |
+| `enter` | open in Detail, drill in |
+| `/` | filter (fuzzy, incremental) |
+| `f` | cycle all, open, errors only |
+| `esc` | clear the filter |
+| `y` | copy the item or issue id |
+
+**Honesty notes.** The TUI shows the engine's own outcomes: a stage is only shown as clean when the stored run was clean, and engine errors are printed verbatim. Load never applies by default: `l` is a dry run, and `L` opens a prompt that shows the last dry run's counts and applies only after an explicit `y` (any other key cancels). The prompt re-reads the dry run when you press `y` and refuses if it is stale or missing, so run `l` first and again after changing anything. The TUI never asks for secrets: the setup form shows which environment variable a connector reads and whether it is set, and rejects a pasted secret.
+
+**Status.** The TUI is tested against a real project (an end-to-end test drives `analyse` on the WXR fixture) and against a fake terminal, but its author has not yet exercised it in a real terminal. Please report rough edges.
+
+See the [user guide](docs/user-guide.md#terminal-ui) for every key and the setup flow.
+
 ## Automation: `--json`
 
 With `--json`, **stdout carries only NDJSON events**, one object per line. Every human message, log line and error goes to stderr. Every event has `"v": 1` (the schema version) and an `"event"` name. Parse stdout line by line and branch on `event`.
