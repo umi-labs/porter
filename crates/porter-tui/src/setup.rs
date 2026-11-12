@@ -2,7 +2,7 @@
 //! secrets are never typed here, the form only shows which env var each connector reads and
 //! whether it is set.
 use anyhow::{Context, Result};
-use porter_engine::config::ProjectConfig;
+use porter_engine::config::{ProjectConfig, is_env_var_name};
 use porter_engine::project::Project;
 use porter_engine::registry;
 use std::path::Path;
@@ -398,7 +398,8 @@ impl Setup {
             }
         }
         let name = self.get("destination.api_key_env").trim();
-        if !name.is_empty() {
+        // An invalid name may be a pasted key: never shown (see `ui::form`).
+        if is_env_var_name(name) {
             add("destination", name);
         }
         out
@@ -504,8 +505,13 @@ fn render(s: &Setup) -> Result<(String, ProjectConfig)> {
 
 /// Builds `porter.toml` the way `porter init` does and edits the connectors and destination
 /// in; the result must load and validate before anything is written to `dir`, so a form
-/// with problems leaves the folder untouched. The write is atomic (temp file, rename).
+/// with problems leaves the folder untouched. The write is atomic and never replaces an
+/// existing file (private temp file in `dir`, then a no-clobber persist).
 pub fn save(dir: &Path, values: &[String]) -> Result<(), Failure> {
+    save_with(dir, values, &|| {})
+}
+
+fn save_with(dir: &Path, values: &[String], before_persist: &dyn Fn()) -> Result<(), Failure> {
     let s = Setup::from_values(values.to_vec());
     let missing = s.missing();
     if !missing.fields.is_empty() {
@@ -525,13 +531,20 @@ pub fn save(dir: &Path, values: &[String]) -> Result<(), Failure> {
     }
     let target = dir.join("porter.toml");
     let write = || -> Result<()> {
+        use std::io::Write;
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        if target.exists() {
-            anyhow::bail!("{} already exists", target.display());
-        }
-        let tmp = dir.join(".porter.toml.tmp");
-        std::fs::write(&tmp, &text).with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, &target).with_context(|| format!("writing {}", target.display()))
+        let mut tmp = tempfile::NamedTempFile::new_in(dir)
+            .with_context(|| format!("creating a temp file in {}", dir.display()))?;
+        tmp.write_all(text.as_bytes())?;
+        before_persist();
+        tmp.persist_noclobber(&target).map_err(|e| {
+            if e.error.kind() == std::io::ErrorKind::AlreadyExists {
+                anyhow::anyhow!("porter.toml was created meanwhile — not overwritten")
+            } else {
+                anyhow::Error::new(e.error).context(format!("writing {}", target.display()))
+            }
+        })?;
+        Ok(())
     };
     write().map_err(io)
 }
@@ -614,7 +627,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("porter.toml"), "mine").unwrap();
         let e = save(d.path(), &filled().values).unwrap_err();
-        assert!(e.general[0].contains("already exists"), "{e:?}");
+        assert!(e.general[0].contains("not overwritten"), "{e:?}");
         assert_eq!(
             std::fs::read_to_string(d.path().join("porter.toml")).unwrap(),
             "mine"
@@ -678,5 +691,124 @@ mod tests {
         s.enter();
         s.step(1);
         assert_eq!(FIELDS[s.focus].id, "crawl.url");
+    }
+
+    #[test]
+    fn porter_toml_created_meanwhile_is_not_clobbered() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("porter.toml");
+        let e = save_with(d.path(), &filled().values, &|| {
+            std::fs::write(&target, "theirs").unwrap()
+        })
+        .unwrap_err();
+        assert!(e.general[0].contains("created meanwhile"), "{e:?}");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "theirs");
+        let left: Vec<_> = std::fs::read_dir(d.path()).unwrap().flatten().collect();
+        assert_eq!(left.len(), 1, "no temp file left behind: {left:?}");
+    }
+
+    fn round_trip(s: &Setup) -> ProjectConfig {
+        let d = tempfile::tempdir().unwrap();
+        save(d.path(), &s.values).unwrap_or_else(|e| panic!("{e:?}"));
+        let c = ProjectConfig::load(&d.path().join("porter.toml")).unwrap();
+        assert!(c.validate().is_empty(), "{:?}", c.validate());
+        c
+    }
+
+    #[test]
+    fn every_connector_kind_round_trips_alone() {
+        use porter_engine::config::ConnectorConfig as C;
+        let minimal: &[(&str, &[(&str, &str)])] = &[
+            (
+                "crawl",
+                &[("url", "https://example.com"), ("exclude", "/tag, /x")],
+            ),
+            ("wxr", &[("path", "export.xml")]),
+            (
+                "wp-rest",
+                &[("url", "https://example.com"), ("auth", "bearer")],
+            ),
+            (
+                "wp-db",
+                &[
+                    ("dump", "a.sql.gz"),
+                    ("wp_root", "wp"),
+                    ("uploads_dir", "up"),
+                ],
+            ),
+            ("umbraco-json", &[("paths", "a.json, b.json")]),
+        ];
+        let offered: Vec<_> = SECTIONS
+            .iter()
+            .filter(|s| s.optional)
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(
+            offered.len(),
+            minimal.len(),
+            "a new connector needs a case here"
+        );
+        for (kind, vals) in minimal {
+            let mut s = Setup::new("demo");
+            s.set(&format!("{kind}.use"), "yes");
+            for (k, v) in *vals {
+                s.set(&format!("{kind}.{k}"), v);
+            }
+            s.set("destination.url", "https://cms.example.com");
+            let c = round_trip(&s);
+            assert_eq!(c.connectors.len(), 1, "{kind}");
+            match (&c.connectors[0], *kind) {
+                (C::Crawl { exclude, .. }, "crawl") => assert_eq!(exclude, &["/tag", "/x"]),
+                (C::Wxr { path }, "wxr") => assert_eq!(path.to_str(), Some("export.xml")),
+                (C::WpRest { auth, .. }, "wp-rest") => assert_eq!(auth.as_deref(), Some("bearer")),
+                (
+                    C::WpDb {
+                        wp_root,
+                        uploads_dir,
+                        ..
+                    },
+                    "wp-db",
+                ) => {
+                    assert_eq!(wp_root.as_deref().and_then(|p| p.to_str()), Some("wp"));
+                    assert_eq!(uploads_dir.as_deref().and_then(|p| p.to_str()), Some("up"));
+                }
+                (C::UmbracoJson { paths }, "umbraco-json") => assert_eq!(paths.len(), 2),
+                (other, _) => panic!("{kind} wrote {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn every_source_and_destination_choice_round_trips() {
+        for src in registry::source_names() {
+            for dst in registry::destination_names() {
+                let mut s = Setup::new("demo");
+                s.set("source.adapter", src);
+                s.set("destination.adapter", dst);
+                s.set("destination.url", "https://cms.example.com");
+                let c = round_trip(&s);
+                assert_eq!(
+                    (c.source.adapter.as_str(), c.destination.adapter.as_str()),
+                    (*src, *dst)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pasted_secret_as_env_var_name_is_refused_without_echo() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = filled();
+        s.set("destination.api_key_env", "sk-live-abc123");
+        let e = save(d.path(), &s.values).unwrap_err();
+        let i = field_index("destination.api_key_env").unwrap();
+        assert!(e.fields.iter().any(|(f, _)| *f == i), "{e:?}");
+        assert!(!format!("{e:?}").contains("sk-live"), "{e:?}");
+        assert!(!d.path().join("porter.toml").exists());
+        assert!(
+            s.secrets(&|_| true)
+                .iter()
+                .all(|x| !x.var.contains("sk-live"))
+        );
     }
 }

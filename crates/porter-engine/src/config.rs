@@ -155,6 +155,14 @@ pub struct VerifyConfig {
     pub site_url: Option<String>,
 }
 
+/// An environment variable NAME (`[A-Za-z_][A-Za-z0-9_]*`). A pasted secret is not one.
+pub fn is_env_var_name(s: &str) -> bool {
+    let mut c = s.chars();
+    c.next()
+        .is_some_and(|f| f.is_ascii_alphabetic() || f == '_')
+        && c.all(|x| x.is_ascii_alphanumeric() || x == '_')
+}
+
 impl ProjectConfig {
     pub fn load(path: &Path) -> Result<ProjectConfig> {
         let text =
@@ -179,6 +187,14 @@ impl ProjectConfig {
             "destination.auth_collection",
             &self.destination.auth_collection,
         );
+        // Never echoed: a value that is not a name may be the key itself.
+        let env = &self.destination.api_key_env;
+        if !env.trim().is_empty() && !is_env_var_name(env) {
+            errs.push(
+                "destination.api_key_env must be the NAME of an env var (letters, digits, underscore), not a key"
+                    .into(),
+            );
+        }
         // Credentials never go in porter.toml, so a URL carrying `user:pass@` is refused
         // (and not echoed back, since that would print the password).
         let mut url_ok = |key: &str, v: &str| {
@@ -222,6 +238,30 @@ impl ProjectConfig {
         }
         errs.extend(self.mapping.validate());
         errs
+    }
+}
+
+#[cfg(test)]
+mod env_name_tests {
+    use super::*;
+
+    #[test]
+    fn pasted_secret_is_not_an_env_var_name_and_is_not_echoed() {
+        for ok in ["K", "_x", "PORTER_PAYLOAD_API_KEY", "a1"] {
+            assert!(is_env_var_name(ok), "{ok}");
+        }
+        for bad in ["", "1A", "sk-live-abc123", "a b", "a=b", "k\u{e9}y"] {
+            assert!(!is_env_var_name(bad), "{bad}");
+        }
+        let mut c = ProjectConfig::default();
+        c.destination.api_key_env = "sk-live-abc123".into();
+        let errs = c.validate();
+        assert!(
+            errs.iter()
+                .any(|e| e.starts_with("destination.api_key_env")),
+            "{errs:?}"
+        );
+        assert!(!errs.iter().any(|e| e.contains("sk-live")), "{errs:?}");
     }
 }
 

@@ -182,6 +182,19 @@ mod tests {
     }
 
     #[test]
+    fn setup_form_never_renders_a_pasted_key() {
+        let mut app = setup_app(120, 40);
+        app.setup
+            .as_mut()
+            .unwrap()
+            .set("destination.api_key_env", "sk-live-abc123");
+        let out = render(&app, 120, 40);
+        assert!(!out.contains("sk-live"), "{out}");
+        assert!(out.contains("invalid env var name"), "{out}");
+        assert!(!out.contains("reads sk"), "{out}");
+    }
+
+    #[test]
     fn setup_form_scrolls_to_the_focused_field_and_shows_typing() {
         let mut app = setup_app(80, 24);
         let st = app.setup.as_mut().unwrap();

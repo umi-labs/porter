@@ -1,6 +1,7 @@
 use super::{footer, panel, tint, window};
 use crate::app::App;
 use crate::setup::{FIELDS, Kind, SECTIONS, Setup, env_is_set};
+use porter_engine::config::is_env_var_name;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -74,7 +75,14 @@ fn lines(s: &Setup) -> (Vec<Line<'static>>, usize) {
                 "{} {label:<LABEL$} ",
                 if focused { "▸" } else { " " }
             ))];
-            let v = &s.values[i];
+            let masked = fld.id == "destination.api_key_env"
+                && !s.values[i].trim().is_empty()
+                && !is_env_var_name(s.values[i].trim());
+            let v = &if masked {
+                "(hidden: invalid name)".to_string()
+            } else {
+                s.values[i].clone()
+            };
             match fld.kind {
                 Kind::Choice(_) => {
                     let shown = if v.is_empty() { "(none)" } else { v.as_str() };
@@ -93,6 +101,19 @@ fn lines(s: &Setup) -> (Vec<Line<'static>>, usize) {
         for sc in secrets.iter().filter(|x| x.section == sec.id) {
             let mark = if sc.set { "set ✓" } else { "not set ✗" };
             out.push(Line::styled(format!("    reads {} — {mark}", sc.var), dim));
+        }
+    }
+    // Whatever was typed as the env var name might be a pasted key: say so, never print it.
+    let name = s.get("destination.api_key_env").trim();
+    if !name.is_empty() && !is_env_var_name(name) {
+        let at_dest = out
+            .iter()
+            .rposition(|l| l.to_string().contains("env var NAME"));
+        if let Some(n) = at_dest {
+            out.insert(
+                n + 1,
+                Line::styled("    invalid env var name".to_string(), red),
+            );
         }
     }
     (out, at)
