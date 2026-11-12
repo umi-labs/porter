@@ -1,18 +1,21 @@
 mod issues;
 mod items;
+mod media;
 mod runs;
 
 use anyhow::{Context, Result, anyhow};
 use rusqlite::Connection;
 use serde::{Serialize, de::DeserializeOwned};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use uuid::Uuid;
 
 pub use issues::IssueFilter;
+pub use media::MediaHandle;
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_V2: &str = include_str!("schema_v2.sql");
+const SCHEMA_VERSION: i64 = 2;
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
 /// Id of one stage run (UUIDv7).
@@ -23,16 +26,18 @@ pub struct RunId(pub Uuid);
 /// The project database. One connection behind a mutex, WAL mode.
 pub struct Store {
     conn: Mutex<Connection>,
+    media_dir: PathBuf,
 }
 
 impl Store {
-    pub fn open(path: &Path) -> Result<Store> {
+    pub fn open(path: &Path, media_dir: PathBuf) -> Result<Store> {
         let conn = Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
         conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         match version {
-            0 => conn.execute_batch(&format!("BEGIN; {SCHEMA} COMMIT;"))?,
+            0 => conn.execute_batch(&format!("BEGIN; {SCHEMA} {SCHEMA_V2} COMMIT;"))?,
+            1 => conn.execute_batch(&format!("BEGIN; {SCHEMA_V2} COMMIT;"))?,
             SCHEMA_VERSION => {}
             v => {
                 return Err(anyhow!(
@@ -43,6 +48,7 @@ impl Store {
         }
         Ok(Store {
             conn: Mutex::new(conn),
+            media_dir,
         })
     }
 

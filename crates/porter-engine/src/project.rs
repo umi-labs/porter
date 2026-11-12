@@ -39,7 +39,7 @@ impl Project {
             bail!("no {CONFIG_FILE} in {}", dir.display());
         }
         let config = ProjectConfig::load(&path)?;
-        let store = Store::open(&dir.join(DB_FILE))?;
+        let store = Store::open(&dir.join(DB_FILE), dir.join("media"))?;
         Ok(Project {
             dir: dir.to_path_buf(),
             config,
