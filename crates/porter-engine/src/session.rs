@@ -156,6 +156,20 @@ pub struct ItemDetail {
     pub issues: Vec<Issue>,
 }
 
+/// One normalised document in the content tree.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DocNode {
+    pub id: ItemId,
+    pub title: String,
+    pub doc_type: String,
+    pub path: String,
+    /// Some live document names it as parent.
+    pub has_children: bool,
+    /// The worst status any stage gave it (failed > partial > skipped > done); None
+    /// before any stage did.
+    pub worst_status: Option<ItemStatus>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Overview {
     /// Latest run of each stage that has run, in pipeline order.
@@ -431,8 +445,68 @@ impl Session {
         .await
     }
 
+    /// Document types of the normalised documents, with how many of each.
+    pub async fn doc_types(&self) -> Result<Vec<(String, u64)>> {
+        let (p, connector) = (self.project.clone(), self.config().source.adapter.clone());
+        blocking(move || p.store().doc_types(&connector)).await
+    }
+
+    /// One page of normalised documents under `parent`, by title. With no parent: the
+    /// roots, i.e. documents with no parent or whose parent is not a live document (so an
+    /// orphan is never unreachable). `doc_type` narrows by type.
+    pub async fn children(
+        &self,
+        parent: Option<ItemId>,
+        doc_type: Option<&str>,
+        page: Page,
+    ) -> Result<Paged<DocNode>> {
+        let (p, connector) = (self.project.clone(), self.config().source.adapter.clone());
+        let doc_type = doc_type.map(str::to_string);
+        blocking(move || {
+            let store = p.store();
+            let (rows, total) = store.doc_children(
+                &connector,
+                parent,
+                doc_type.as_deref(),
+                page.offset,
+                page.limit,
+            )?;
+            let ids: Vec<ItemId> = rows.iter().map(|r| r.0).collect();
+            let mut worst: std::collections::HashMap<ItemId, ItemStatus> = Default::default();
+            for (id, st) in store.statuses_of(&ids)? {
+                let w = worst.entry(id).or_insert_with(|| st.clone());
+                if status_rank(&st) > status_rank(w) {
+                    *w = st;
+                }
+            }
+            let rows = rows
+                .into_iter()
+                .map(|(id, title, doc_type, path, has_children)| DocNode {
+                    id,
+                    title,
+                    doc_type,
+                    path,
+                    has_children,
+                    worst_status: worst.remove(&id),
+                })
+                .collect();
+            Ok(Paged { rows, total })
+        })
+        .await
+    }
+
     pub fn resolve_issue(&self, id: Uuid, r: Resolution) -> Result<()> {
         self.project.store().resolve_issue(id, r)
+    }
+}
+
+/// Failed > partial > skipped > done.
+fn status_rank(s: &ItemStatus) -> u8 {
+    match s {
+        ItemStatus::Done => 0,
+        ItemStatus::Skipped { .. } => 1,
+        ItemStatus::Partial { .. } => 2,
+        ItemStatus::Failed { .. } => 3,
     }
 }
 

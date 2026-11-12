@@ -282,4 +282,114 @@ impl Store {
         })
         .transpose()
     }
+
+    /// Document types among `connector`'s live documents, with counts, by type.
+    pub fn doc_types(&self, connector: &str) -> Result<Vec<(String, u64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT coalesce(json_extract(data, '$.type'), ''), COUNT(*) FROM items
+             WHERE kind = 'document' AND connector = ?1 AND deleted_at IS NULL
+             GROUP BY 1 ORDER BY 1",
+        )?;
+        let rows = stmt.query_map([connector], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (t, n) = row?;
+            out.push((t, u64::try_from(n).unwrap_or(0)));
+        }
+        Ok(out)
+    }
+
+    /// One page of `connector`'s live documents under `parent`, by title, with how many
+    /// there are. With no parent: those with none, or whose parent is not a live document
+    /// of `connector`. Rows are `(id, title, type, path, has_children)`.
+    #[allow(clippy::type_complexity)]
+    pub fn doc_children(
+        &self,
+        connector: &str,
+        parent: Option<ItemId>,
+        doc_type: Option<&str>,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<(ItemId, String, String, String, bool)>, u64)> {
+        // Spelled out per case (not `?2 IS NULL OR ...`) so SQLite uses the v5 indexes.
+        let under = match parent {
+            Some(_) => "json_extract(d.data, '$.parent') = ?2",
+            None => {
+                "(json_extract(d.data, '$.parent') IS NULL OR NOT EXISTS (
+                    SELECT 1 FROM items p WHERE p.id = json_extract(d.data, '$.parent')
+                    AND p.kind = 'document' AND p.connector = ?1 AND p.deleted_at IS NULL))"
+            }
+        };
+        let typed = match doc_type {
+            Some(_) => "AND json_extract(d.data, '$.type') = ?3",
+            None => "AND ?3 IS NULL",
+        };
+        let from = format!(
+            "FROM items d WHERE d.kind = 'document' AND d.connector = ?1 AND d.deleted_at IS NULL
+             AND {under} {typed}"
+        );
+        let parent = parent.map(|p| p.to_string());
+        let conn = self.conn();
+        let total: i64 = conn.query_row(
+            &format!("SELECT COUNT(*) {from}"),
+            params![connector, parent, doc_type],
+            |r| r.get(0),
+        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT d.id, coalesce(json_extract(d.data, '$.title'), ''),
+                    coalesce(json_extract(d.data, '$.type'), ''),
+                    coalesce(json_extract(d.data, '$.path'), ''),
+                    -- `+d.id` drops the column's affinity so the parent index is searched.
+                    EXISTS (SELECT 1 FROM items c WHERE c.kind = 'document'
+                        AND json_extract(c.data, '$.parent') = +d.id
+                        AND c.connector = ?1 AND c.deleted_at IS NULL)
+             {from} ORDER BY lower(json_extract(d.data, '$.title')), d.id LIMIT ?4 OFFSET ?5"
+        ))?;
+        let rows = stmt.query_map(
+            params![
+                connector,
+                parent,
+                doc_type,
+                i64::try_from(limit).unwrap_or(i64::MAX),
+                i64::try_from(offset).unwrap_or(i64::MAX)
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, bool>(4)?,
+                ))
+            },
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, title, ty, path, kids) = row?;
+            out.push((id.parse()?, title, ty, path, kids));
+        }
+        Ok((out, u64::try_from(total).unwrap_or(0)))
+    }
+
+    /// Every stage's status for each of `ids`.
+    pub fn statuses_of(&self, ids: &[ItemId]) -> Result<Vec<(ItemId, ItemStatus)>> {
+        let ids: Vec<String> = ids.iter().map(|i| i.to_string()).collect();
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT item_id, status FROM statuses
+             WHERE item_id IN (SELECT value FROM json_each(?1)) AND deleted_at IS NULL",
+        )?;
+        let rows = stmt.query_map([serde_json::to_string(&ids)?], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, status) = row?;
+            out.push((id.parse()?, serde_json::from_str(&status)?));
+        }
+        Ok(out)
+    }
 }

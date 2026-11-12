@@ -16,12 +16,13 @@ use porter_engine::events::Event;
 use porter_engine::report::Coverage;
 use porter_engine::session::{RunPlan, Session, StageOpts};
 use porter_engine::stage::SchemaMode;
-use porter_model::Stage;
+use porter_model::{ItemId, Stage};
 
 use crate::bridge::{Bridge, DataResult, UiEvent, coalesce};
 use crate::sidebar::{self, Section, View};
 use crate::views;
 use crate::vm::apply::{ApplySheet, age};
+use crate::vm::content::{Content, NodeKey, Query};
 use crate::vm::pipeline::{CLOSE_WAIT, CloseStep, KindCount, Pipeline, name};
 use crate::vm::runs::Runs;
 
@@ -33,6 +34,7 @@ pub struct ProjectWindow {
     pub(crate) section: Section,
     pub(crate) pipeline: Pipeline,
     pub(crate) runs: Runs,
+    pub(crate) content: Content,
     pub(crate) coverage: Option<Result<Option<Coverage>, String>>,
     pub(crate) kinds: Option<Result<Vec<KindCount>, String>>,
     /// The apply confirmation sheet, while open.
@@ -59,6 +61,7 @@ impl ProjectWindow {
             section: Section::default(),
             pipeline: Pipeline::default(),
             runs: Runs::default(),
+            content: Content::default(),
             coverage: None,
             kinds: None,
             apply: None,
@@ -80,12 +83,43 @@ impl ProjectWindow {
 
     pub fn select(&mut self, s: Section, cx: &mut Context<Self>) {
         self.section = s;
+        if s == Section::Content {
+            let q = self.content.open();
+            self.ask(q);
+        }
         cx.notify();
     }
 
     fn refresh(&mut self) {
         self.pipeline.refresh_requested();
         self.bridge.refresh();
+        let q = self.content.invalidate();
+        self.ask(q);
+    }
+
+    /// Sends the content section's reads to the bridge.
+    fn ask(&self, qs: Vec<Query>) {
+        for q in qs {
+            self.bridge.content(self.content.generation, q);
+        }
+    }
+
+    pub(crate) fn content_toggle(&mut self, key: NodeKey, cx: &mut Context<Self>) {
+        let q = self.content.toggle(key);
+        self.ask(q);
+        cx.notify();
+    }
+
+    pub(crate) fn content_more(&mut self, key: NodeKey, cx: &mut Context<Self>) {
+        let q = self.content.more(key);
+        self.ask(q);
+        cx.notify();
+    }
+
+    pub(crate) fn content_select(&mut self, id: ItemId, cx: &mut Context<Self>) {
+        let q = self.content.select(id);
+        self.ask(q);
+        cx.notify();
     }
 
     fn handle(&mut self, e: UiEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -127,6 +161,10 @@ impl ProjectWindow {
             DataResult::IssueKinds(k) => self.kinds = Some(k),
             DataResult::Coverage(c) => self.coverage = Some(c),
             DataResult::History(h) => self.runs.history = Some(h),
+            DataResult::Content { generation, reply } => {
+                let q = self.content.land(generation, reply);
+                self.ask(q);
+            }
             DataResult::Preview {
                 confirm: false,
                 url,
@@ -487,6 +525,7 @@ impl Render for ProjectWindow {
         let main: gpui::AnyElement = match self.section.view() {
             View::NotBuilt(name) => not_built(name, cx).into_any_element(),
             View::Overview => views::overview::render(self, cx).into_any_element(),
+            View::Content => views::content::render(self, cx).into_any_element(),
             View::Runs => views::runs::render(self, cx).into_any_element(),
         };
         let sheet = self

@@ -8,12 +8,13 @@ use std::sync::{Arc, OnceLock};
 use porter_engine::events::Event;
 use porter_engine::report::{Coverage, read_coverage};
 use porter_engine::session::{IssueQuery, Overview, Page, RunOutcome, RunPlan, STAGES, Session};
-use porter_model::Resolution;
+use porter_model::{ItemKind, Resolution, SourceRef};
 use tokio::runtime::Runtime;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio_util::sync::CancellationToken;
 
 use crate::vm::apply::{PreviewInfo, preview_info};
+use crate::vm::content::{NodeKey, Query, Reply};
 use crate::vm::pipeline::{KindCount, issues_by_kind};
 use crate::vm::runs::History;
 
@@ -41,6 +42,11 @@ pub enum DataResult {
         /// `destination.url` as porter.toml says now.
         url: String,
         preview: Option<PreviewInfo>,
+    },
+    /// The content section's reads, tagged with the generation that asked.
+    Content {
+        generation: u64,
+        reply: Reply,
     },
 }
 
@@ -220,6 +226,64 @@ impl Bridge {
                 preview,
             }));
         });
+    }
+}
+
+impl Bridge {
+    /// Runs one content-section read; the reply comes back as `DataResult::Content`.
+    pub fn content(&self, generation: u64, q: Query) {
+        let (session, tx) = (self.session.clone(), self.tx.clone());
+        runtime().spawn(async move {
+            let err = |e: anyhow::Error| format!("{e:#}");
+            let reply = match q {
+                Query::Types => Reply::Types(session.doc_types().await.map_err(err)),
+                Query::Children { key, page } => {
+                    let result = match &key {
+                        NodeKey::Type(t) => session.children(None, Some(t), page).await,
+                        NodeKey::Doc(id) => session.children(Some(*id), None, page).await,
+                    };
+                    Reply::Children {
+                        key,
+                        offset: page.offset,
+                        result: result.map_err(err),
+                    }
+                }
+                Query::Doc(id) => Reply::Doc(id, session.item(id).await.map(Box::new).map_err(err)),
+                Query::Labels(ids) => {
+                    let project = session.project().clone();
+                    Reply::Labels(
+                        blocking(move || {
+                            ids.into_iter()
+                                .map(|id| {
+                                    let found = project.store().item_source(id)?;
+                                    Ok((
+                                        id,
+                                        found.map(|(kind, src, data)| label(kind, &src, &data)),
+                                    ))
+                                })
+                                .collect::<anyhow::Result<Vec<_>>>()
+                                .map_err(err)
+                        })
+                        .await
+                        .and_then(|r| r),
+                    )
+                }
+            };
+            let _ = tx.send(UiEvent::Data(DataResult::Content { generation, reply }));
+        });
+    }
+}
+
+/// A media item's filename, else a document's title, else its source id.
+fn label(kind: ItemKind, src: &SourceRef, data: &serde_json::Value) -> String {
+    let key = if kind == ItemKind::Media {
+        "filename"
+    } else {
+        "title"
+    };
+    match data.get(key).and_then(|v| v.as_str()) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ => format!("(untitled: {})", src.source_id),
     }
 }
 

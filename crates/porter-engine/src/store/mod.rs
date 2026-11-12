@@ -20,7 +20,8 @@ const SCHEMA: &str = include_str!("schema.sql");
 const SCHEMA_V2: &str = include_str!("schema_v2.sql");
 const SCHEMA_V3: &str = include_str!("schema_v3.sql");
 const SCHEMA_V4: &str = include_str!("schema_v4.sql");
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_V5: &str = include_str!("schema_v5.sql");
+const SCHEMA_VERSION: i64 = 5;
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
 /// Id of one stage run (UUIDv7).
@@ -43,13 +44,16 @@ impl Store {
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         match version {
             0 => conn.execute_batch(&format!(
-                "BEGIN; {SCHEMA} {SCHEMA_V2} {SCHEMA_V3} {SCHEMA_V4} COMMIT;"
+                "BEGIN; {SCHEMA} {SCHEMA_V2} {SCHEMA_V3} {SCHEMA_V4} {SCHEMA_V5} COMMIT;"
             ))?,
             1 => conn.execute_batch(&format!(
-                "BEGIN; {SCHEMA_V2} {SCHEMA_V3} {SCHEMA_V4} COMMIT;"
+                "BEGIN; {SCHEMA_V2} {SCHEMA_V3} {SCHEMA_V4} {SCHEMA_V5} COMMIT;"
             ))?,
-            2 => conn.execute_batch(&format!("BEGIN; {SCHEMA_V3} {SCHEMA_V4} COMMIT;"))?,
-            3 => conn.execute_batch(&format!("BEGIN; {SCHEMA_V4} COMMIT;"))?,
+            2 => conn.execute_batch(&format!(
+                "BEGIN; {SCHEMA_V3} {SCHEMA_V4} {SCHEMA_V5} COMMIT;"
+            ))?,
+            3 => conn.execute_batch(&format!("BEGIN; {SCHEMA_V4} {SCHEMA_V5} COMMIT;"))?,
+            4 => conn.execute_batch(&format!("BEGIN; {SCHEMA_V5} COMMIT;"))?,
             SCHEMA_VERSION => {}
             v => {
                 return Err(anyhow!(
