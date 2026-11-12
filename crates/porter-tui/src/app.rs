@@ -8,7 +8,7 @@ use porter_engine::session::{
     ItemDetail, Overview, RunInfo, RunOutcome, RunPlan, STAGES, Session, StageOpts,
 };
 use porter_engine::stage::SchemaMode;
-use porter_model::{Issue, ItemStatus, Resolution, Severity, Stage};
+use porter_model::{Issue, ItemId, ItemStatus, Resolution, Severity, Stage};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -138,6 +138,8 @@ pub struct App {
     /// Overview queries in flight; the live finished state stays until the last lands.
     pending_overview: u32,
     seq: u64,
+    /// The item query in flight and the view that asked for it.
+    item_req: Option<(u64, ViewKey)>,
     pub log: VecDeque<LogLine>,
     pub show_log: bool,
     pub help: bool,
@@ -145,6 +147,8 @@ pub struct App {
     pub running: Option<RunInfo>,
     pub size: (u16, u16),
     pub quit: bool,
+    /// Quitting because of SIGTERM (exit 143).
+    pub terminated: bool,
     /// A cancel was requested for the run in flight.
     pub cancelling: bool,
     /// Engine events changed state since the last draw; the next tick redraws.
@@ -164,6 +168,7 @@ impl App {
             detail: vec![],
             pending_overview: 0,
             seq: 0,
+            item_req: None,
             log: VecDeque::new(),
             show_log: true,
             help: false,
@@ -171,6 +176,7 @@ impl App {
             running: None,
             size,
             quit: false,
+            terminated: false,
             cancelling: false,
             stale: false,
             dirty: true,
@@ -187,6 +193,13 @@ impl App {
     pub(crate) fn next_seq(&mut self) -> u64 {
         self.seq += 1;
         self.seq
+    }
+
+    /// Asks for an item, remembering which view asked so the answer can be checked.
+    fn request_item(&mut self, id: ItemId) -> Cmd {
+        let seq = self.next_seq();
+        self.item_req = Some((seq, view_key(self)));
+        Cmd::Item { id, seq }
     }
 
     fn overview_cmd(&mut self) -> Cmd {
@@ -384,6 +397,11 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
             app.dirty = true;
             return key(app, k);
         }
+        Msg::Term => {
+            app.quit = true;
+            app.terminated = true;
+            return vec![Cmd::Quit];
+        }
     }
     app.dirty = true;
     vec![]
@@ -392,6 +410,15 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
 fn key(app: &mut App, k: KeyEvent) -> Vec<Cmd> {
     if k.kind == KeyEventKind::Release {
         return vec![];
+    }
+    // Ctrl-C works in every state, the exclusive ones (prompts, filter, setup) included:
+    // it closes what is open, then cancels the run or quits.
+    if k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL) {
+        app.modal = None;
+        if let Some(f) = filter_mut(app) {
+            f.editing = false;
+        }
+        return perform(app, Action::CtrlC, k);
     }
     match keymap::lookup(&keymap::active(app), &k) {
         Some(a) => perform(app, a, k),
@@ -517,8 +544,8 @@ fn perform(app: &mut App, a: Action, k: KeyEvent) -> Vec<Cmd> {
             app.modal = m.or(app.modal.take());
         }
         Action::Jump => {
-            if let Some(DetailView::Issue(i)) = app.detail.last() {
-                return i.item.map(Cmd::Item).into_iter().collect();
+            if let Some(id) = issue_item(app) {
+                return vec![app.request_item(id)];
             }
         }
         Action::ConfirmYes => {
@@ -661,7 +688,13 @@ fn on_data(app: &mut App, d: DataMsg) -> Vec<Cmd> {
                 }
             }
         }
-        DataMsg::Item(d) => app.detail.push(DetailView::Item(d)),
+        // Only the latest request, and only while the view that made it is on screen.
+        DataMsg::Item { seq, detail } => {
+            if app.item_req == Some((seq, view_key(app))) {
+                app.item_req = None;
+                app.detail.push(DetailView::Item(detail));
+            }
+        }
         DataMsg::Resolved(Ok((id, r))) => {
             app.push_log(format!("issue {id} resolved: {r:?}"));
             for d in &mut app.detail {
@@ -776,7 +809,12 @@ fn open(app: &mut App) -> Vec<Cmd> {
             }
             return vec![];
         }
-        Some(DetailView::Issue(i)) => return i.item.map(Cmd::Item).into_iter().collect(),
+        Some(DetailView::Issue(_)) => {
+            return issue_item(app)
+                .map(|id| app.request_item(id))
+                .into_iter()
+                .collect();
+        }
         _ => {}
     }
     if app.focus == Panel::Items {
@@ -784,7 +822,7 @@ fn open(app: &mut App) -> Vec<Cmd> {
             return vec![];
         };
         app.detail.clear();
-        return vec![Cmd::Item(id)];
+        return vec![app.request_item(id)];
     }
     let Some(g) = app.panels.issues.selected() else {
         return vec![];
@@ -950,6 +988,21 @@ fn apply_decide(app: &mut App, fresh: Option<PreviewInfo>) -> Vec<Cmd> {
             schema_mode: SchemaMode::Check,
         },
     ))
+}
+
+/// Which view is on screen: focus, Detail depth and what it has selected.
+type ViewKey = (Panel, usize, Option<String>);
+
+fn view_key(app: &App) -> ViewKey {
+    (app.focus, app.detail.len(), selected_id(app))
+}
+
+/// The item of the issue open in Detail.
+fn issue_item(app: &App) -> Option<ItemId> {
+    match app.detail.last() {
+        Some(DetailView::Issue(i)) => i.item,
+        _ => None,
+    }
 }
 
 /// The id of what the focused list or Detail view has selected.
@@ -1388,6 +1441,53 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_c_works_in_filter_resolve_box_and_quit_prompt() {
+        // Filter box: editing stops and the idle press quits.
+        let mut app = App::new(None, (80, 24));
+        app.focus = Panel::Items;
+        press(&mut app, KeyCode::Char('/'));
+        assert!(app.panels.items.filter.editing);
+        assert_eq!(ctrl_c(&mut app), [Cmd::Quit]);
+        assert!(app.quit && !app.panels.items.filter.editing);
+        // Resolve box: closed, then quits.
+        let mut app = App::new(None, (80, 24));
+        app.modal = Some(Modal::Resolve(ResolveModal {
+            issue: Uuid::nil(),
+            title: "t".into(),
+            choice: 0,
+            note: String::new(),
+            error: None,
+        }));
+        assert_eq!(ctrl_c(&mut app), [Cmd::Quit]);
+        assert!(app.quit && app.modal.is_none());
+        // Quit prompt (a run in flight): closed and the run cancelled; again quits.
+        let (mut app, _d) = live_app();
+        press(&mut app, KeyCode::Char('R'));
+        press(&mut app, KeyCode::Char('q'));
+        assert_eq!(app.modal, Some(Modal::ConfirmQuit));
+        assert_eq!(ctrl_c(&mut app), [Cmd::Cancel]);
+        assert!(app.modal.is_none() && !app.quit);
+        assert_eq!(ctrl_c(&mut app), [Cmd::Cancel, Cmd::Quit]);
+        // Setup field: quits, never types a `c`.
+        let mut app = setup_app();
+        focus_on(&mut app, "project.name");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(ctrl_c(&mut app), [Cmd::Quit]);
+    }
+
+    /// SIGTERM goes through the same quit path as `q`: the runtime then cancels the run
+    /// and waits for it (`finish_run`) before exiting 143, whatever is open.
+    #[test]
+    fn sigterm_quits_through_the_awaited_path() {
+        let (mut app, _d) = live_app();
+        press(&mut app, KeyCode::Char('R'));
+        app.help = true;
+        app.modal = Some(Modal::ConfirmQuit);
+        assert_eq!(update(&mut app, Msg::Term), [Cmd::Quit]);
+        assert!(app.quit && app.terminated);
+    }
+
+    #[test]
     fn ctrl_c_works_under_help() {
         let mut app = App::new(None, (80, 24));
         app.help = true;
@@ -1678,6 +1778,59 @@ mod tests {
             press(&mut app, KeyCode::Char('y')),
             [Cmd::Copy(i.id.to_string())]
         );
+    }
+
+    /// An item answer lands only on the view that asked for it: after Esc (or any move
+    /// away) it is dropped instead of opening over whatever is on screen now.
+    #[test]
+    fn item_result_is_dropped_once_its_view_is_gone() {
+        let item = porter_model::ItemId(Uuid::from_u128(9));
+        let issue = Issue {
+            id: Uuid::from_u128(7),
+            kind: porter_model::IssueKind::MissingMedia,
+            severity: Severity::Error,
+            item: Some(item),
+            stage: porter_model::Stage::Load,
+            message: "m".into(),
+            details: serde_json::Value::Null,
+            resolution: Resolution::Open,
+        };
+        let detail = |seq| {
+            Msg::Data(DataMsg::Item {
+                seq,
+                detail: Box::new(ItemDetail {
+                    row: porter_engine::session::ItemRow {
+                        id: item,
+                        kind: porter_model::ItemKind::Document,
+                        label: "/a".into(),
+                        title: None,
+                        statuses: vec![],
+                    },
+                    source: porter_model::SourceRef {
+                        connector: "wxr".into(),
+                        source_id: "1".into(),
+                        url: None,
+                    },
+                    data: serde_json::Value::Null,
+                    issues: vec![],
+                }),
+            })
+        };
+        let seq_of = |c: &[Cmd]| match c {
+            [Cmd::Item { id, seq }] if *id == item => *seq,
+            other => panic!("{other:?}"),
+        };
+        let mut app = App::new(None, (80, 24));
+        app.detail.push(DetailView::Issue(issue.clone()));
+        let seq = seq_of(&press(&mut app, KeyCode::Char('g')));
+        press(&mut app, KeyCode::Esc);
+        update(&mut app, detail(seq));
+        assert!(app.detail.is_empty(), "landed on a view that is gone");
+        // Still on the issue that asked: it opens.
+        app.detail.push(DetailView::Issue(issue));
+        let seq = seq_of(&press(&mut app, KeyCode::Char('g')));
+        update(&mut app, detail(seq));
+        assert!(matches!(app.detail.last(), Some(DetailView::Item(_))));
     }
 
     #[test]

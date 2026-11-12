@@ -19,6 +19,8 @@ pub enum Msg {
     Data(DataMsg),
     Tick,
     RunDone(RunOutcome),
+    /// SIGTERM: quit (exit 143) once the run has been cancelled and has stopped.
+    Term,
 }
 
 /// The last dry run as the apply prompt needs it.
@@ -50,7 +52,11 @@ pub enum DataMsg {
         page: Page,
         paged: Paged<Issue>,
     },
-    Item(Box<ItemDetail>),
+    /// `seq` ties it to the request; see `App::item_req`.
+    Item {
+        seq: u64,
+        detail: Box<ItemDetail>,
+    },
     Resolved(Result<(Uuid, Resolution), String>),
     /// Items per collection in the last dry-run preview; None when there was none.
     Preview(Option<PreviewInfo>),
@@ -89,7 +95,10 @@ pub enum Cmd {
         mode: crate::lists::Mode,
         seq: u64,
     },
-    Item(ItemId),
+    Item {
+        id: ItemId,
+        seq: u64,
+    },
     Resolve(Uuid, Resolution),
     /// Read the dry-run preview counts the apply confirmation shows.
     PreviewCounts,

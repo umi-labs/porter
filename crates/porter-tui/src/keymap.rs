@@ -236,14 +236,6 @@ pub const BINDINGS: &[Binding] = &[
         "close help",
         "esc close",
     ),
-    b(
-        S::Help,
-        &[Key(KeyCode::Char('c'), true)],
-        "ctrl-c",
-        A::CtrlC,
-        "close help, cancel the run; again to quit",
-        "",
-    ),
     // Filter box (exclusive; typing edits the text).
     b(
         S::Filter,
@@ -487,7 +479,7 @@ pub const BINDINGS: &[Binding] = &[
         &[Key(KeyCode::Char('c'), true)],
         "ctrl-c",
         A::CtrlC,
-        "cancel the run; again to quit",
+        "close prompts, cancel the run; again to quit",
         "",
     ),
     b(
@@ -580,14 +572,6 @@ pub const BINDINGS: &[Binding] = &[
         "write porter.toml and open the project",
         "ctrl-s save",
     ),
-    b(
-        S::Setup,
-        &[Key(KeyCode::Char('c'), true)],
-        "ctrl-c",
-        A::CtrlC,
-        "quit",
-        "",
-    ),
     b(S::Setup, &[ch('q')], "q", A::Quit, "quit", "q quit"),
     b(
         S::SetupEdit,
@@ -612,14 +596,6 @@ pub const BINDINGS: &[Binding] = &[
         A::SetupSave,
         "write porter.toml and open the project",
         "ctrl-s save",
-    ),
-    b(
-        S::SetupEdit,
-        &[Key(KeyCode::Char('c'), true)],
-        "ctrl-c",
-        A::CtrlC,
-        "quit",
-        "",
     ),
 ];
 

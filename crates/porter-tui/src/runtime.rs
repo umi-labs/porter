@@ -68,17 +68,16 @@ pub async fn run_tui(dir: &Path) -> Result<i32> {
                 }
             }
             if quit {
-                break (0, finish_run(&mut run, &mut app, &mut terminal).await?);
+                let code = if app.terminated { 143 } else { 0 };
+                break (code, finish_run(&mut run, &mut app, &mut terminal).await?);
             }
             if app.dirty {
                 terminal.draw(|f| ui::view(&app, f))?;
                 app.dirty = false;
             }
             let msg = tokio::select! {
-                _ = sigterm.recv() => {
-                    if let Some(c) = &run.cancel { c.cancel() }
-                    break (143, None)
-                }
+                // Through `update`, so it cancels and awaits the run like `q`.
+                _ = sigterm.recv() => Msg::Term,
                 Some(Ok(ev)) = events.next() => match ev {
                     TermEvent::Key(k) => Msg::Key(k),
                     TermEvent::Resize(w, h) => Msg::Resize(w, h),
@@ -177,11 +176,14 @@ const QUIT_WAIT: Duration = Duration::from_secs(10);
 
 /// Cancels the run and waits for it to stop, so quitting never leaves a half-written
 /// stage behind. Returns a note for stderr if it did not stop in time.
-async fn finish_run(
+async fn finish_run<B: ratatui::backend::Backend>(
     run: &mut RunSlot,
     app: &mut App,
-    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-) -> Result<Option<String>> {
+    terminal: &mut Terminal<B>,
+) -> Result<Option<String>>
+where
+    B::Error: Send + Sync + 'static,
+{
     let Some(join) = run.join.take() else {
         return Ok(None);
     };
@@ -287,11 +289,14 @@ pub(crate) fn exec(
                 let _ = tx.send(Msg::Data(m));
             });
         }
-        Cmd::Item(id) => {
+        Cmd::Item { id, seq } => {
             let tx = tx.clone();
             tokio::spawn(async move {
                 let m = match session.item(id).await {
-                    Ok(d) => DataMsg::Item(Box::new(d)),
+                    Ok(d) => DataMsg::Item {
+                        seq,
+                        detail: Box::new(d),
+                    },
                     Err(e) => DataMsg::Error(format!("{e:#}")),
                 };
                 let _ = tx.send(Msg::Data(m));
@@ -376,4 +381,33 @@ async fn issue_groups(s: &Session, mode: Mode) -> Result<Vec<Group>> {
         out.push(Group { kind, total, worst });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn finish_run_cancels_and_waits_for_the_run() {
+        let cancel = CancellationToken::new();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let (c, s) = (cancel.clone(), stopped.clone());
+        let mut run = RunSlot {
+            cancel: Some(cancel.clone()),
+            join: Some(tokio::spawn(async move {
+                c.cancelled().await;
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                s.store(true, Ordering::SeqCst);
+            })),
+        };
+        let mut app = App::new(None, (80, 24));
+        let mut t = Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        let note = finish_run(&mut run, &mut app, &mut t).await.unwrap();
+        assert!(note.is_none() && cancel.is_cancelled());
+        assert!(
+            stopped.load(Ordering::SeqCst),
+            "returned before the run stopped"
+        );
+    }
 }
