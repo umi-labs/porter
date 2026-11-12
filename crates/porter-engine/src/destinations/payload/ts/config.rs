@@ -31,6 +31,8 @@ pub struct CollectionSchema {
     pub fields: Vec<DestField>,
     pub upload: bool,
     pub drafts: bool,
+    /// `folders` is enabled (Payload's `payload-folders`).
+    pub folders: bool,
 }
 
 /// One field, `kind` being Payload's type name. `row`/`collapsible`/unnamed tabs are
@@ -830,6 +832,7 @@ impl Reader {
             fields,
             upload: truthy(&v["upload"]),
             drafts: truthy(&v["versions"]["drafts"]),
+            folders: truthy(&v["folders"]),
         };
         if role == Role::Global {
             self.out.globals.insert(slug, c);

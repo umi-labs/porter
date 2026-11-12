@@ -29,6 +29,55 @@ pub struct MappingConfig {
     pub forms: FormsMap,
     pub media: MediaMap,
     pub redirects: RedirectsMap,
+    /// Taxonomy name -> destination collection for its terms. Unlisted taxonomies aren't loaded.
+    #[serde(skip_serializing_if = "IndexMap::is_empty")]
+    pub taxonomies: IndexMap<String, String>,
+    #[serde(skip_serializing_if = "MenusMap::is_empty")]
+    pub menus: MenusMap,
+    #[serde(skip_serializing_if = "SettingsMap::is_empty")]
+    pub settings: SettingsMap,
+}
+
+/// Where menus go: a `collection` (one doc per menu: `title`, `items`), or a `global`
+/// whose `fields` name, per source menu, the field that takes its items. Each item is
+/// `{label, url, children}`. Neither set: menus aren't loaded.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[serde(default)]
+pub struct MenusMap {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
+    /// Source menu name -> field of `global`.
+    #[serde(skip_serializing_if = "IndexMap::is_empty")]
+    pub fields: IndexMap<String, String>,
+}
+
+impl MenusMap {
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Site settings into a global: each named field gets that setting. Unset: not loaded.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[serde(default)]
+pub struct SettingsMap {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global: Option<String>,
+    /// Field for the front page (a relationship to the loaded document).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub front_page: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub site_name: Option<String>,
+}
+
+impl SettingsMap {
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -158,6 +207,10 @@ pub enum LocaleMode {
 pub struct FormsMap {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collection: Option<String>,
+    /// Collection for past submissions (keyed by `legacyId`); unset: not loaded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submissions: Option<String>,
+    /// Form titles not to load.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub retire: Vec<String>,
 }
@@ -333,6 +386,18 @@ fields = { title = "heading" }
 
 [forms]
 retire = ["contact"]
+submissions = "form-submissions"
+
+[taxonomies]
+category = "categories"
+
+[menus]
+global = "navigation"
+fields = { "Main menu" = "main" }
+
+[settings]
+global = "settings"
+front_page = "homePage"
 "#;
 
     #[test]
@@ -354,6 +419,9 @@ retire = ["contact"]
         );
         assert_eq!(m.media.collection, "media");
         assert!(matches!(m.locales, LocaleMode::Map { .. }));
+        assert_eq!(m.menus.fields["Main menu"], "main");
+        assert_eq!(m.settings.front_page.as_deref(), Some("homePage"));
+        assert_eq!(m.taxonomies["category"], "categories");
         let back: MappingConfig = toml::from_str(&toml::to_string(&m).unwrap()).unwrap();
         assert_eq!(back, m);
     }

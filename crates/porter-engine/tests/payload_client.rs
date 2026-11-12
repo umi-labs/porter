@@ -163,7 +163,7 @@ async fn draft_flag_and_status() {
 }
 
 #[tokio::test]
-async fn nulls_stripped() {
+async fn nulls_sent_as_given() {
     let s = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/pages"))
@@ -178,15 +178,13 @@ async fn nulls_stripped() {
     )
     .await
     .unwrap();
+    // The loader decides per field (null clears, [] for arrays/blocks); the client
+    // sends what it is given.
     let b = body(&s.received_requests().await.unwrap()[0]);
-    assert!(b.get("layout").is_none(), "{b}");
-    assert!(b["seo"].get("image").is_none(), "{b}");
+    assert_eq!(b["layout"], Value::Null, "{b}");
+    assert_eq!(b["seo"]["image"], Value::Null, "{b}");
     assert_eq!(b["seo"]["title"], "S");
-    assert_eq!(
-        b["tags"],
-        json!([null, "a"]),
-        "array elements are left alone"
-    );
+    assert_eq!(b["tags"], json!([null, "a"]));
 }
 
 #[tokio::test]

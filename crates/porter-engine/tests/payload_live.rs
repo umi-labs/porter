@@ -102,9 +102,11 @@ async fn live_lexical_and_blocks_round_trip() {
         .upload_keyed(
             "media",
             "legacyId",
-            &json!("live-pixel"),
+            // Not the other test's key/filename: tests run in parallel, and parallel
+            // uploads of one filename race in Payload.
+            &json!("live-pixel-2"),
             &f,
-            "pixel.png",
+            "pixel-2.png",
             "image/png",
             &json!({"alt": "Pixel"}),
         )

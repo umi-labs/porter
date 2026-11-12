@@ -1,0 +1,424 @@
+//! Documents: pass 1 creates (or updates) each with its scalar fields, parents first;
+//! pass 2, once every id is known, writes references, rich text, layouts and `parent`.
+
+use super::{Loader, NOT_MAPPED, required_gap, set_path, settle_nulls};
+use crate::destinations::payload::blocks::to_blocks;
+use crate::destinations::payload::lexical::{IdMap, to_lexical};
+use crate::destinations::payload::schema_check::find;
+use crate::destinations::payload::ts::DestField;
+use crate::html::PendingIssue;
+use crate::mapping::{KeyType, TypeMap, apply, paths};
+use anyhow::Result;
+use porter_model::{DocStatus, Document, FieldValue, IssueKind, ItemId, ItemKind, Severity};
+use serde_json::{Map, Value, json};
+use std::collections::{HashMap, HashSet};
+
+const KIND: ItemKind = ItemKind::Document;
+
+/// One document's body, plus which top-level keys need other items' ids.
+struct Built {
+    data: Map<String, Value>,
+    refs: HashSet<String>,
+    issues: Vec<PendingIssue>,
+}
+
+pub(super) async fn load(l: &mut Loader<'_>) -> Result<()> {
+    let docs: Vec<Document> = l
+        .items::<Document>(KIND)?
+        .into_iter()
+        .map(|(.., d)| d)
+        .collect();
+    let mapping = l.ctx.config.mapping.clone();
+    let mut todo: Vec<(&Document, &TypeMap, &str)> = vec![];
+    let mut unmapped: HashMap<&str, usize> = HashMap::new();
+    for d in &docs {
+        match mapping.types.get(&d.doc_type) {
+            Some(tm) => match &tm.to {
+                Some(to) => todo.push((d, tm, to)),
+                None => l.skip(
+                    d.id,
+                    KIND,
+                    tm.drop_reason
+                        .as_deref()
+                        .unwrap_or("dropped in the mapping"),
+                )?,
+            },
+            None => {
+                *unmapped.entry(&d.doc_type).or_default() += 1;
+                l.skip(d.id, KIND, NOT_MAPPED)?;
+            }
+        }
+    }
+    // Payload drops fields it doesn't have without a word: say so once per field.
+    for (ty, tm) in &mapping.types {
+        let Some(c) = tm.to.as_deref().and_then(|to| l.coll(to).map(|c| (to, c))) else {
+            continue;
+        };
+        for fm in tm.fields.values().filter(|fm| !fm.drop) {
+            if find(&c.1.fields, &fm.to).is_none() {
+                l.ctx.issue(
+                    IssueKind::SchemaMismatch,
+                    Severity::Warning,
+                    None,
+                    format!("`{ty}` maps to `{}.{}`, which the Payload config doesn't define: Payload will drop it", c.0, fm.to),
+                    json!({"type": ty, "collection": c.0, "field": fm.to}),
+                )?;
+            }
+        }
+    }
+    for (ty, n) in unmapped {
+        l.ctx.issue(
+            IssueKind::UnmappedField,
+            Severity::Warning,
+            None,
+            format!("source type `{ty}` has no mapping: {n} documents not loaded"),
+            json!({"type": ty, "count": n}),
+        )?;
+    }
+
+    // New paths (parents first, so `{parent.path}` resolves) and old URLs.
+    let by_id: HashMap<ItemId, &Document> = docs.iter().map(|d| (d.id, d)).collect();
+    for d in &docs {
+        if let Some(u) = &d.source.url {
+            l.ids.urls.insert(d.id, u.clone());
+        }
+    }
+    let depth = |d: &Document| {
+        let (mut n, mut cur, mut seen) = (0usize, d.parent, HashSet::new());
+        while let Some(p) = cur.filter(|p| seen.insert(*p)) {
+            n += 1;
+            cur = by_id.get(&p).and_then(|d| d.parent);
+        }
+        n
+    };
+    // Sort by tree depth (topological: a parent is always shallower), then path depth.
+    todo.sort_by_key(|(d, ..)| (depth(d), d.path.matches('/').count()));
+    for (d, tm, _) in &todo {
+        let Some(pattern) = &tm.path else { continue };
+        let parent = match d.parent {
+            Some(p) => l.ids.paths.get(&p).cloned(),
+            None => Some(String::new()),
+        };
+        match paths::render(pattern, d, parent.as_deref()) {
+            Ok(p) => {
+                l.ids.paths.insert(d.id, p.clone());
+                if let Some(r) = l.ids.refs.get_mut(&d.id) {
+                    r.path = Some(p);
+                }
+            }
+            Err(e) => {
+                l.ctx.issue(
+                    IssueKind::SchemaMismatch,
+                    Severity::Warning,
+                    Some(d.id),
+                    format!("no new URL path: {e}"),
+                    json!({"pattern": pattern}),
+                )?;
+            }
+        }
+    }
+
+    // Pass 1.
+    let total = todo.len() as u64;
+    let mut created: Vec<(&Document, &TypeMap, &str, Value)> = vec![];
+    for (i, (d, tm, coll)) in todo.iter().enumerate() {
+        if l.cancelled() {
+            return Ok(());
+        }
+        l.ctx
+            .progress(i as u64 + 1, Some(total), format!("create {coll}"));
+        let key = match key_of(tm, d) {
+            Ok(k) => k,
+            Err(e) => {
+                schema_fail(l, d.id, e)?;
+                continue;
+            }
+        };
+        let draft = is_draft(d, tm);
+        let full = build(l, d, tm, coll);
+        if !draft
+            && let Some(fields) = l.coll(coll).map(|c| &c.fields)
+            && let Some(gap) = required_gap(fields, &full.data, "")
+        {
+            schema_fail(
+                l,
+                d.id,
+                format!("required field `{coll}.{gap}` is empty after mapping"),
+            )?;
+            continue;
+        }
+        let required = |k: &str| {
+            l.coll(coll)
+                .is_some_and(|c| c.fields.iter().any(|f| f.name == k && f.required))
+        };
+        let mut first: Map<String, Value> = full
+            .data
+            .into_iter()
+            .filter(|(k, _)| !full.refs.contains(k) || required(k))
+            .collect();
+        settle_nulls(l.coll(coll).map(|c| &c.fields[..]), &mut first);
+        if !l.apply() {
+            let id = l.placeholder(d.id, coll);
+            created.push((d, tm, coll, id));
+            continue;
+        }
+        match l
+            .upsert(d.id, coll, &tm.key_field, &key, Value::Object(first), draft)
+            .await?
+        {
+            Ok(id) => created.push((d, tm, coll, id)),
+            Err(e) => l.fail(d.id, KIND, coll, e)?,
+        }
+    }
+
+    // Pass 2.
+    let total = created.len() as u64;
+    for (i, (d, tm, coll, id)) in created.into_iter().enumerate() {
+        if l.cancelled() {
+            return Ok(());
+        }
+        l.ctx
+            .progress(i as u64 + 1, Some(total), format!("fill {coll}"));
+        let draft = is_draft(d, tm);
+        let Built {
+            mut data, issues, ..
+        } = build(l, d, tm, coll);
+        settle_nulls(l.coll(coll).map(|c| &c.fields[..]), &mut data);
+        let partial = l.emit(d.id, issues)?;
+        let body = Value::Object(data);
+        let Some(client) = l.client.clone() else {
+            let mut body = body;
+            body[&tm.key_field] = key_of(tm, d).unwrap_or_default();
+            l.preview(
+                coll,
+                d.id,
+                &crate::destinations::payload::client::prepare(&body, draft),
+            )?;
+            l.finish(d.id, KIND, partial)?;
+            continue;
+        };
+        match client.update(coll, &id, &body, draft).await {
+            Ok(_) => l.finish(d.id, KIND, partial)?,
+            Err(e) => l.fail(d.id, KIND, coll, format!("{e:#}"))?,
+        }
+    }
+    Ok(())
+}
+
+fn schema_fail(l: &Loader, id: ItemId, error: String) -> Result<()> {
+    l.ctx.issue(
+        IssueKind::SchemaMismatch,
+        Severity::Error,
+        Some(id),
+        error.clone(),
+        json!({}),
+    )?;
+    l.status(id, KIND, porter_model::ItemStatus::Failed { error })
+}
+
+/// Published writes the live doc; anything else maps through `status` (default draft).
+fn is_draft(d: &Document, tm: &TypeMap) -> bool {
+    if d.status == DocStatus::Published {
+        return false;
+    }
+    let wire = serde_json::to_value(d.status)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+    tm.status.get(&wire).is_none_or(|s| s != "published")
+}
+
+/// The upsert key: the item id, or for `key_type = "number"` the source id's trailing number.
+fn key_of(tm: &TypeMap, d: &Document) -> Result<Value, String> {
+    match tm.key_type {
+        KeyType::Text => Ok(json!(d.id.to_string())),
+        KeyType::Number => {
+            let sid = &d.source.source_id;
+            let digits: String = sid
+                .chars()
+                .rev()
+                .take_while(char::is_ascii_digit)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            digits
+                .parse::<u64>()
+                .map(|n| json!(n))
+                .map_err(|_| format!("key_type is number but source id `{sid}` has no number"))
+        }
+    }
+}
+
+/// A document field by its neutral path; `seo.*`, `created` and `updated` name the
+/// document's own fields when no custom field has that name.
+fn lookup(d: &Document, path: &str) -> FieldValue {
+    if let Some(v) = d.fields.get(path) {
+        return v.clone();
+    }
+    let text = |s: &Option<String>| s.clone().map_or(FieldValue::Null, FieldValue::Text);
+    match path {
+        "seo.title" => text(&d.seo.title),
+        "seo.description" => text(&d.seo.description),
+        "seo.canonical" => text(&d.seo.canonical),
+        "seo.og_title" => text(&d.seo.og_title),
+        "seo.og_description" => text(&d.seo.og_description),
+        "seo.noindex" => FieldValue::Bool(d.seo.noindex),
+        "seo.og_image" => d.seo.og_image.map_or(FieldValue::Null, FieldValue::Media),
+        "created" => d.created.map_or(FieldValue::Null, FieldValue::Date),
+        "updated" => d.updated.map_or(FieldValue::Null, FieldValue::Date),
+        _ => FieldValue::Null,
+    }
+}
+
+fn has_refs(v: &FieldValue) -> bool {
+    match v {
+        FieldValue::RichText(_)
+        | FieldValue::Layout(_)
+        | FieldValue::Media(_)
+        | FieldValue::Doc(_) => true,
+        FieldValue::List(items) => items.iter().any(has_refs),
+        FieldValue::Object(m) => m.values().any(has_refs),
+        _ => false,
+    }
+}
+
+fn build(l: &Loader, d: &Document, tm: &TypeMap, coll: &str) -> Built {
+    let fields = l.coll(coll).map(|c| &c.fields[..]);
+    let mut b = Built {
+        data: Map::new(),
+        refs: HashSet::new(),
+        issues: vec![],
+    };
+    b.data.insert("title".into(), json!(d.title));
+    b.data.insert("slug".into(), json!(d.slug));
+    for (src, fm) in tm.fields.iter().filter(|(_, fm)| !fm.drop) {
+        let v = match apply(&lookup(d, src), &fm.transform) {
+            Ok(v) => v,
+            Err(e) => {
+                b.issues.push(PendingIssue {
+                    kind: IssueKind::SchemaMismatch,
+                    severity: Severity::Warning,
+                    message: format!("`{}.{src}` not written: {e}", d.doc_type),
+                    details: json!({"field": src, "to": fm.to}),
+                });
+                FieldValue::Null
+            }
+        };
+        if has_refs(&v) {
+            let top = fm.to.split('.').next().unwrap_or(&fm.to);
+            b.refs.insert(top.to_string());
+        }
+        let f = fields.and_then(|fs| find(fs, &fm.to));
+        let j = value(l, &v, f, &mut b.issues);
+        set_path(&mut b.data, &fm.to, j);
+    }
+    // nested-docs' `parent`: plugin-added, so usually not in the read schema.
+    let pf = fields.and_then(|fs| find(fs, "parent"));
+    match d.parent {
+        Some(p) => {
+            b.refs.insert("parent".into());
+            let v = match l.ids.get(p) {
+                Some(_) => l.relation(p, pf, IssueKind::ParentMissing, &mut b.issues),
+                None => {
+                    b.issues.push(PendingIssue {
+                        kind: IssueKind::ParentMissing,
+                        severity: Severity::Warning,
+                        message: format!("parent {p} is not loaded"),
+                        details: json!({"parent": p, "old_url": l.ids.old_url(p)}),
+                    });
+                    Value::Null
+                }
+            };
+            b.data.insert("parent".into(), v);
+        }
+        None if pf.is_some() => {
+            b.data.insert("parent".into(), Value::Null);
+        }
+        None => {}
+    }
+    b
+}
+
+/// A neutral value as Payload JSON for field `f` (when the schema knows it).
+fn value(l: &Loader, v: &FieldValue, f: Option<&DestField>, out: &mut Vec<PendingIssue>) -> Value {
+    let raw = l.ctx.config.mapping.raw_block.as_deref();
+    match v {
+        FieldValue::Null => Value::Null,
+        FieldValue::Text(s) => json!(s),
+        FieldValue::Number(n) => json!(n),
+        FieldValue::Bool(b) => json!(b),
+        FieldValue::Date(d) => json!(d.to_rfc3339()),
+        FieldValue::RichText(rt) => {
+            let (j, issues) = to_lexical(rt, &l.ids, raw);
+            out.extend(issues);
+            j
+        }
+        FieldValue::Layout(blocks) => {
+            let (arr, issues) = to_blocks(blocks, &l.ctx.config.mapping.blocks, &l.ids, raw);
+            out.extend(issues);
+            let mut v = Value::Array(arr);
+            wrap_polymorphic(l, &mut v, out);
+            v
+        }
+        FieldValue::Media(id) => l.relation(*id, f, IssueKind::MissingMedia, out),
+        FieldValue::Doc(id) => l.relation(*id, f, IssueKind::UnresolvedRelation, out),
+        // Array rows and hasMany items both take `f`: rows read its sub-fields.
+        FieldValue::List(items) => {
+            Value::Array(items.iter().map(|i| value(l, i, f, out)).collect())
+        }
+        FieldValue::Object(m) => Value::Object(
+            m.iter()
+                .map(|(k, v)| {
+                    let sub = f.and_then(|f| f.fields.iter().find(|x| &x.name == k));
+                    (k.clone(), value(l, v, sub, out))
+                })
+                .collect(),
+        ),
+    }
+}
+
+/// The blocks writer emits relations as plain ids; a polymorphic block field needs
+/// `{relationTo, value}`, so find the collection among loaded items with that id.
+// ponytail: linear scan of the IdMap per polymorphic value; index by id if layouts get big.
+fn wrap_polymorphic(l: &Loader, v: &mut Value, out: &mut Vec<PendingIssue>) {
+    match v {
+        Value::Array(a) => a.iter_mut().for_each(|x| wrap_polymorphic(l, x, out)),
+        Value::Object(o) => {
+            let fields = o
+                .get("blockType")
+                .and_then(Value::as_str)
+                .and_then(|slug| l.schema.as_ref()?.blocks.get(slug));
+            for (k, x) in o.iter_mut() {
+                let f = fields.and_then(|fs| fs.iter().find(|f| &f.name == k));
+                match f {
+                    Some(f) if f.polymorphic && !x.is_null() && !x.is_object() => {
+                        let hits: Vec<String> = l
+                            .ids
+                            .refs
+                            .values()
+                            .filter(|r| r.id == *x && f.relation_to.contains(&r.collection))
+                            .map(|r| r.collection.clone())
+                            .collect();
+                        if let [c] = hits.as_slice() {
+                            *x = json!({"relationTo": c, "value": x.clone()});
+                        } else {
+                            out.push(PendingIssue {
+                                kind: IssueKind::UnresolvedRelation,
+                                severity: Severity::Warning,
+                                message: format!(
+                                    "block field `{k}` is polymorphic but id {x} matches {} loaded collections",
+                                    hits.len()
+                                ),
+                                details: json!({"field": k, "id": x.clone()}),
+                            });
+                            *x = Value::Null;
+                        }
+                    }
+                    _ => wrap_polymorphic(l, x, out),
+                }
+            }
+        }
+        _ => {}
+    }
+}

@@ -2,6 +2,7 @@
 pub mod blocks;
 pub mod client;
 pub mod lexical;
+mod load;
 pub mod schema_check;
 pub mod schema_generate;
 pub mod schema_prompt;
@@ -127,21 +128,23 @@ impl Destination for PayloadDestination {
         Ok(())
     }
 
-    async fn load(&self, _ctx: &StageCtx, _apply: bool) -> Result<()> {
-        bail!("not implemented yet")
+    async fn load(&self, ctx: &StageCtx, apply: bool) -> Result<()> {
+        let dir = self
+            .cfg
+            .config_dir
+            .as_ref()
+            .map(|d| ctx.project.dir().join(d));
+        load::run(ctx, || self.client(), dir, apply).await
     }
 
     async fn count(&self, _ctx: &StageCtx, dest_type: &str) -> Result<u64> {
         self.client()?.count(dest_type).await
     }
 
-    async fn fetch_loaded(
-        &self,
-        _ctx: &StageCtx,
-        _id: ItemId,
-    ) -> Result<Option<serde_json::Value>> {
-        // Task 21 adds the dest_ids table this needs.
-        Ok(None)
+    /// The loaded doc for `id` (depth 0, latest draft); None if it wasn't loaded, landed
+    /// in a global, or is gone from Payload.
+    async fn fetch_loaded(&self, ctx: &StageCtx, id: ItemId) -> Result<Option<serde_json::Value>> {
+        load::fetch(&self.client()?, ctx, id).await
     }
 }
 

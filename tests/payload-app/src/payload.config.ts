@@ -78,6 +78,29 @@ export default buildConfig({
       ],
     },
   ],
+  globals: [
+    {
+      slug: 'navigation',
+      fields: [
+        {
+          name: 'main',
+          type: 'array',
+          fields: [
+            { name: 'label', type: 'text' },
+            { name: 'url', type: 'text' },
+            {
+              name: 'children',
+              type: 'array',
+              fields: [
+                { name: 'label', type: 'text' },
+                { name: 'url', type: 'text' },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
   plugins: [
     nestedDocsPlugin({ collections: ['pages'] }),
     formBuilderPlugin({}),

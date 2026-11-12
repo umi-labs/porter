@@ -120,17 +120,50 @@ impl PayloadClient {
         value: &Value,
     ) -> Result<Option<Value>> {
         let v = key_string(value)?;
-        let req = self.req(Method::GET, collection).query(&[
-            (format!("where[{field}][equals]"), v.as_str()),
-            ("limit".into(), "1"),
-            ("depth".into(), "0"),
-            ("draft".into(), "true"),
+        self.find_one(collection, &[(format!("where[{field}][equals]"), v)])
+            .await
+    }
+
+    /// The one doc matching `filter` (raw `where[...]` query pairs), drafts included.
+    /// More than one match is an error.
+    pub async fn find_one(
+        &self,
+        collection: &str,
+        filter: &[(String, String)],
+    ) -> Result<Option<Value>> {
+        let req = self.req(Method::GET, collection).query(filter).query(&[
+            ("limit", "1"),
+            ("depth", "0"),
+            ("draft", "true"),
         ]);
         let body = self.send(req).await?;
         if body["totalDocs"].as_u64().unwrap_or(0) > 1 {
-            bail!("duplicate key {field}={v} in {collection}");
+            let what: Vec<String> = filter
+                .iter()
+                .map(|(k, v)| {
+                    let field = k.strip_prefix("where[").and_then(|k| k.split(']').next());
+                    format!("{}={v}", field.unwrap_or(k))
+                })
+                .collect();
+            bail!("duplicate key {} in {collection}", what.join("&"));
         }
         Ok(body["docs"].as_array().and_then(|d| d.first()).cloned())
+    }
+
+    /// One doc by id (depth 0, latest draft), or None if it doesn't exist.
+    pub async fn get(&self, collection: &str, id: &Value) -> Result<Option<Value>> {
+        let path = format!("{collection}/{}", key_string(id)?);
+        let req = self
+            .req(Method::GET, &path)
+            .query(&[("depth", "0"), ("draft", "true")]);
+        let label = self.label(&req);
+        let res = send_with_retry(req, RETRIES)
+            .await
+            .with_context(|| label.clone())?;
+        if res.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        finish(&label, res).await.map(Some)
     }
 
     /// Unkeyed create: sent once, never retried, since a retry after a commit would
@@ -222,7 +255,7 @@ impl PayloadClient {
 
     pub async fn update_global(&self, slug: &str, data: &Value) -> Result<Value> {
         let req = self.req(Method::POST, &format!("globals/{slug}"));
-        let body = self.send(req.json(&strip_nulls(data.clone()))).await?;
+        let body = self.send(req.json(data)).await?;
         Ok(match body.get("result") {
             Some(r) => r.clone(),
             None => body,
@@ -248,9 +281,11 @@ fn draft_query(req: RequestBuilder, draft: bool) -> RequestBuilder {
     }
 }
 
-/// Sets `_status` to match the draft flag (so the main row is never left stale) and strips nulls.
-fn prepare(data: &Value, draft: bool) -> Value {
-    let mut v = strip_nulls(data.clone());
+/// The body a create/update sends: `data` plus `_status` matching the draft flag (so the
+/// main row is never left stale). Nulls go as given: they clear fields, so the caller
+/// decides, per the schema, where Payload needs `[]` instead.
+pub fn prepare(data: &Value, draft: bool) -> Value {
+    let mut v = data.clone();
     if let Some(o) = v.as_object_mut() {
         let status = if draft { "draft" } else { "published" };
         o.insert("_status".into(), Value::String(status.into()));
@@ -258,9 +293,7 @@ fn prepare(data: &Value, draft: bool) -> Value {
     v
 }
 
-/// Drops `null` object members recursively: Payload rejects `null` for array/blocks fields.
-// ponytail: also drops nulls meant to clear scalar fields; send per-field empties once the
-// writer knows the schema (Task 20).
+/// Drops `null` object members recursively; for upload creates, where a null clears nothing.
 fn strip_nulls(v: Value) -> Value {
     match v {
         Value::Object(o) => Value::Object(
