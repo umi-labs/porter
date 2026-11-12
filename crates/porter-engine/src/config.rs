@@ -32,10 +32,10 @@ pub struct SourceConfig {
     pub adapter: String,
 }
 
-/// One connector, tagged by `kind`. Variant bodies are untyped until the
-/// tasks that build each connector give them fields.
+/// One connector, tagged by `kind`. Unknown keys are errors, so a credential pasted in
+/// (`password = "..."`) is refused rather than silently ignored.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ConnectorConfig {
     Crawl {
         url: String,
@@ -179,9 +179,18 @@ impl ProjectConfig {
             "destination.auth_collection",
             &self.destination.auth_collection,
         );
+        // Credentials never go in porter.toml, so a URL carrying `user:pass@` is refused
+        // (and not echoed back, since that would print the password).
         let mut url_ok = |key: &str, v: &str| {
-            if !v.trim().is_empty() && ::url::Url::parse(v).is_err() {
-                errs.push(format!("{key} is not a valid URL: {v}"));
+            if v.trim().is_empty() {
+                return;
+            }
+            match ::url::Url::parse(v) {
+                Err(_) => errs.push(format!("{key} is not a valid URL: {v}")),
+                Ok(u) if !u.username().is_empty() || u.password().is_some() => errs.push(format!(
+                    "{key} must not contain credentials (user:pass@); use the env vars or keyring instead"
+                )),
+                Ok(_) => {}
             }
         };
         url_ok("destination.url", &self.destination.url);
@@ -189,6 +198,17 @@ impl ProjectConfig {
             "verify.site_url",
             self.verify.site_url.as_deref().unwrap_or(""),
         );
+        for (i, c) in self.connectors.iter().enumerate() {
+            match c {
+                ConnectorConfig::Crawl { url, .. } | ConnectorConfig::WpRest { url, .. } => {
+                    url_ok(&format!("connectors[{i}].url"), url)
+                }
+                ConnectorConfig::WpDb {
+                    site_url: Some(u), ..
+                } => url_ok(&format!("connectors[{i}].site_url"), u),
+                _ => {}
+            }
+        }
         for (i, r) in self.redirects.iter().enumerate() {
             if r.from.trim().is_empty() {
                 errs.push(format!("redirects[{i}].from is missing"));
@@ -216,5 +236,40 @@ mod typo_tests {
         )
         .unwrap_err();
         assert!(e.to_string().contains("api_key"), "{e}");
+    }
+}
+
+#[cfg(test)]
+mod connector_key_tests {
+    use super::*;
+
+    #[test]
+    fn unknown_connector_key_errors() {
+        let e = toml::from_str::<ProjectConfig>(
+            "[[connectors]]\nkind = \"wp-rest\"\nurl = \"https://example.com\"\npassword = \"hunter2\"\n",
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("password"), "{e}");
+    }
+
+    #[test]
+    fn url_userinfo_is_rejected() {
+        let mut c: ProjectConfig = toml::from_str(
+            "[project]\nname = \"x\"\n[source]\nadapter = \"wordpress\"\n[destination]\nadapter = \"payload\"\nurl = \"https://u:p@cms.example.com\"\napi_key_env = \"K\"\n[verify]\nsite_url = \"https://u@site.example.com\"\n[[connectors]]\nkind = \"crawl\"\nurl = \"https://u:p@example.com\"\n[[connectors]]\nkind = \"wp-rest\"\nurl = \"https://example.com\"\n",
+        )
+        .unwrap();
+        let errs = c.validate();
+        for k in ["destination.url", "verify.site_url", "connectors[0].url"] {
+            assert!(
+                errs.iter()
+                    .any(|e| e.starts_with(k) && e.contains("credentials")),
+                "{k}: {errs:?}"
+            );
+        }
+        assert!(!errs.iter().any(|e| e.contains("p@")), "{errs:?}");
+        c.destination.url = "https://cms.example.com".into();
+        c.verify.site_url = None;
+        c.connectors.remove(0);
+        assert!(c.validate().is_empty(), "{:?}", c.validate());
     }
 }
