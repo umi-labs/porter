@@ -61,6 +61,9 @@ export function makeApi(db: Db, getActor: GetActor) {
     getVersion: route<P>((a, _r, p) => ver.getVersion(db, a, slugOf(p), p.n)),
     initVersion: route<P>(async (a, r, p) => ver.initVersion(db, a, slugOf(p), await body(r))),
     commitVersion: route<P>(async (a, r, p) => ver.commitVersion(db, a, slugOf(p), await body(r)), 201),
+    uploadMediaUrls: route<P>(async (a, r, p) =>
+      ver.uploadMediaUrls(db, a, slugOf(p), p.upload_id, await body(r)),
+    ),
     mediaUrls: route<P>(async (a, r, p) => ver.mediaUrls(db, a, slugOf(p), await body(r))),
   };
 }

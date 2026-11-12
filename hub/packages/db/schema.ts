@@ -98,6 +98,8 @@ export const projectVersion = pgTable(
     number: integer("number").notNull(),
     /** Object key of the tar.zst snapshot (porter.toml, project.db, raw/, reports/); media is separate. */
     snapshotKey: text("snapshot_key").notNull(),
+    /** Hex sha256 of the snapshot, pinned by the signed upload and verified at commit. */
+    snapshotSha256: text("snapshot_sha256"),
     porterVersion: text("porter_version"),
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
     size: bigint("size", { mode: "number" }).notNull().default(0),
@@ -141,7 +143,7 @@ export const versionMedia = pgTable(
     foreignKey({
       columns: [t.projectId, t.sha256],
       foreignColumns: [mediaObject.projectId, mediaObject.sha256],
-    }).onDelete("cascade"),
+    }).onDelete("no action"),
   ],
 );
 
@@ -155,6 +157,8 @@ export const versionUpload = pgTable("version_upload", {
     .notNull()
     .references(() => user.id, { onDelete: "cascade" }),
   /** Every hash the push references, and the subset that was missing at init. */
+  baseVersion: integer("base_version"),
+  snapshotSha256: text("snapshot_sha256").notNull(),
   mediaHashes: text("media_hashes").array().notNull(),
   missing: text("missing").array().notNull(),
   createdAt: createdAt(),
