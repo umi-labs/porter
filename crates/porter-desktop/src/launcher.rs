@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{
-    AppContext, Context, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
-    Styled, Window, div,
+    AppContext, Context, InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render,
+    SharedString, StatefulInteractiveElement, Styled, Window, div,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{ActiveTheme, Root, WindowExt, h_flex, v_flex};
@@ -91,17 +91,26 @@ impl Render for Launcher {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| path.display().to_string());
-            Button::new(("recent", i))
-                .ghost()
+            // A plain row, not a Button: a Button has a fixed height that clips two lines.
+            v_flex()
+                .id(("recent", i))
                 .w_full()
+                .min_w_0()
+                .overflow_hidden()
+                .px_3()
+                .py_2()
+                .gap_1()
+                .rounded_md()
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.secondary_hover))
+                .child(div().w_full().truncate().child(name))
                 .child(
-                    v_flex().items_start().child(name).child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .truncate()
-                            .child(path.display().to_string()),
-                    ),
+                    div()
+                        .w_full()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .truncate()
+                        .child(path.display().to_string()),
                 )
                 .on_click(
                     cx.listener(move |this, _, window, cx| this.open(path.clone(), window, cx)),
@@ -134,7 +143,7 @@ impl Render for Launcher {
                     "Recent projects"
                 },
             ))
-            .child(v_flex().gap_1().children(rows))
+            .child(v_flex().w_full().min_w_0().gap_1().children(rows))
             .children(Root::render_dialog_layer(window, cx))
     }
 }

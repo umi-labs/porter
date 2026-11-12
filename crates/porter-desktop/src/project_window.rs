@@ -602,7 +602,16 @@ impl ProjectWindow {
         } else {
             config.project.name.clone()
         };
-        let route = format!("{} → {}", config.source.adapter, config.destination.adapter);
+        let has_dest = !config.destination.adapter.is_empty();
+        let route = format!(
+            "{} → {}",
+            config.source.adapter,
+            if has_dest {
+                &config.destination.adapter
+            } else {
+                "no destination"
+            }
+        );
         h_flex()
             .w_full()
             .px_4()
@@ -647,9 +656,8 @@ impl ProjectWindow {
                     )
                     .child(
                         Button::new("apply-load")
-                            .danger()
                             .label("Apply load…")
-                            .disabled(busy)
+                            .disabled(busy || !has_dest)
                             .on_click(cx.listener(|this, _, _, cx| this.open_apply(cx))),
                     ),
             )

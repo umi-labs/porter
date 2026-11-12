@@ -6,12 +6,13 @@ use gpui::{
     Styled, div,
 };
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::tooltip::Tooltip;
 use gpui_component::{ActiveTheme, Disableable, Theme, h_flex, v_flex};
 use porter_engine::session::RunPlan;
 use porter_model::Severity;
 
 use crate::project_window::{ProjectWindow, dry};
-use crate::vm::pipeline::{StageRow, Tone};
+use crate::vm::pipeline::{StageRow, Tone, relative_time};
 
 pub fn tone_color(t: Tone, theme: &Theme) -> Hsla {
     match t {
@@ -95,11 +96,12 @@ fn stage_card(w: &ProjectWindow, r: StageRow, cx: &mut Context<ProjectWindow>) -
                 .text_color(tone_color(r.tone, theme))
                 .child(r.status.clone()),
         )
-        .children(
-            r.last_run
-                .clone()
-                .map(|t| muted(format!("last run {t}"), cx)),
-        )
+        .children(r.last_run.clone().map(|t| {
+            let shown = relative_time(&t, chrono::Utc::now());
+            muted(format!("last run {shown}"), cx)
+                .id(("last-run", stage as usize))
+                .tooltip(move |window, cx| Tooltip::new(t.clone()).build(window, cx))
+        }))
         .children(counts.map(|c| muted(c, cx)))
         .child(
             h_flex()

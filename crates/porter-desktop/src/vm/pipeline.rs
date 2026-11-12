@@ -333,6 +333,21 @@ impl Pipeline {
     }
 }
 
+/// A run time for a card: "just now", "5 min ago", "2 h ago", or the date once it is a day old.
+/// Anything that does not parse is shown as it came.
+pub fn relative_time(iso: &str, now: chrono::DateTime<chrono::Utc>) -> String {
+    let Ok(at) = chrono::DateTime::parse_from_rfc3339(iso) else {
+        return iso.to_string();
+    };
+    let s = (now - at.with_timezone(&chrono::Utc)).num_seconds();
+    match s {
+        ..60 => "just now".into(),
+        60..3600 => format!("{} min ago", s / 60),
+        3600..86400 => format!("{} h ago", s / 3600),
+        _ => at.format("%-d %b %Y").to_string(),
+    }
+}
+
 /// Open issues per kind with the worst severity in each, most severe kinds first.
 #[derive(Clone, Debug, PartialEq)]
 pub struct KindCount {
@@ -382,6 +397,20 @@ mod tests {
     use super::*;
     use porter_engine::session::StageOpts;
     use porter_engine::stage::SchemaMode;
+
+    #[test]
+    fn relative_times() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-12T12:00:00Z")
+            .unwrap()
+            .to_utc();
+        let t = |iso| relative_time(iso, now);
+        assert_eq!(t("2026-11-12T11:59:30.040Z"), "just now");
+        assert_eq!(t("2026-11-12T12:05:00Z"), "just now", "clock skew");
+        assert_eq!(t("2026-11-12T11:58:03.040Z"), "1 min ago");
+        assert_eq!(t("2026-11-12T09:00:00Z"), "3 h ago");
+        assert_eq!(t("2026-11-11T11:00:00Z"), "11 Nov 2026");
+        assert_eq!(t("garbage"), "garbage");
+    }
 
     fn run(summary: Option<Summary>, dry_run: bool) -> RunRow {
         RunRow {
