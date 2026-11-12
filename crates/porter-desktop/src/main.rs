@@ -2,8 +2,11 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 mod app;
+mod bridge;
 mod launcher;
+mod project_window;
 mod recent;
+mod sidebar;
 
 fn main() {
     gpui::Application::new().run(|cx| {

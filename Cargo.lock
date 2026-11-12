@@ -5408,9 +5408,14 @@ dependencies = [
  "gpui",
  "gpui-component",
  "porter-engine",
+ "porter-model",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "tokio-util",
+ "url",
+ "uuid",
 ]
 
 [[package]]

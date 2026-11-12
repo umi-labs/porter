@@ -1,0 +1,257 @@
+//! The engine side of the app: a tokio runtime created once, and per project window a
+//! `Bridge` that runs stages and store queries on it and sends results back over a
+//! channel. The window drains that channel on a GPUI task; nothing here touches GPUI.
+
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, OnceLock};
+
+use porter_engine::events::Event;
+use porter_engine::session::{Overview, RunOutcome, RunPlan, Session};
+use tokio::runtime::Runtime;
+use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+use tokio_util::sync::CancellationToken;
+
+pub enum UiEvent {
+    Engine(Event),
+    /// The engine's event channel overflowed and this many events never arrived.
+    Lagged(u64),
+    Data(DataResult),
+    RunDone(RunOutcome),
+}
+
+/// Store and file queries, run off the UI thread. Errors are kept verbatim.
+pub enum DataResult {
+    Overview(Result<Overview, String>),
+}
+
+/// The app's one tokio runtime (multi-thread), created on first use.
+pub fn runtime() -> &'static Runtime {
+    static RT: OnceLock<Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_name("porter-engine")
+            .build()
+            .expect("could not start the tokio runtime")
+    })
+}
+
+pub struct Bridge {
+    session: Arc<Session>,
+    tx: Sender<UiEvent>,
+    /// Run outcomes go through the event forwarder (see `new`).
+    done: tokio::sync::mpsc::UnboundedSender<RunOutcome>,
+    /// Cancels the run in flight, if any.
+    cancel: Option<CancellationToken>,
+}
+
+impl Bridge {
+    pub fn new(session: Arc<Session>) -> (Bridge, Receiver<UiEvent>) {
+        let (tx, rx) = channel();
+        let (done, mut done_rx) = tokio::sync::mpsc::unbounded_channel::<RunOutcome>();
+        let mut events = session.subscribe();
+        let fwd = tx.clone();
+        // One forwarder for engine events and run outcomes, so `RunDone` can never
+        // overtake the events of the run it ends.
+        runtime().spawn(async move {
+            loop {
+                let e = tokio::select! {
+                    biased;
+                    r = events.recv() => match r {
+                        Ok(e) => UiEvent::Engine(e),
+                        Err(RecvError::Lagged(n)) => UiEvent::Lagged(n),
+                        Err(RecvError::Closed) => break,
+                    },
+                    Some(o) = done_rx.recv() => {
+                        // The run has ended, so all its events are already queued.
+                        loop {
+                            let e = match events.try_recv() {
+                                Ok(e) => UiEvent::Engine(e),
+                                Err(TryRecvError::Lagged(n)) => UiEvent::Lagged(n),
+                                Err(_) => break,
+                            };
+                            let _ = fwd.send(e);
+                        }
+                        UiEvent::RunDone(o)
+                    }
+                };
+                // The window is gone.
+                if fwd.send(e).is_err() {
+                    break;
+                }
+            }
+        });
+        (
+            Bridge {
+                session,
+                tx,
+                done,
+                cancel: None,
+            },
+            rx,
+        )
+    }
+
+    pub fn session(&self) -> &Arc<Session> {
+        &self.session
+    }
+
+    /// Starts `plan`. Always ends with one `RunDone`, also when the session refuses it.
+    pub fn run(&mut self, plan: RunPlan) {
+        let mine = CancellationToken::new();
+        self.cancel = Some(mine.clone());
+        let (session, done) = (self.session.clone(), self.done.clone());
+        // Session::run reads porter.toml, so even starting happens off the UI thread.
+        runtime().spawn(async move {
+            let outcome = match session.run(plan) {
+                Ok(h) => {
+                    let token = h.cancel_token();
+                    let mut wait = std::pin::pin!(h.wait());
+                    tokio::select! {
+                        o = &mut wait => o,
+                        _ = mine.cancelled() => {
+                            token.cancel();
+                            wait.await
+                        }
+                    }
+                }
+                Err(e) => RunOutcome {
+                    code: 1,
+                    messages: vec![format!("{e:#}")],
+                    ..Default::default()
+                },
+            };
+            let _ = done.send(outcome);
+        });
+    }
+
+    /// Asks the run in flight to stop at its next safe point (it ends resumable).
+    pub fn cancel(&self) {
+        if let Some(c) = &self.cancel {
+            c.cancel();
+        }
+    }
+
+    /// Re-reads what the window shows.
+    pub fn refresh(&self) {
+        let (session, tx) = (self.session.clone(), self.tx.clone());
+        runtime().spawn(async move {
+            let o = session.overview().await.map_err(|e| format!("{e:#}"));
+            let _ = tx.send(UiEvent::Data(DataResult::Overview(o)));
+        });
+    }
+}
+
+/// A closed window stops its run: the engine ends it at a safe point, resumable.
+impl Drop for Bridge {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+/// Keeps only the newest `Progress` per stage in a drained batch; everything else, and
+/// the order, is untouched. Progress is a gauge, so older readings are worthless.
+pub fn coalesce(batch: Vec<UiEvent>) -> Vec<UiEvent> {
+    let mut seen = Vec::new();
+    let mut out: Vec<UiEvent> = batch
+        .into_iter()
+        .rev()
+        .filter(|e| match e {
+            UiEvent::Engine(Event::Progress { stage, .. }) => {
+                let newer = seen.contains(stage);
+                seen.push(*stage);
+                !newer
+            }
+            _ => true,
+        })
+        .collect();
+    out.reverse();
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use porter_engine::events::Summary;
+    use porter_model::Stage;
+
+    fn progress(stage: Stage, done: u64) -> UiEvent {
+        UiEvent::Engine(Event::Progress {
+            stage,
+            done,
+            total: Some(100),
+            label: "items".into(),
+        })
+    }
+
+    fn done_of(e: &UiEvent) -> Option<(Stage, u64)> {
+        match e {
+            UiEvent::Engine(Event::Progress { stage, done, .. }) => Some((*stage, *done)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn coalesces_progress() {
+        let finished = UiEvent::Engine(Event::StageFinished {
+            stage: Stage::Extract,
+            run: porter_engine::store::RunId(uuid::Uuid::nil()),
+            summary: Summary::default(),
+        });
+        let batch = vec![
+            progress(Stage::Extract, 1),
+            UiEvent::Lagged(3),
+            progress(Stage::Extract, 2),
+            progress(Stage::Analyse, 7),
+            progress(Stage::Extract, 3),
+            finished,
+        ];
+        let out = coalesce(batch);
+        let prog: Vec<_> = out.iter().filter_map(done_of).collect();
+        assert_eq!(prog, [(Stage::Analyse, 7), (Stage::Extract, 3)]);
+        // Non-progress events all survive, in order, and the last reading stays before
+        // the stage's end.
+        assert_eq!(out.len(), 4);
+        assert!(matches!(out[0], UiEvent::Lagged(3)));
+        assert!(matches!(
+            out[3],
+            UiEvent::Engine(Event::StageFinished { .. })
+        ));
+    }
+
+    /// The real engine on the app runtime: a run started from a plain (non-tokio) thread
+    /// reports its events and ends with exactly one `RunDone`.
+    #[test]
+    fn run_reports_events_and_done() {
+        let d = tempfile::tempdir().unwrap();
+        porter_engine::project::Project::init(d.path(), "demo", "wordpress").unwrap();
+        let session = Arc::new(Session::open(d.path()).unwrap());
+        let (mut bridge, rx) = Bridge::new(session);
+        bridge.run(RunPlan::Stage(
+            Stage::Normalise,
+            porter_engine::session::StageOpts {
+                refresh: false,
+                apply: false,
+                schema_mode: porter_engine::stage::SchemaMode::Check,
+            },
+        ));
+        let mut started = false;
+        loop {
+            match rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap() {
+                UiEvent::Engine(Event::StageStarted { .. }) => started = true,
+                UiEvent::RunDone(o) => {
+                    assert!(
+                        started,
+                        "RunDone before StageStarted: {:?} {:?}",
+                        o.messages, o.per_stage
+                    );
+                    break;
+                }
+                _ => {}
+            }
+        }
+        bridge.refresh();
+        let got = rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
+        assert!(matches!(got, UiEvent::Data(DataResult::Overview(Ok(_)))));
+    }
+}

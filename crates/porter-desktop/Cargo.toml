@@ -11,6 +11,10 @@ publish = false
 
 [dependencies]
 porter-engine = { path = "../porter-engine" }
+porter-model.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+url.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -21,3 +25,4 @@ gpui-component = "=0.5.1"
 
 [dev-dependencies]
 tempfile.workspace = true
+uuid.workspace = true
