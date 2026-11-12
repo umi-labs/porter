@@ -37,6 +37,9 @@ pub enum UiEvent {
     RunDone(RunOutcome),
 }
 
+/// One issue's result in a bulk resolve.
+type ResolveOutcome = (Uuid, Result<(), String>);
+
 /// Store and file queries, run off the UI thread. Errors are kept verbatim.
 pub enum DataResult {
     Overview(Result<Overview, String>),
@@ -78,7 +81,7 @@ pub enum DataResult {
     },
     /// A bulk resolve, one result per issue.
     /// Err: the whole bulk call failed (its task panicked or was cancelled).
-    Resolved(Result<Vec<(Uuid, Result<(), String>)>, String>),
+    Resolved(Result<Vec<ResolveOutcome>, String>),
     /// The kind of the item an issue is about, for the jump.
     Jump(ItemId, Result<ItemKind, String>),
     /// An output folder was handed to the OS (or could not be).

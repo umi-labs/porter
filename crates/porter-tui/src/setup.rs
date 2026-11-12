@@ -530,23 +530,20 @@ fn save_with(dir: &Path, values: &[String], before_persist: &dyn Fn()) -> Result
         return Err(failure);
     }
     let target = dir.join("porter.toml");
-    let write = || -> Result<()> {
-        use std::io::Write;
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        let mut tmp = tempfile::NamedTempFile::new_in(dir)
-            .with_context(|| format!("creating a temp file in {}", dir.display()))?;
-        tmp.write_all(text.as_bytes())?;
-        before_persist();
-        tmp.persist_noclobber(&target).map_err(|e| {
-            if e.error.kind() == std::io::ErrorKind::AlreadyExists {
-                anyhow::anyhow!("porter.toml was created meanwhile — not overwritten")
+    porter_engine::mapping::edit::write_atomic_noclobber(&target, &text, before_persist).map_err(
+        |e| {
+            let exists = e
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::AlreadyExists);
+            if exists {
+                io(anyhow::anyhow!(
+                    "porter.toml was created meanwhile — not overwritten"
+                ))
             } else {
-                anyhow::Error::new(e.error).context(format!("writing {}", target.display()))
+                io(e)
             }
-        })?;
-        Ok(())
-    };
-    write().map_err(io)
+        },
+    )
 }
 
 /// Env presence, never the value.

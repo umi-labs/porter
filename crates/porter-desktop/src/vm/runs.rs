@@ -119,4 +119,20 @@ mod tests {
         };
         assert_eq!(history_row(Stage::Load, &r).outcome, "clean (dry run)");
     }
+
+    #[test]
+    fn dry_run_history_never_reads_as_a_written_success() {
+        let r = RunRow {
+            id: "r".into(),
+            porter_version: "2.0.0".into(),
+            started_at: "t0".into(),
+            ended_at: Some("t1".into()),
+            summary: Some(Default::default()),
+            dry_run: true,
+        };
+        // The history row is plain text with no tone: it carries no green or ✓, and the
+        // outcome always says "(dry run)".
+        let h = history_row(Stage::Load, &r);
+        assert!(h.outcome.ends_with("(dry run)") && !h.outcome.contains('✓'));
+    }
 }

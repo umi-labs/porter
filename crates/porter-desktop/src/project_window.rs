@@ -122,6 +122,16 @@ impl ProjectWindow {
             weak.update(cx, |this, cx| this.request_close(false, window, cx))
                 .unwrap_or(true)
         });
+        // Cmd-Q skips the window's close hook. Quit handlers get 100 ms (gpui's
+        // SHUTDOWN_TIMEOUT) and cannot hold the app open: cancel the run and give it that
+        // long, best effort.
+        let quit = cx.on_app_quit(|this, cx| {
+            if this.pipeline.cancel_on_quit() {
+                this.cancel(cx);
+            }
+            cx.background_executor().timer(gpui::SHUTDOWN_TIMEOUT)
+        });
+        this._subs.push(quit);
         this.refresh();
         this
     }
@@ -257,29 +267,10 @@ impl ProjectWindow {
         };
         let session = self.bridge.session();
         let dir = mode.output_dir(session.project().dir(), &session.project().reports_dir());
-        self.dest_note = Some(match (o.code, dir) {
-            (0, Some(d)) => {
-                self.bridge.open_path(d.clone());
-                format!("{} done; opening {}", mode.label(), d.display())
-            }
-            (0, None) => format!("{} done", mode.label()),
-            // Check finishes with 2 when it opened error issues: the results are below.
-            (3, _) => format!("{} cancelled — nothing written", mode.label()),
-            (2, None) => format!("{} done; see the issues below", mode.label()),
-            (code, _) => {
-                let why: Vec<_> = o
-                    .per_stage
-                    .iter()
-                    .filter_map(|(_, _, e)| e.clone())
-                    .chain(o.messages.iter().cloned())
-                    .collect();
-                format!(
-                    "{} did not finish (exit {code}): {}",
-                    mode.label(),
-                    why.join("; ")
-                )
-            }
-        });
+        if let (0, Some(d)) = (o.code, &dir) {
+            self.bridge.open_path(d.clone());
+        }
+        self.dest_note = Some(mode.finished_note(o, dir.as_deref()));
     }
 
     fn ask_media(&self, qs: Vec<media::Query>) {

@@ -301,6 +301,35 @@ pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<()> {
     Ok(())
 }
 
+/// Like `write_atomic` for a file that must not exist yet: written and synced under a temp
+/// name, then linked into place without overwriting. An existing file is an
+/// `io::ErrorKind::AlreadyExists` error (downcastable). `before_persist` runs just before
+/// the final step (a test hook for races).
+pub fn write_atomic_noclobber(path: &Path, text: &str, before_persist: &dyn Fn()) -> Result<()> {
+    let dir = match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)
+        .with_context(|| format!("creating a temp file in {}", dir.display()))?;
+    std::io::Write::write_all(&mut tmp, text.as_bytes())?;
+    tmp.as_file().sync_all().context("sync temp file")?;
+    before_persist();
+    tmp.persist_noclobber(path).map_err(|e| {
+        if e.error.kind() == std::io::ErrorKind::AlreadyExists {
+            anyhow::Error::new(e.error)
+        } else {
+            anyhow::Error::new(e.error).context(format!("writing {}", path.display()))
+        }
+    })?;
+    #[cfg(unix)]
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    Ok(())
+}
+
 /// The table under `key`, created (as an implicit header) when absent. `MappingDoc::open`
 /// checked the file's shape, so an existing value here is a table; anything else would
 /// be replaced by one.

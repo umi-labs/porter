@@ -24,12 +24,8 @@ impl Project {
         fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         let path = dir.join(CONFIG_FILE);
         let text = template(name, adapter);
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
+        crate::mapping::edit::write_atomic_noclobber(&path, &text, &|| {})
             .with_context(|| format!("{} already exists or cannot be created", path.display()))?;
-        std::io::Write::write_all(&mut file, text.as_bytes())?;
         Project::open(dir)
     }
 

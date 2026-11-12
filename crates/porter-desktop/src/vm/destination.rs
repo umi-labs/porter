@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use porter_engine::session::{RunPlan, StageOpts};
+use porter_engine::session::{RunOutcome, RunPlan, StageOpts};
 use porter_engine::stage::SchemaMode;
 use porter_model::{Issue, Resolution, Severity, Stage};
 
@@ -53,6 +53,29 @@ impl Mode {
             Mode::Check => None,
             Mode::Generate => Some(project.join("generated").join("payload")),
             Mode::Prompt | Mode::Spec => Some(reports.to_path_buf()),
+        }
+    }
+
+    /// What to tell the user after a run of this mode; `dir` is its output folder, if any
+    /// (opened by the caller when the run finished cleanly).
+    pub fn finished_note(self, o: &RunOutcome, dir: Option<&Path>) -> String {
+        let label = self.label();
+        match (o.code, dir) {
+            (0, Some(d)) => format!("{label} done; opening {}", d.display()),
+            (0, None) => format!("{label} done"),
+            // The run stopped part-way: whatever it already wrote stays where it is.
+            (3, _) => format!("{label} cancelled — output may be incomplete"),
+            // Check finishes with 2 when it opened error issues: the results are below.
+            (2, None) => format!("{label} done; see the issues below"),
+            (code, _) => {
+                let why: Vec<_> = o
+                    .per_stage
+                    .iter()
+                    .filter_map(|(_, _, e)| e.clone())
+                    .chain(o.messages.iter().cloned())
+                    .collect();
+                format!("{label} did not finish (exit {code}): {}", why.join("; "))
+            }
         }
     }
 }
@@ -119,6 +142,18 @@ mod tests {
             details,
             resolution: Resolution::Open,
         }
+    }
+
+    #[test]
+    fn cancelled_schema_run_does_not_claim_nothing_written() {
+        let o = RunOutcome {
+            code: 3,
+            ..Default::default()
+        };
+        let dir = Path::new("/p/generated/payload");
+        let note = Mode::Generate.finished_note(&o, Some(dir));
+        assert_eq!(note, "Generate cancelled — output may be incomplete");
+        assert!(!note.contains("nothing written"));
     }
 
     #[test]

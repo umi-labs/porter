@@ -262,6 +262,14 @@ impl Pipeline {
         }
     }
 
+    /// Cmd-Q: true when a cancel should go out before the app exits. GPUI gives quit
+    /// handlers 100 ms and cannot ask a question, so a writing load is cancelled without
+    /// the confirmation (it stops at a safe point and can be resumed); this is as much
+    /// of `close_step` as quit can honour.
+    pub fn cancel_on_quit(&self) -> bool {
+        self.close_step(true, self.cancelling) == CloseStep::CancelAndWait
+    }
+
     pub fn rows(&self) -> Vec<StageRow> {
         let empty = Overview::default();
         let ov = self.overview.as_ref().unwrap_or(&empty);
@@ -571,5 +579,20 @@ mod tests {
         })
         .unwrap();
         assert_eq!(p.close_step(false, false), CloseStep::ConfirmApply);
+    }
+
+    #[test]
+    fn quit_cancels_any_run_once() {
+        let mut p = Pipeline::default();
+        assert!(!p.cancel_on_quit());
+        p.start(&RunPlan::All {
+            keep_going: false,
+            apply: true,
+        })
+        .unwrap();
+        // A writing load too: quit cannot ask, so it cancels (resumable).
+        assert!(p.cancel_on_quit());
+        assert!(p.cancel());
+        assert!(!p.cancel_on_quit());
     }
 }
