@@ -183,6 +183,14 @@ pub trait Destination: Send + Sync {
     async fn schema(&self, mode: SchemaMode, ctx: &StageCtx) -> Result<()>;
     async fn load(&self, ctx: &StageCtx, apply: bool) -> Result<()>;
     async fn count(&self, ctx: &StageCtx, dest_type: &str) -> Result<u64>;
+    /// Docs in `dest_type` that carry `key_field` (None: the destination's own key for
+    /// loaded items), i.e. the ones a migration wrote, not content that was there before.
+    async fn count_keyed(
+        &self,
+        ctx: &StageCtx,
+        dest_type: &str,
+        key_field: Option<&str>,
+    ) -> Result<u64>;
     async fn fetch_loaded(&self, ctx: &StageCtx, id: ItemId) -> Result<Option<serde_json::Value>>;
     /// Every relation, link, upload and parent in `loaded` (a doc from `fetch_loaded`
     /// that landed in `collection`). Verify's only view into the destination's shapes.

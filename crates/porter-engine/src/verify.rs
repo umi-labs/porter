@@ -10,9 +10,11 @@
 //! Each checked item gets one Verify status: Done, or Failed with its first error. The
 //! check rows go to `raw/verify/checks.json` for the verify report.
 
+use crate::connectors::crawl::site_of;
 use crate::mapping::{MappingConfig, TypeMap, apply, lookup, paths};
 use crate::project::Project;
 use crate::stage::{DestReference, Destination, StageCtx};
+use crate::url::normalise_url;
 use anyhow::{Context, Result};
 use porter_model::{
     Block, Document, FieldValue, Inline, IssueKind, ItemId, ItemKind, ItemStatus, LinkTarget,
@@ -46,7 +48,11 @@ pub struct Checks {
 pub struct CountRow {
     pub collection: String,
     pub expected: u64,
+    /// Destination docs carrying the key field (migrated ones).
     pub actual: u64,
+    /// Every doc in the collection, pre-existing content included.
+    #[serde(default)]
+    pub total: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -164,7 +170,9 @@ fn canonical_ids<T: DeserializeOwned>(ctx: &StageCtx, kind: ItemKind) -> Result<
 // ---- counts ----
 
 /// Per mapped collection (document types, plus media): distinct loaded dest ids against
-/// the destination's count. Distinct, since several items can land on one doc.
+/// the destination docs carrying the type's key field, so content that was there before
+/// the migration doesn't count. Distinct, since several items can land on one doc. The
+/// collection's total goes in the report only.
 async fn counts(
     ctx: &StageCtx,
     dest: &dyn Destination,
@@ -172,12 +180,17 @@ async fn counts(
     loaded: &Loaded,
     checks: &mut Checks,
 ) -> Result<()> {
-    let mut want: BTreeMap<String, HashSet<String>> = BTreeMap::new();
+    // collection -> (key field, None = the destination's own key; loaded dest ids)
+    let mut want: BTreeMap<String, (Option<String>, HashSet<String>)> = BTreeMap::new();
+    // ponytail: types mapped into one collection with different key fields count by the
+    // first one; count per key field if that ever happens.
     for tm in ctx.config.mapping.types.values() {
         if let Some(to) = &tm.to {
-            want.entry(to.clone()).or_default();
+            want.entry(to.clone())
+                .or_insert_with(|| (Some(tm.key_field.clone()), HashSet::new()));
         }
     }
+    let media_coll = &ctx.config.mapping.media.collection;
     let media: Vec<Media> = ctx
         .project
         .store()
@@ -185,27 +198,34 @@ async fn counts(
         .into_iter()
         .map(|(.., m)| m)
         .collect();
+    if media.iter().any(|m| loaded.get(m.id).is_some()) {
+        want.entry(media_coll.clone()).or_default();
+    }
     let ids = docs.iter().map(|d| d.id).chain(media.iter().map(|m| m.id));
-    let media_coll = &ctx.config.mapping.media.collection;
     for id in ids {
         if let Some((c, v)) = loaded.get(id)
-            && (want.contains_key(c) || c == media_coll)
+            && let Some((_, set)) = want.get_mut(c)
         {
-            want.entry(c.clone()).or_default().insert(key(c, v));
+            set.insert(key(c, v));
         }
     }
-    for (collection, ids) in want {
+    for (collection, (key_field, ids)) in want {
         if ctx.cancel.is_cancelled() {
             return Ok(());
         }
         let expected = ids.len() as u64;
-        let actual = dest.count(ctx, &collection).await?;
+        let actual = dest
+            .count_keyed(ctx, &collection, key_field.as_deref())
+            .await?;
+        let total = dest.count(ctx, &collection).await?;
         if actual != expected {
             ctx.issue(
                 IssueKind::SchemaMismatch,
                 Severity::Error,
                 None,
-                format!("{collection}: {expected} loaded but the destination holds {actual}"),
+                format!(
+                    "{collection}: {expected} loaded but the destination holds {actual} migrated docs"
+                ),
                 json!({"collection": collection, "expected": expected, "actual": actual}),
             )?;
         }
@@ -213,6 +233,7 @@ async fn counts(
             collection,
             expected,
             actual,
+            total,
         });
     }
     Ok(())
@@ -251,6 +272,8 @@ async fn structure(
         .filter_map(|d| Some((d, mapping.types.get(&d.doc_type)?)))
         .collect();
     let mut media_exists: HashMap<ItemId, bool> = HashMap::new();
+    // One up-front note when the destination can't see every reference.
+    let mut blind_said = false;
     let total = todo.len() as u64;
     for (n, (d, tm)) in todo.into_iter().enumerate() {
         if ctx.cancel.is_cancelled() {
@@ -271,6 +294,16 @@ async fn structure(
             }),
             Some(doc) => {
                 let got = dest.references(ctx, coll, &doc)?;
+                if !got.complete && !blind_said {
+                    blind_said = true;
+                    ctx.issue(
+                        IssueKind::AccessGap,
+                        Severity::Info,
+                        None,
+                        "bare-id relations can't be verified without destination.config_dir",
+                        json!({}),
+                    )?;
+                }
                 let expected = expected_refs(d, tm, mapping, loaded);
                 checks.refs_checked += expected.len() as u64 + u64::from(d.parent.is_some());
                 parent(d, loaded, &got.refs, &mut problems);
@@ -543,12 +576,12 @@ impl Want<'_> {
 
 // ---- URLs ----
 
-/// The path of `u` (absolute or relative), without a trailing slash (root stays `/`).
-fn norm_path(u: &str) -> Option<String> {
+/// The canonical path (and meaningful query) of `u`, absolute or relative: the URL key
+/// from the first `/`, so `/About` == `/about/` but `/?p=1` != `/`.
+fn path_key(u: &str) -> Option<String> {
     let base = Url::parse("http://h/").ok()?;
-    let p = base.join(u.trim()).ok()?.path().to_string();
-    let t = p.trim_end_matches('/');
-    Some(if t.is_empty() { "/".into() } else { t.into() })
+    let k = normalise_url(u, Some(&base))?.0;
+    Some(k[k.find('/')?..].to_string())
 }
 
 /// The path and query of `u`, to request on the new site.
@@ -561,12 +594,68 @@ fn path_and_query(u: &str) -> Option<String> {
     })
 }
 
-/// Routes that answered 2xx on the old site.
-fn live_routes(ctx: &StageCtx) -> Result<Vec<(ItemId, Route)>> {
-    Ok(canonical_ids::<Route>(ctx, ItemKind::Route)?
-        .into_iter()
-        .filter(|(_, r)| r.http_status.is_some_and(|s| (200..300).contains(&s)))
-        .collect())
+/// Where a redirect should land on the new site: its target document's new path, else
+/// the path of its `to`.
+fn redirect_target(
+    ctx: &StageCtx,
+    r: &Redirect,
+    new_paths: &HashMap<ItemId, String>,
+) -> Result<Option<String>> {
+    Ok(match ctx.project.store().lookup_url(&r.to)? {
+        Some(RouteTarget::Document(d)) => new_paths.get(&d).cloned(),
+        _ => None,
+    }
+    .or_else(|| path_and_query(&r.to)))
+}
+
+/// An old URL to check, and where it should end up when that is known.
+struct Old {
+    id: ItemId,
+    route: Route,
+    expect: Option<String>,
+}
+
+/// Routes to check: those that answered 2xx on the old site, plus those with no known
+/// status that point at a document (checked against its new path). Any other route with
+/// no known status is counted in one `access-gap` warning, never dropped silently.
+fn old_urls(ctx: &StageCtx, new_paths: &HashMap<ItemId, String>) -> Result<Vec<Old>> {
+    let store = ctx.project.store();
+    let mut out = vec![];
+    let mut unchecked = 0usize;
+    for (id, route) in canonical_ids::<Route>(ctx, ItemKind::Route)? {
+        let live = match route.http_status {
+            Some(s) => (200..300).contains(&s),
+            None => false,
+        };
+        let expect = match &route.target {
+            RouteTarget::Document(d) => new_paths.get(d).cloned(),
+            RouteTarget::Redirect(x) => match store.get_item::<Redirect>(*x)? {
+                Some(r) => redirect_target(ctx, &r, new_paths)?,
+                None => None,
+            },
+            _ => None,
+        };
+        match (route.http_status, &route.target) {
+            _ if live => {}
+            (None, RouteTarget::Document(_)) if expect.is_some() => {}
+            (None, _) => {
+                unchecked += 1;
+                continue;
+            }
+            _ => continue,
+        }
+        out.push(Old { id, route, expect });
+    }
+    if unchecked > 0 {
+        ctx.issue(
+            IssueKind::AccessGap,
+            Severity::Warning,
+            None,
+            format!("{unchecked} routes have no known old status and were not URL-checked"),
+            json!({"count": unchecked}),
+        )?;
+    }
+    Ok(out)
 }
 
 fn url_result(
@@ -613,10 +702,10 @@ fn model_urls(
     let redirected: HashSet<String> = canonical_ids::<Redirect>(ctx, ItemKind::Redirect)?
         .into_iter()
         .filter(|(id, _)| loaded.get(*id).is_some())
-        .filter_map(|(_, r)| norm_path(&r.from))
+        .filter_map(|(_, r)| path_key(&r.from))
         .collect();
-    for (id, r) in live_routes(ctx)? {
-        let Some(old) = norm_path(&r.url) else {
+    for Old { id, route: r, .. } in old_urls(ctx, new_paths)? {
+        let Some(old) = path_key(&r.url) else {
             continue;
         };
         let covered = redirected.contains(&old);
@@ -630,7 +719,7 @@ fn model_urls(
                 None => Some(format!(
                     "{shown}: target document {d} has no new path (set a path pattern)"
                 )),
-                Some(np) if norm_path(np).as_deref() == Some(old.as_str()) => None,
+                Some(np) if path_key(np).as_deref() == Some(old.as_str()) => None,
                 Some(np) => Some(format!(
                     "{shown} now lives at {np} and no redirect covers it"
                 )),
@@ -657,8 +746,8 @@ struct Job {
     kind: ItemKind,
     old: String,
     url: Url,
-    /// Redirect sources: a 301/308 straight to this path passes.
-    to: Option<String>,
+    /// Where it must end up, when known.
+    expect: Option<String>,
 }
 
 async fn urls(
@@ -675,30 +764,26 @@ async fn urls(
         .build()?;
     let at = |u: &str| path_and_query(u).and_then(|p| site.join(&p).ok());
     let mut jobs = vec![];
-    for (id, r) in live_routes(ctx)? {
-        if let Some(url) = at(&r.url) {
+    for Old { id, route, expect } in old_urls(ctx, new_paths)? {
+        if let Some(url) = at(&route.url) {
             jobs.push(Job {
                 id,
                 kind: ItemKind::Route,
-                old: r.url,
+                old: route.url,
                 url,
-                to: None,
+                expect,
             });
         }
     }
     for (id, r) in canonical_ids::<Redirect>(ctx, ItemKind::Redirect)? {
-        let to = match ctx.project.store().lookup_url(&r.to)? {
-            Some(RouteTarget::Document(d)) => new_paths.get(&d).cloned(),
-            _ => None,
-        }
-        .or_else(|| path_and_query(&r.to));
+        let expect = redirect_target(ctx, &r, new_paths)?;
         if let Some(url) = at(&r.from) {
             jobs.push(Job {
                 id,
                 kind: ItemKind::Redirect,
                 old: r.from,
                 url,
-                to,
+                expect,
             });
         }
     }
@@ -711,7 +796,8 @@ async fn urls(
             let Some(job) = jobs.next() else { break };
             let (client, site) = (client.clone(), site.clone());
             running.spawn(async move {
-                let (chain, error) = check_url(&client, &site, &job.url, job.to.as_deref()).await;
+                let (chain, error) =
+                    check_url(&client, &site, &job.url, job.expect.as_deref()).await;
                 (job, chain, error)
             });
         }
@@ -732,17 +818,19 @@ async fn urls(
     Ok(())
 }
 
+/// Same site as the crawl sees it: `www.` and apex, http and https are one site.
 fn same_site(a: &Url, b: &Url) -> bool {
-    a.host_str() == b.host_str() && a.port_or_known_default() == b.port_or_known_default()
+    site_of(a).is_some() && site_of(a) == site_of(b)
 }
 
-/// Requests `url`, following at most one same-site redirect by hand. Passes on 200, on
-/// one 301/302/307/308 hop to a 200, or (redirect sources) on a 301/308 straight to `to`.
+/// Requests `url`, following at most one same-site redirect by hand. With `expect` (the
+/// new path, when known) it must answer 200 at that path, or redirect once to exactly
+/// that path, which answers 200. Without it, 200 or one 301/302/307/308 hop to a 200.
 async fn check_url(
     client: &Client,
     site: &Url,
     url: &Url,
-    to: Option<&str>,
+    expect: Option<&str>,
 ) -> (Vec<String>, Option<String>) {
     let mut chain = vec![];
     let get = |u: Url| async move {
@@ -750,7 +838,8 @@ async fn check_url(
             .await
             .map_err(|e| format!("{e:#}"))
     };
-    let path = url.path().to_string();
+    let path = path_and_query(url.as_str()).unwrap_or_else(|| url.path().to_string());
+    let want = expect.and_then(path_key);
     let first = match get(url.clone()).await {
         Ok(r) => r,
         Err(e) => return (chain, Some(format!("{path}: request failed: {e}"))),
@@ -758,29 +847,40 @@ async fn check_url(
     let s = first.status();
     chain.push(format!("{url} {}", s.as_u16()));
     if s == StatusCode::OK {
-        return (chain, None);
+        return match (&want, expect) {
+            (Some(w), Some(e)) if path_key(url.as_str()).as_ref() != Some(w) => (
+                chain,
+                Some(format!(
+                    "{path} answers 200 itself, expected a redirect to {e}"
+                )),
+            ),
+            _ => (chain, None),
+        };
     }
     let Some(next) = hop(&first, url) else {
         return (chain, Some(format!("{path} answered {}", s.as_u16())));
     };
-    if let Some(to) = to
-        && matches!(s.as_u16(), 301 | 308)
-        && same_site(&next, site)
-        && norm_path(next.path()) == norm_path(to)
-    {
-        return (chain, None);
-    }
+    let next_path = path_and_query(next.as_str()).unwrap_or_else(|| next.path().to_string());
     if !same_site(&next, site) {
         let host = next.host_str().unwrap_or("").to_string();
         chain.push(format!("{next} not followed"));
         return (chain, Some(format!("{path} redirects off-site to {host}")));
+    }
+    if let (Some(w), Some(e)) = (&want, expect)
+        && path_key(next.as_str()).as_ref() != Some(w)
+    {
+        chain.push(format!("{next} not followed"));
+        return (
+            chain,
+            Some(format!("{path} redirects to {next_path}, expected {e}")),
+        );
     }
     let second = match get(next.clone()).await {
         Ok(r) => r,
         Err(e) => {
             return (
                 chain,
-                Some(format!("{path} -> {}: request failed: {e}", next.path())),
+                Some(format!("{path} -> {next_path}: request failed: {e}")),
             );
         }
     };
@@ -794,19 +894,14 @@ async fn check_url(
         return (
             chain,
             Some(format!(
-                "{path} -> {} -> {}: more than 1 redirect",
-                next.path(),
+                "{path} -> {next_path} -> {}: more than 1 redirect",
                 third.path()
             )),
         );
     }
     (
         chain,
-        Some(format!(
-            "{path} -> {} answered {}",
-            next.path(),
-            s2.as_u16()
-        )),
+        Some(format!("{path} -> {next_path} answered {}", s2.as_u16())),
     )
 }
 
@@ -829,9 +924,22 @@ mod tests {
 
     #[test]
     fn paths_normalise() {
-        assert_eq!(norm_path("https://old.test/a/b/").as_deref(), Some("/a/b"));
-        assert_eq!(norm_path("/").as_deref(), Some("/"));
-        assert_eq!(norm_path("https://old.test").as_deref(), Some("/"));
+        assert_eq!(path_key("https://old.test/A/b").as_deref(), Some("/a/b/"));
+        assert_eq!(path_key("/a/b/"), path_key("https://www.old.test/a/b"));
+        assert_eq!(path_key("/").as_deref(), Some("/"));
+        assert_eq!(path_key("https://old.test").as_deref(), Some("/"));
+        // Meaningful queries count; tracking ones don't.
+        assert_ne!(path_key("/?p=123"), path_key("/"));
+        assert_eq!(path_key("/a/?utm_source=x"), path_key("/a/"));
+        let u = |s: &str| Url::parse(s).unwrap();
+        assert!(same_site(
+            &u("http://www.old.test/a"),
+            &u("https://old.test/")
+        ));
+        assert!(!same_site(
+            &u("https://other.test/a"),
+            &u("https://old.test/")
+        ));
         assert_eq!(
             path_and_query("https://old.test/a/?p=1").as_deref(),
             Some("/a/?p=1")

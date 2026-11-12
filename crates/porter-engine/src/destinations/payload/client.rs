@@ -263,8 +263,17 @@ impl PayloadClient {
     }
 
     pub async fn count(&self, collection: &str) -> Result<u64> {
+        self.count_where(collection, &[]).await
+    }
+
+    /// Docs matching `filter` (raw `where[...]` query pairs).
+    pub async fn count_where(&self, collection: &str, filter: &[(String, String)]) -> Result<u64> {
         let body = self
-            .send(self.req(Method::GET, collection).query(&[("limit", "0")]))
+            .send(
+                self.req(Method::GET, collection)
+                    .query(&[("limit", "0")])
+                    .query(filter),
+            )
             .await?;
         body["totalDocs"]
             .as_u64()

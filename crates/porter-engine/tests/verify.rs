@@ -31,7 +31,16 @@ const OLD: &str = "https://old.example.test";
 struct Fake(Arc<Mutex<HashMap<(String, String), Value>>>);
 
 impl Fake {
-    fn put(&self, coll: &str, doc: Value) {
+    /// A migrated doc: it carries the `legacyId` key.
+    fn put(&self, coll: &str, mut doc: Value) {
+        if doc.get("legacyId").is_none() {
+            doc["legacyId"] = json!(format!("k-{}", doc["id"]));
+        }
+        self.put_raw(coll, doc);
+    }
+
+    /// Content that was in the destination before the migration (no key).
+    fn put_raw(&self, coll: &str, doc: Value) {
         let id = doc["id"].to_string();
         self.0.lock().unwrap().insert((coll.into(), id), doc);
     }
@@ -43,7 +52,20 @@ impl Respond for Fake {
         let p = r.url.path().trim_start_matches("/api/").to_string();
         match p.split('/').collect::<Vec<_>>().as_slice() {
             [coll] => {
-                let n = docs.keys().filter(|(c, _)| c == coll).count();
+                let exists: Vec<String> = r
+                    .url
+                    .query_pairs()
+                    .filter_map(|(k, v)| {
+                        let f = k.strip_prefix("where[")?.strip_suffix("][exists]")?;
+                        (v == "true").then(|| f.to_string())
+                    })
+                    .collect();
+                let n = docs
+                    .iter()
+                    .filter(|((c, _), d)| {
+                        c == coll && exists.iter().all(|f| !d[f.as_str()].is_null())
+                    })
+                    .count();
                 ResponseTemplate::new(200).set_body_json(json!({"docs": [], "totalDocs": n}))
             }
             [coll, id] => match docs.get(&(coll.to_string(), id.to_string())) {
@@ -371,6 +393,14 @@ async fn verify_wrong_link_and_missing_media_detected() {
     assert!(mm[0].message.contains("media/5"), "{}", mm[0].message);
     failed(f.status(did("1")));
     assert_eq!(f.status(did("2")), Some(ItemStatus::Done));
+    // No config_dir: said once, up front.
+    let blind = "bare-id relations can't be verified without destination.config_dir";
+    let gaps = f.issues(IssueKind::AccessGap);
+    assert_eq!(
+        gaps.iter().filter(|i| i.message == blind).count(),
+        1,
+        "{gaps:#?}"
+    );
 }
 
 #[tokio::test]
@@ -468,18 +498,161 @@ async fn verify_without_site_url_is_model_check_plus_gap() {
     assert_eq!(f.status(r_y), Some(ItemStatus::Done));
     let ex = failed(f.status(r_x));
     assert!(ex.contains("/old-x/") && ex.contains("/x/"), "{ex}");
-    let gaps = f.issues(IssueKind::AccessGap);
+    let gaps: Vec<Issue> = f
+        .issues(IssueKind::AccessGap)
+        .into_iter()
+        .filter(|i| i.message == "live URL check skipped: set verify.site_url")
+        .collect();
     assert_eq!(gaps.len(), 1, "{gaps:#?}");
     assert_eq!(gaps[0].severity, Severity::Info);
-    assert_eq!(
-        gaps[0].message,
-        "live URL check skipped: set verify.site_url"
-    );
     // The checks land in the verify report.
     let html = porter_engine::report::render_verify(&f.p).unwrap();
     assert!(html.contains("URL checks"), "no URL table");
     assert!(html.contains("/old-x/"));
     assert!(html.contains("Counts"));
+}
+
+#[tokio::test]
+async fn preexisting_content_does_not_fail_counts() {
+    let fake = Fake::default();
+    let s = payload(&fake).await;
+    let mut f = fx(&s.uri());
+    // Mapped but nothing loaded: 0 == 0.
+    f.cfg.mapping.types.insert(
+        "post".into(),
+        TypeMap {
+            to: Some("posts".into()),
+            ..TypeMap::default()
+        },
+    );
+    f.loaded(&doc("1", "a", None), "pages", 1);
+    fake.put("pages", json!({"id": 1, "parent": null}));
+    fake.put_raw("pages", json!({"id": 7, "title": "Already there"}));
+    fake.put_raw("posts", json!({"id": 1, "title": "Old post"}));
+
+    let sum = f.verify().await;
+    let issues = f.p.store().issues(&IssueFilter::default()).unwrap();
+    assert!(
+        f.issues(IssueKind::SchemaMismatch).is_empty(),
+        "{issues:#?}"
+    );
+    assert_eq!(exit_code(&sum), 0, "{sum:?} {issues:#?}");
+    let checks = porter_engine::verify::read_checks(&f.p).unwrap().unwrap();
+    let pages = checks
+        .counts
+        .iter()
+        .find(|c| c.collection == "pages")
+        .unwrap();
+    assert_eq!((pages.expected, pages.actual, pages.total), (1, 1, 2));
+    let posts = checks
+        .counts
+        .iter()
+        .find(|c| c.collection == "posts")
+        .unwrap();
+    assert_eq!((posts.expected, posts.actual, posts.total), (0, 0, 1));
+}
+
+/// A site where `from` redirects to `to` (or answers 200 when `to` is None).
+async fn site(rules: &[(&str, Option<&str>)]) -> MockServer {
+    let site = MockServer::start().await;
+    for (from, to) in rules {
+        let res = match to {
+            Some(to) => ResponseTemplate::new(301).insert_header("Location", *to),
+            None => ResponseTemplate::new(200),
+        };
+        Mock::given(method("GET"))
+            .and(path(from.to_string()))
+            .respond_with(res)
+            .mount(&site)
+            .await;
+    }
+    site
+}
+
+#[tokio::test]
+async fn catch_all_redirect_fails_when_target_known() {
+    let fake = Fake::default();
+    let dest = payload(&fake).await;
+    let site = site(&[("/old-x/", Some("/")), ("/", None), ("/x/", None)]).await;
+    let mut f = fx(&dest.uri());
+    f.cfg.verify.site_url = Some(site.uri());
+    let x = doc("1", "x", None);
+    f.loaded(&x, "pages", 1);
+    fake.put("pages", json!({"id": 1, "parent": null}));
+    let r = f.route(
+        &format!("{OLD}/old-x/"),
+        Some(200),
+        RouteTarget::Document(x.id),
+    );
+
+    let sum = f.verify().await;
+    assert_eq!(exit_code(&sum), 2, "{sum:?}");
+    let e = failed(f.status(r));
+    assert!(e.contains("redirects to /, expected /x/"), "{e}");
+}
+
+#[tokio::test]
+async fn wrong_redirect_target_fails() {
+    let fake = Fake::default();
+    let dest = payload(&fake).await;
+    let site = site(&[
+        ("/old-r/", Some("/elsewhere/")),
+        ("/elsewhere/", None),
+        ("/old-y/", Some("/y/")),
+        ("/y/", None),
+    ])
+    .await;
+    let mut f = fx(&dest.uri());
+    f.cfg.verify.site_url = Some(site.uri());
+    let y = doc("1", "y", None);
+    f.loaded(&y, "pages", 1);
+    fake.put("pages", json!({"id": 1, "parent": null}));
+    let good = f.route(
+        &format!("{OLD}/old-y/"),
+        Some(200),
+        RouteTarget::Document(y.id),
+    );
+    let bad = f.redirect("/old-r/", "/a-new/");
+
+    let sum = f.verify().await;
+    assert_eq!(exit_code(&sum), 2, "{sum:?}");
+    assert_eq!(f.status(good), Some(ItemStatus::Done));
+    let e = failed(f.status(bad));
+    assert!(
+        e.contains("redirects to /elsewhere/, expected /a-new/"),
+        "{e}"
+    );
+}
+
+#[tokio::test]
+async fn routes_without_old_status_are_checked_or_reported() {
+    // Umbraco-like: routes carry no old HTTP status.
+    let fake = Fake::default();
+    let dest = payload(&fake).await;
+    let site = site(&[("/d/", None)]).await;
+    let mut f = fx(&dest.uri());
+    f.cfg.verify.site_url = Some(site.uri());
+    let d = doc("1", "d", None);
+    f.loaded(&d, "pages", 1);
+    fake.put("pages", json!({"id": 1, "parent": null}));
+    let checked = f.route(&format!("{OLD}/d/"), None, RouteTarget::Document(d.id));
+    let unknown = f.route(&format!("{OLD}/misc/"), None, RouteTarget::None);
+
+    let sum = f.verify().await;
+    let issues = f.p.store().issues(&IssueFilter::default()).unwrap();
+    assert_eq!(exit_code(&sum), 0, "{sum:?} {issues:#?}");
+    assert_eq!(f.status(checked), Some(ItemStatus::Done));
+    assert_eq!(f.status(unknown), None);
+    let gaps: Vec<Issue> = f
+        .issues(IssueKind::AccessGap)
+        .into_iter()
+        .filter(|i| i.severity == Severity::Warning)
+        .collect();
+    assert_eq!(gaps.len(), 1, "{gaps:#?}");
+    assert_eq!(
+        gaps[0].message,
+        "1 routes have no known old status and were not URL-checked"
+    );
 }
 
 #[tokio::test]

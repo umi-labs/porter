@@ -160,6 +160,22 @@ impl Destination for PayloadDestination {
         self.client()?.count(dest_type).await
     }
 
+    /// `where[<key>][exists]=true`; media and other keyed loads use `legacyId`.
+    async fn count_keyed(
+        &self,
+        _ctx: &StageCtx,
+        dest_type: &str,
+        key_field: Option<&str>,
+    ) -> Result<u64> {
+        let key = key_field.unwrap_or("legacyId");
+        self.client()?
+            .count_where(
+                dest_type,
+                &[(format!("where[{key}][exists]"), "true".into())],
+            )
+            .await
+    }
+
     /// The loaded doc for `id` (depth 0, latest draft); None if it wasn't loaded, landed
     /// in a global, or is gone from Payload.
     async fn fetch_loaded(&self, ctx: &StageCtx, id: ItemId) -> Result<Option<serde_json::Value>> {

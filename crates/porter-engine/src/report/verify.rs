@@ -53,9 +53,9 @@ pub fn render_verify(project: &Project) -> Result<String> {
         h2 { "Counts" }
         @if checks.counts.is_empty() { p.muted { "No counts checked." } } @else {
             div.scroll { table {
-                thead { tr { th { "Collection" } th { "Loaded" } th { "In destination" } th { "Result" } } }
+                thead { tr { th { "Collection" } th { "Loaded" } th { "Migrated docs in destination" } th { "All docs (incl. pre-existing)" } th { "Result" } } }
                 tbody { @for c in &checks.counts { tr {
-                    td { (c.collection) } td { (c.expected) } td { (c.actual) }
+                    td { (c.collection) } td { (c.expected) } td { (c.actual) } td.muted { (c.total) }
                     @if c.expected == c.actual { td.done { "match" } } @else { td.failed { "mismatch" } }
                 } } }
             } }
