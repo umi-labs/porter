@@ -11,13 +11,25 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn cfg(url: &str, exclude: &[&str]) -> ConnectorConfig {
+    cfg_full(url, exclude, &[], Some(10_000), 200 * 1024 * 1024)
+}
+
+fn cfg_full(
+    url: &str,
+    exclude: &[&str],
+    keep_query: &[&str],
+    max_pages: Option<usize>,
+    max_media_bytes: u64,
+) -> ConnectorConfig {
     ConnectorConfig::Crawl {
         url: url.into(),
         concurrency: 4,
         delay_ms: 0,
         include: vec![],
         exclude: exclude.iter().map(|s| s.to_string()).collect(),
-        max_pages: None,
+        max_pages,
+        keep_query: keep_query.iter().map(|s| s.to_string()).collect(),
+        max_media_bytes,
     }
 }
 
@@ -100,9 +112,11 @@ async fn crawl_follows_sitemap_and_links() {
     assert_eq!(reds[0].2.code, 301);
     assert!(rs.iter().any(|r| r.title.as_deref() == Some("About")));
     assert!(p.raw_dir("crawl").join("detect.json").exists());
-    // every route has an analyse status
+    // exactly one analyse status per route
     let st = p.store().statuses(Stage::Analyse).unwrap();
-    assert!(st.len() > 4);
+    for (id, ..) in p.store().items::<Route>(ItemKind::Route).unwrap() {
+        assert_eq!(st.iter().filter(|(i, _)| *i == id).count(), 1, "{id}");
+    }
 }
 
 #[tokio::test]
@@ -214,5 +228,181 @@ async fn redirect_loop_fails_route_with_issue() {
         issues
             .iter()
             .any(|i| i.kind == porter_model::IssueKind::RedirectLoop)
+    );
+}
+
+#[tokio::test]
+async fn off_host_redirect_not_crawled() {
+    let ext = MockServer::start().await;
+    page(&ext, "/landing", r#"<a href="/x">x</a><a href="/y">y</a>"#).await;
+    page(&ext, "/x", "x").await;
+    let s = MockServer::start().await;
+    page(&s, "/", r#"<a href="/out">o</a>"#).await;
+    Mock::given(method("GET"))
+        .and(path("/out"))
+        .respond_with(
+            ResponseTemplate::new(301).insert_header("Location", format!("{}/landing", ext.uri())),
+        )
+        .mount(&s)
+        .await;
+    let (_d, p) = run(cfg(&s.uri(), &[]), Stage::Analyse, false).await;
+    let rs = routes(&p);
+    assert_eq!(rs.len(), 2, "{rs:?}");
+    assert!(rs.iter().all(|r| !r.url.starts_with(&ext.uri())));
+    let reds = p.store().items::<Redirect>(ItemKind::Redirect).unwrap();
+    assert_eq!(reds.len(), 1);
+    assert_eq!(reds[0].2.to, format!("{}/landing", ext.uri()));
+    assert!(ext.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn query_variants_collapsed() {
+    let s = MockServer::start().await;
+    let links: String = (1..=50)
+        .map(|n| format!(r#"<a href="/cal?month={n}">m</a>"#))
+        .collect();
+    page(&s, "/", &links).await;
+    page(&s, "/cal", "cal").await;
+    let (_d, p) = run(cfg(&s.uri(), &[]), Stage::Analyse, false).await;
+    assert_eq!(routes(&p).len(), 2);
+    let c = cfg_full(&s.uri(), &[], &["month"], Some(10_000), 1 << 20);
+    let (_d, p) = run(c, Stage::Analyse, false).await;
+    assert_eq!(routes(&p).len(), 51);
+}
+
+#[tokio::test]
+async fn max_pages_stops_with_issue() {
+    let s = MockServer::start().await;
+    let links: String = (1..=5)
+        .map(|n| format!(r#"<a href="/p{n}">p</a>"#))
+        .collect();
+    page(&s, "/", &links).await;
+    for n in 1..=5 {
+        page(&s, &format!("/p{n}"), "p").await;
+    }
+    let (_d, p) = run(
+        cfg_full(&s.uri(), &[], &[], Some(3), 1 << 20),
+        Stage::Analyse,
+        false,
+    )
+    .await;
+    assert_eq!(routes(&p).len(), 3);
+    let issues = p.store().issues(&Default::default()).unwrap();
+    let gap: Vec<_> = issues
+        .iter()
+        .filter(|i| i.kind == porter_model::IssueKind::AccessGap)
+        .collect();
+    assert_eq!(gap.len(), 1);
+    assert_eq!(gap[0].message, "crawl stopped at max_pages (3)");
+}
+
+/// Serves one chunked (no Content-Length) response per connection.
+async fn chunked_server() -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = l.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut buf = [0u8; 2048];
+                let _ = sock.read(&mut buf).await;
+                let head = "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nTransfer-Encoding: chunked\r\n\r\n";
+                let _ = sock.write_all(head.as_bytes()).await;
+                for _ in 0..5 {
+                    if sock.write_all(b"10\r\n0123456789abcdef\r\n").await.is_err() {
+                        return;
+                    }
+                }
+                let _ = sock.write_all(b"0\r\n\r\n").await;
+            });
+        }
+    });
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn media_over_cap_skipped() {
+    let chunked = chunked_server().await;
+    let s = MockServer::start().await;
+    page(
+        &s,
+        "/p",
+        &format!(r#"<img src="/big.jpg"><img src="{chunked}/c.jpg">"#),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/big.jpg"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(vec![7u8; 100], "image/jpeg"))
+        .mount(&s)
+        .await;
+    let c = cfg_full(&format!("{}/p", s.uri()), &[], &[], Some(100), 40);
+    let (_d, p) = run(c, Stage::Extract, false).await;
+    assert!(
+        p.store()
+            .items::<Media>(ItemKind::Media)
+            .unwrap()
+            .is_empty()
+    );
+    let skipped = p
+        .store()
+        .statuses(Stage::Extract)
+        .unwrap()
+        .into_iter()
+        .filter(|(_, s)| matches!(s, porter_model::ItemStatus::Skipped { reason } if reason == "over size cap"))
+        .count();
+    assert_eq!(skipped, 2);
+    let issues = p.store().issues(&Default::default()).unwrap();
+    let over = issues
+        .iter()
+        .filter(|i| i.message.starts_with("file over size cap"))
+        .count();
+    assert_eq!(over, 2);
+}
+
+#[tokio::test]
+async fn cancel_stops_sitemap_walk() {
+    let s = MockServer::start().await;
+    let xml = format!(
+        r#"<sitemapindex>{}</sitemapindex>"#,
+        (1..=3)
+            .map(|n| format!("<sitemap><loc>{}/s{n}.xml</loc></sitemap>", s.uri()))
+            .collect::<String>()
+    );
+    Mock::given(method("GET"))
+        .and(path("/sitemap.xml"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(xml, "application/xml")
+                .set_delay(std::time::Duration::from_secs(5)),
+        )
+        .mount(&s)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let p = Arc::new(Project::init(dir.path(), "t", "a").unwrap());
+    let conn = Arc::new(CrawlConnector::new(&cfg(&s.uri(), &[])));
+    let cancel = CancellationToken::new();
+    let c2 = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        c2.cancel();
+    });
+    let t = std::time::Instant::now();
+    run_stage(
+        p.clone(),
+        Arc::new(p.config().clone()),
+        EventSink::new(16),
+        cancel,
+        Stage::Analyse,
+        |ctx| async move { conn.analyse(&ctx).await },
+    )
+    .await
+    .unwrap();
+    assert!(
+        t.elapsed() < std::time::Duration::from_millis(2500),
+        "{:?}",
+        t.elapsed()
     );
 }

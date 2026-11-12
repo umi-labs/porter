@@ -44,8 +44,13 @@ pub enum ConnectorConfig {
         include: Vec<String>,
         #[serde(default)]
         exclude: Vec<String>,
-        #[serde(default)]
+        #[serde(default = "default_max_pages")]
         max_pages: Option<usize>,
+        /// Query params kept on discovered links; all others are dropped.
+        #[serde(default)]
+        keep_query: Vec<String>,
+        #[serde(default = "default_max_media_bytes")]
+        max_media_bytes: u64,
     },
     WpRest {
         #[serde(flatten)]
@@ -98,6 +103,14 @@ pub struct ManualRedirect {
 
 fn default_concurrency() -> usize {
     4
+}
+
+fn default_max_pages() -> Option<usize> {
+    Some(10_000)
+}
+
+fn default_max_media_bytes() -> u64 {
+    200 * 1024 * 1024
 }
 
 fn default_delay_ms() -> u64 {

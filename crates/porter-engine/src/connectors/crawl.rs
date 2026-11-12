@@ -15,8 +15,8 @@ use porter_model::{
     Severity, SourceRef,
 };
 use regex::Regex;
-use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, LINK, LOCATION};
+use reqwest::{Client, Response};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -25,10 +25,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 
 const NAME: &str = "crawl";
 const USER_AGENT: &str = "porter/2.0 (+https://github.com/umi-labs/porter)";
 const MAX_HOPS: usize = 10;
+const PAGE_CAP: u64 = 20 * 1024 * 1024;
 const MEDIA_EXTS: [&str; 24] = [
     "jpg", "jpeg", "png", "gif", "webp", "avif", "svg", "ico", "bmp", "tif", "tiff", "pdf", "mp4",
     "webm", "mov", "mp3", "wav", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "zip",
@@ -189,6 +191,21 @@ fn srcset_urls(v: &str) -> Vec<&str> {
         .collect()
 }
 
+/// Drops query params not named in `keep`, so calendar/facet links collapse.
+fn strip_query(mut u: Url, keep: &[String]) -> Url {
+    let pairs: Vec<(String, String)> = u
+        .query_pairs()
+        .filter(|(k, _)| keep.iter().any(|n| n == k))
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    if pairs.is_empty() {
+        u.set_query(None);
+    } else {
+        u.query_pairs_mut().clear().extend_pairs(pairs);
+    }
+    u
+}
+
 struct Parsed {
     head: PageHead,
     links: Vec<Url>,
@@ -197,7 +214,13 @@ struct Parsed {
 }
 
 /// Sync on purpose: `scraper::Html` is not `Send`, so it never lives across an await.
-fn parse_page(html: &str, base: &Url, headers: &HeaderMap, css_url: &Regex) -> Parsed {
+fn parse_page(
+    html: &str,
+    base: &Url,
+    headers: &HeaderMap,
+    css_url: &Regex,
+    keep_query: &[String],
+) -> Parsed {
     let doc = Html::parse_document(html);
     let resolve = |raw: &str| {
         let mut u = base.join(raw.trim()).ok()?;
@@ -214,7 +237,7 @@ fn parse_page(html: &str, base: &Url, headers: &HeaderMap, css_url: &Regex) -> P
         if has_media_ext(&u) {
             media.push(u.to_string());
         } else if site_of(&u) == site {
-            links.push(u);
+            links.push(strip_query(u, keep_query));
         }
     }
     for el in doc.select(&sel("img[src], img[srcset], source[srcset]")) {
@@ -331,12 +354,34 @@ fn sitemap_locs(xml: &str) -> (bool, Vec<String>) {
     (index, locs)
 }
 
-async fn get_text(client: &Client, url: &str) -> Option<String> {
-    let r = http::send_with_retry(client.get(url), 2).await.ok()?;
-    if !r.status().is_success() {
-        return None;
+/// Reads the body, giving up (`Err(bytes seen or declared)`) once it passes `cap`.
+async fn read_capped(mut r: Response, cap: u64) -> Result<std::result::Result<Vec<u8>, u64>> {
+    if let Some(n) = r.content_length().filter(|n| *n > cap) {
+        return Ok(Err(n));
     }
-    r.text().await.ok()
+    let mut out = Vec::new();
+    while let Some(chunk) = r.chunk().await? {
+        out.extend_from_slice(&chunk);
+        if out.len() as u64 > cap {
+            return Ok(Err(out.len() as u64));
+        }
+    }
+    Ok(Ok(out))
+}
+
+/// GET a small text file; `None` on any failure or cancellation.
+async fn get_text(client: &Client, url: &str, cancel: &CancellationToken) -> Option<String> {
+    tokio::select! {
+        _ = cancel.cancelled() => None,
+        r = async {
+            let r = http::send_with_retry(client.get(url), 2).await.ok()?;
+            if !r.status().is_success() {
+                return None;
+            }
+            let body = read_capped(r, PAGE_CAP).await.ok()?.ok()?;
+            Some(String::from_utf8_lossy(&body).into_owned())
+        } => r,
+    }
 }
 
 // ---- fetching ----
@@ -356,10 +401,13 @@ struct Fetched {
     html: Option<String>,
     /// "redirect limit" / "redirect loop"
     error: Option<String>,
+    /// A hop left the site: recorded as a redirect, never fetched.
+    off_host: bool,
 }
 
 /// Follows redirects by hand so every hop is recorded. `Err` is a network failure.
 async fn fetch(client: &Client, start: &Url) -> Result<Fetched> {
+    let site = site_of(start);
     let mut cur = start.clone();
     let mut hops: Vec<Hop> = vec![];
     let mut seen = HashSet::from([cur.to_string()]);
@@ -385,6 +433,7 @@ async fn fetch(client: &Client, start: &Url) -> Result<Fetched> {
             headers: headers.clone(),
             html,
             error: error.map(str::to_string),
+            off_host: false,
         };
         if let Some(next) = next {
             hops.push(Hop {
@@ -402,6 +451,11 @@ async fn fetch(client: &Client, start: &Url) -> Result<Fetched> {
             if error.is_some() {
                 return Ok(done(next, None, error, hops));
             }
+            if site_of(&next) != site {
+                let mut f = done(next, None, None, hops);
+                f.off_host = true;
+                return Ok(f);
+            }
             cur = next;
             continue;
         }
@@ -409,8 +463,12 @@ async fn fetch(client: &Client, start: &Url) -> Result<Fetched> {
             .get(CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .is_none_or(|t| t.contains("html"));
+        // ponytail: a page over the cap is treated as non-HTML (not parsed).
         let html = if is_html {
-            Some(resp.text().await?)
+            read_capped(resp, PAGE_CAP)
+                .await?
+                .ok()
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
         } else {
             None
         };
@@ -428,6 +486,8 @@ struct Opts {
     include: GlobSet,
     exclude: GlobSet,
     max_pages: Option<usize>,
+    max_media: u64,
+    keep_query: Vec<String>,
     any_include: bool,
 }
 
@@ -440,6 +500,8 @@ impl Opts {
             include,
             exclude,
             max_pages,
+            keep_query,
+            max_media_bytes,
         } = cfg
         else {
             return Err(anyhow!("not a crawl connector config"));
@@ -460,6 +522,8 @@ impl Opts {
             include: set(include)?,
             exclude: set(exclude)?,
             max_pages: *max_pages,
+            max_media: *max_media_bytes,
+            keep_query: keep_query.clone(),
             any_include: !include.is_empty(),
         })
     }
@@ -512,6 +576,7 @@ impl Connector for CrawlConnector {
 struct Shared {
     ctx: StageCtx,
     client: Client,
+    media_client: Client,
     opts: Opts,
     robots: Robots,
     sem: Semaphore,
@@ -563,13 +628,17 @@ fn put_route(
     Ok(id)
 }
 
-async fn pause(sh: &Shared) {
-    if !sh.opts.delay.is_zero() {
+async fn pause_for(cancel: &CancellationToken, delay: Duration) {
+    if !delay.is_zero() {
         tokio::select! {
-            _ = sh.ctx.cancel.cancelled() => {}
-            _ = tokio::time::sleep(sh.opts.delay) => {}
+            _ = cancel.cancelled() => {}
+            _ = tokio::time::sleep(delay) => {}
         }
     }
+}
+
+async fn pause(sh: &Shared) {
+    pause_for(&sh.ctx.cancel, sh.opts.delay).await
 }
 
 /// One URL: fetch, record, parse; in extract also save the HTML and download media.
@@ -596,7 +665,13 @@ async fn visit(sh: Arc<Shared>, url: Url) -> Result<Option<Outcome>> {
     // Extract reuses saved HTML unless --refresh; no network for the page itself.
     if sh.extract && !ctx.refresh && html_path(&url).exists() {
         let html = std::fs::read_to_string(html_path(&url))?;
-        let parsed = parse_page(&html, &url, &HeaderMap::new(), &sh.css_url);
+        let parsed = parse_page(
+            &html,
+            &url,
+            &HeaderMap::new(),
+            &sh.css_url,
+            &sh.opts.keep_query,
+        );
         ctx.item_status(id, ItemKind::Route, ItemStatus::Done)?;
         download_media(&sh, id, &parsed.media).await?;
         pause(&sh).await;
@@ -623,7 +698,7 @@ async fn visit(sh: Arc<Shared>, url: Url) -> Result<Option<Outcome>> {
     let parsed = f
         .html
         .as_deref()
-        .map(|h| parse_page(h, &f.last, &f.headers, &sh.css_url));
+        .map(|h| parse_page(h, &f.last, &f.headers, &sh.css_url, &sh.opts.keep_query));
     record(ctx, &url, &f, parsed.as_ref())?;
     if let Some(p) = &parsed {
         let mut head = p.head.clone();
@@ -634,7 +709,7 @@ async fn visit(sh: Arc<Shared>, url: Url) -> Result<Option<Outcome>> {
         let file = dir.join(format!("{}.json", hash16(&key_of(&f.last))));
         std::fs::write(file, serde_json::to_vec_pretty(&head)?)?;
     }
-    let landed = f.error.is_none().then(|| f.last.clone());
+    let landed = (f.error.is_none() && !f.off_host).then(|| f.last.clone());
     if sh.extract {
         if let (Some(html), Some(l)) = (&f.html, &landed) {
             let path = html_path(l);
@@ -685,6 +760,10 @@ fn record(ctx: &StageCtx, url: &Url, f: &Fetched, parsed: Option<&Parsed>) -> Re
             first = RouteTarget::Redirect(rid);
         }
     }
+    if f.off_host {
+        put_route(ctx, url, Some(f.first_status), first, None)?;
+        return ctx.item_status(id, ItemKind::Route, ItemStatus::Done);
+    }
     if let Some(e) = &f.error {
         let kind = if e == "redirect loop" {
             IssueKind::RedirectLoop
@@ -721,6 +800,16 @@ fn record(ctx: &StageCtx, url: &Url, f: &Fetched, parsed: Option<&Parsed>) -> Re
     ctx.item_status(lid, ItemKind::Route, ItemStatus::Done)
 }
 
+/// Id for a media file we declined to download (no bytes, so no hash-based id).
+fn media_placeholder(url: &str) -> (ItemId, SourceRef) {
+    let src = SourceRef {
+        connector: NAME.into(),
+        source_id: url.to_string(),
+        url: Some(url.to_string()),
+    };
+    (ItemId::new(ItemKind::Media, &src), src)
+}
+
 async fn download_media(sh: &Shared, route: ItemId, urls: &[String]) -> Result<()> {
     let ctx = &sh.ctx;
     let store = ctx.project.store();
@@ -740,13 +829,30 @@ async fn download_media(sh: &Shared, route: ItemId, urls: &[String]) -> Result<(
         if !ctx.refresh && store.media_by_url(url)?.is_some() {
             continue;
         }
-        let resp = tokio::select! {
+        let fetched = tokio::select! {
             _ = ctx.cancel.cancelled() => break,
-            r = http::send_with_retry(sh.client.get(url), 3) => r,
+            r = async {
+                let r: Result<_> = async {
+                let r = http::send_with_retry(sh.media_client.get(url), 3).await?;
+                if !r.status().is_success() {
+                    return Ok(Err(format!("HTTP {}", r.status().as_u16())));
+                }
+                Ok(Ok(read_capped(r, sh.opts.max_media).await?))
+                }.await;
+                r
+            } => r,
         };
-        let bytes = match resp {
-            Ok(r) if r.status().is_success() => r.bytes().await.map_err(|e| e.to_string()),
-            Ok(r) => Err(format!("HTTP {}", r.status().as_u16())),
+        let bytes = match fetched {
+            Ok(Ok(Ok(b))) => Ok(b),
+            Ok(Ok(Err(n))) => {
+                let (id, _) = media_placeholder(url);
+                let reason = "over size cap".to_string();
+                ctx.item_status(id, ItemKind::Media, ItemStatus::Skipped { reason })?;
+                warn(format!("file over size cap ({n} bytes)"), url)?;
+                pause(sh).await;
+                continue;
+            }
+            Ok(Err(e)) => Err(e),
             Err(e) => Err(format!("{e:#}")),
         };
         match bytes {
@@ -777,17 +883,28 @@ async fn download_media(sh: &Shared, route: ItemId, urls: &[String]) -> Result<(
 }
 
 /// Sitemap URLs from robots.txt and `/sitemap.xml`; indexes are followed 3 levels deep.
-async fn sitemap_urls(client: &Client, start: &Url, robots: &Robots) -> Vec<Url> {
+async fn sitemap_urls(
+    client: &Client,
+    start: &Url,
+    robots: &Robots,
+    cancel: &CancellationToken,
+    delay: Duration,
+) -> Vec<Url> {
     let mut queue: Vec<(String, u8)> = robots.sitemaps.iter().map(|s| (s.clone(), 0)).collect();
     if let Ok(u) = start.join("/sitemap.xml") {
         queue.push((u.to_string(), 0));
     }
     let (mut seen, mut pages) = (HashSet::new(), vec![]);
     while let Some((s, depth)) = queue.pop() {
+        if cancel.is_cancelled() {
+            break;
+        }
         if !seen.insert(s.clone()) {
             continue;
         }
-        let Some(xml) = get_text(client, &s).await else {
+        let xml = get_text(client, &s, cancel).await;
+        pause_for(cancel, delay).await;
+        let Some(xml) = xml else {
             continue;
         };
         let (index, locs) = sitemap_locs(&xml);
@@ -813,7 +930,12 @@ async fn crawl(ctx: &StageCtx, opts: &Opts, extract: bool) -> Result<()> {
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(30))
         .build()?;
-    let robots = match start_text(&client, &opts.start, "/robots.txt").await {
+    let media_client = Client::builder()
+        .user_agent(USER_AGENT)
+        .redirect(reqwest::redirect::Policy::limited(MAX_HOPS))
+        .read_timeout(Duration::from_secs(30))
+        .build()?;
+    let robots = match start_text(&client, &opts.start, "/robots.txt", &ctx.cancel).await {
         Some(t) => Robots::parse(&t),
         None => Robots::default(),
     };
@@ -822,7 +944,7 @@ async fn crawl(ctx: &StageCtx, opts: &Opts, extract: bool) -> Result<()> {
     let mut frontier = vec![];
     enqueue(&mut seen, &mut frontier, opts.start.clone());
     if !ctx.cancel.is_cancelled() {
-        for u in sitemap_urls(&client, &opts.start, &robots).await {
+        for u in sitemap_urls(&client, &opts.start, &robots, &ctx.cancel, opts.delay).await {
             if site_of(&u) == site && opts.allows(&u) {
                 enqueue(&mut seen, &mut frontier, u);
             }
@@ -833,6 +955,7 @@ async fn crawl(ctx: &StageCtx, opts: &Opts, extract: bool) -> Result<()> {
     let sh = Arc::new(Shared {
         ctx: ctx.clone(),
         client,
+        media_client,
         robots,
         sem: Semaphore::new(concurrency),
         extract,
@@ -843,9 +966,15 @@ async fn crawl(ctx: &StageCtx, opts: &Opts, extract: bool) -> Result<()> {
     let (mut visited, mut done) = (0usize, 0u64);
     let mut platforms: BTreeMap<String, usize> = BTreeMap::new();
     let (mut builders, mut plugins) = (BTreeSet::new(), BTreeSet::new());
+    let mut capped = false;
     while !frontier.is_empty() && !ctx.cancel.is_cancelled() {
         if let Some(max) = max_pages {
-            frontier.truncate(max.saturating_sub(visited));
+            let room = max.saturating_sub(visited);
+            capped |= frontier.len() > room;
+            frontier.truncate(room);
+            if frontier.is_empty() {
+                break;
+            }
         }
         visited += frontier.len();
         let mut set = JoinSet::new();
@@ -858,7 +987,7 @@ async fn crawl(ctx: &StageCtx, opts: &Opts, extract: bool) -> Result<()> {
             ctx.progress(done, None, "pages");
             seen.extend(o.landed);
             for l in o.links {
-                if sh.opts.allows(&l) {
+                if site_of(&l) == site && sh.opts.allows(&l) {
                     enqueue(&mut seen, &mut frontier, l);
                 }
             }
@@ -870,6 +999,15 @@ async fn crawl(ctx: &StageCtx, opts: &Opts, extract: bool) -> Result<()> {
                 plugins.extend(d.plugins);
             }
         }
+    }
+    if let (true, Some(max)) = (capped, max_pages) {
+        ctx.issue(
+            IssueKind::AccessGap,
+            Severity::Warning,
+            None,
+            format!("crawl stopped at max_pages ({max})"),
+            serde_json::json!({ "max_pages": max }),
+        )?;
     }
     if !extract {
         let platform = platforms
@@ -891,6 +1029,11 @@ async fn crawl(ctx: &StageCtx, opts: &Opts, extract: bool) -> Result<()> {
     Ok(())
 }
 
-async fn start_text(client: &Client, start: &Url, path: &str) -> Option<String> {
-    get_text(client, start.join(path).ok()?.as_str()).await
+async fn start_text(
+    client: &Client,
+    start: &Url,
+    path: &str,
+    cancel: &CancellationToken,
+) -> Option<String> {
+    get_text(client, start.join(path).ok()?.as_str(), cancel).await
 }
