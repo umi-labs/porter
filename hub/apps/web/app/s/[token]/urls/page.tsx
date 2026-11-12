@@ -1,0 +1,25 @@
+import { getDb } from "@porter-hub/db";
+import { notFound } from "next/navigation";
+import { pageNum } from "../../../../lib/snapshot-reader";
+import { NoSnapshot, Shell, UrlsView } from "../../../../lib/view-parts";
+import { loadShare } from "../../../../lib/views";
+
+export const dynamic = "force-dynamic";
+
+export default async function SharedUrls({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ token: string }>;
+  searchParams: Promise<{ page?: string }>;
+}) {
+  const { token } = await params;
+  const page = pageNum((await searchParams).page);
+  const v = await loadShare(getDb(), token, "urls");
+  if (!v) notFound();
+  return (
+    <Shell title={`${v.project.name}: URLs`}>
+      {v.snap ? <UrlsView snap={v.snap} page={page} base={`/s/${token}/urls`} /> : <NoSnapshot />}
+    </Shell>
+  );
+}

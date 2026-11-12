@@ -17,7 +17,10 @@ export default async function Home() {
         <ul>
           {projects.map((p) => (
             <li key={p.id}>
-              <strong>{p.name}</strong> ({p.role}){p.summary ? ` - ${p.summary}` : ""}
+              <Link href={`/p/${p.slug}`}>
+                <strong>{p.name}</strong>
+              </Link>{" "}
+              ({p.role}){p.summary ? ` - ${p.summary}` : ""}
               {p.role === "owner" && (
                 <>
                   {" "}

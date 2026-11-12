@@ -3,6 +3,7 @@ import { getAuth } from "./auth";
 import type { Db } from "./permissions";
 import * as svc from "./projects";
 import { type Actor, HttpError, parse, schemas } from "./projects";
+import * as sh from "./shares";
 import * as ver from "./versions";
 
 type GetActor = (req: Request) => Promise<Actor | null>;
@@ -57,6 +58,9 @@ export function makeApi(db: Db, getActor: GetActor) {
       await svc.access(db, a, slugOf(p), "manage_members");
       return svc.revokeInvitation(db, a, slugOf(p), parse(schemas.id, p.id));
     }),
+    listShares: route<P>((a, _r, p) => sh.listShares(db, a, slugOf(p))),
+    createShare: route<P>(async (a, r, p) => sh.createShare(db, a, slugOf(p), await body(r)), 201),
+    revokeShare: route<P>((a, _r, p) => sh.revokeShare(db, a, slugOf(p), p.id)),
     listVersions: route<P>((a, _r, p) => ver.listVersions(db, a, slugOf(p))),
     getVersion: route<P>((a, _r, p) => ver.getVersion(db, a, slugOf(p), p.n)),
     initVersion: route<P>(async (a, r, p) => ver.initVersion(db, a, slugOf(p), await body(r))),

@@ -3,6 +3,7 @@ import { getDb } from "@porter-hub/db";
 import { revalidatePath } from "next/cache";
 import * as svc from "../../../../../lib/projects";
 import { requireUser } from "../../../../../lib/session";
+import * as shares from "../../../../../lib/shares";
 
 const done = (slug: string) => revalidatePath(`/p/${slug}/settings`);
 const str = (f: FormData, k: string) => String(f.get(k) ?? "");
@@ -27,5 +28,24 @@ export async function setRole(slug: string, userId: string, f: FormData) {
 }
 export async function removeMember(slug: string, userId: string) {
   await svc.removeMember(getDb(), await requireUser(), slug, userId);
+  done(slug);
+}
+
+export async function createShare(slug: string, _prev: unknown, f: FormData) {
+  try {
+    const r = await shares.createShare(getDb(), await requireUser(), slug, {
+      scope: str(f, "scope"),
+      days: str(f, "days"),
+    });
+    done(slug);
+    // Returned to the form (shown once); never stored or put in a URL.
+    return { token: r.token, expiresAt: r.expiresAt.toISOString() };
+  } catch (e) {
+    if (e instanceof svc.HttpError) return { error: e.message };
+    throw e;
+  }
+}
+export async function revokeShare(slug: string, id: string) {
+  await shares.revokeShare(getDb(), await requireUser(), slug, id);
   done(slug);
 }

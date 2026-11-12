@@ -122,3 +122,12 @@ export async function listSizes(prefix: string) {
   } while (token);
   return out;
 }
+
+/** Whole object into memory, via the internal endpoint. Snapshots only; media is never proxied. */
+export async function getBuffer(key: string) {
+  await ensureBucket();
+  const r = await s3().send(new GetObjectCommand({ Bucket: need("S3_BUCKET"), Key: key }));
+  return Buffer.from(
+    await (r.Body as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray(),
+  );
+}
