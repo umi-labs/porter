@@ -678,7 +678,8 @@ fn record_list(
     Ok(())
 }
 
-fn record_export(ctx: &StageCtx, v: &Value) -> Result<()> {
+/// Records a RawItem row and status for everything in an `export.json`.
+pub fn record_export(ctx: &StageCtx, v: &Value) -> Result<()> {
     let raw = "export.json";
     record_list(
         ctx,
@@ -1403,7 +1404,7 @@ fn until<'a>(b: &'a [u8], pos: &mut usize, end: u8) -> std::result::Result<&'a s
 
 /// `[[key, value], …]` rows folded into `{key: value | [value, …]}` with PHP-serialized values
 /// decoded, exactly like export.php's `$meta_of`. Undecodable objects stay raw and set `objects`.
-fn fold_meta(pairs: &Value, objects: &mut bool) -> Map<String, Value> {
+pub(crate) fn fold_meta(pairs: &Value, objects: &mut bool) -> Map<String, Value> {
     let mut grouped: Map<String, Value> = Map::new();
     let mut counts: HashMap<String, usize> = HashMap::new();
     for pair in pairs.as_array().into_iter().flatten() {

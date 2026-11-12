@@ -37,13 +37,18 @@ impl Store {
                 };
                 if let Some(k) = normalise_url(&route.url, None) {
                     idx.hosts.insert(split_key(&k.0).0.to_string());
-                    idx.routes.entry(k.0).or_insert(route.target);
+                    // The first route with a target wins over earlier ones without.
+                    let t = idx.routes.entry(k.0).or_insert(RouteTarget::None);
+                    if *t == RouteTarget::None {
+                        *t = route.target;
+                    }
                 }
             }
             let mut stmt = conn.prepare(
                 "SELECT id, url, CASE WHEN json_type(data, '$.path') = 'text'
                    THEN json_extract(data, '$.path') END
-                 FROM items WHERE kind = 'document' AND deleted_at IS NULL ORDER BY rowid",
+                 FROM items WHERE kind = 'document' AND deleted_at IS NULL
+                 ORDER BY json_type(data, '$.path') IS NOT 'text', rowid",
             )?;
             let rows = stmt.query_map([], |r| {
                 Ok((
@@ -80,7 +85,8 @@ impl Store {
     }
 
     /// What a URL points at: a route's target, else a document stored under that URL or
-    /// path, else a media item with that URL.
+    /// path (rows with a `path`, i.e. normalised documents, before raw rows), else a media
+    /// item with that URL.
     pub fn lookup_url(&self, url: &str) -> Result<Option<RouteTarget>> {
         let Some(key) = normalise_url(url, None) else {
             return Ok(None);

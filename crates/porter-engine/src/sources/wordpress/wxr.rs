@@ -72,6 +72,9 @@ pub struct WxrTerm {
     pub nicename: String,
     pub name: String,
     pub parent: String,
+    /// `<wp:term_id>`, when the export has it.
+    #[serde(default)]
+    pub id: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -365,6 +368,7 @@ fn term_of(n: &Node) -> WxrTerm {
         nicename,
         name,
         parent,
+        id: t("term_id").parse().ok(),
     }
 }
 

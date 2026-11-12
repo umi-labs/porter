@@ -1,9 +1,16 @@
+mod acf;
 pub mod analyse;
 pub mod autop;
 pub mod db;
 pub mod divi;
+mod forms;
 pub mod gutenberg;
+mod load;
+mod media;
+pub mod normalise;
+mod redirects;
 pub mod rest;
+mod seo;
 pub mod shortcodes;
 pub mod texturize;
 pub mod wxr;
@@ -48,8 +55,8 @@ impl Source for WordPressSource {
         Ok(out)
     }
 
-    fn normalise(&self, _ctx: &StageCtx) -> Result<()> {
-        bail!("normalise not implemented yet")
+    fn normalise(&self, ctx: &StageCtx) -> Result<()> {
+        normalise::run(ctx)
     }
 }
 

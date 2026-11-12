@@ -228,3 +228,36 @@ fn analyse_seeds_mapping_once_and_reports_it() {
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     assert!(stdout.lines().any(|l| l.contains("\"mapping-seeded\"")));
 }
+
+#[test]
+fn normalise_wordpress_wxr_end_to_end() {
+    let d = tempfile::tempdir().unwrap();
+    init(d.path());
+    let wxr = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-engine/tests/fixtures/wxr/basic.xml");
+    let toml = d.path().join("porter.toml");
+    let mut text = std::fs::read_to_string(&toml).unwrap();
+    text.push_str(&format!(
+        "\n[[connectors]]\nkind = \"wxr\"\npath = {:?}\n",
+        wxr.display().to_string()
+    ));
+    std::fs::write(&toml, text).unwrap();
+    for stage in ["analyse", "extract"] {
+        porter(d.path()).arg(stage).assert().success();
+    }
+    let code = porter(d.path())
+        .args(["--json", "normalise"])
+        .assert()
+        .get_output()
+        .status
+        .code();
+    assert!(matches!(code, Some(0 | 2)), "normalise exited {code:?}");
+    let out = porter(d.path())
+        .args(["--json", "status"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let status: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let n = &status["stages"]["normalise"];
+    assert!(n["done"].as_u64().unwrap_or(0) >= 2, "{status}");
+}
