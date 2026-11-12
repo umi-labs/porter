@@ -51,7 +51,7 @@ impl Mode {
     pub fn output_dir(self, project: &Path, reports: &Path) -> Option<PathBuf> {
         match self {
             Mode::Check => None,
-            Mode::Generate => Some(project.join("generated").join("payload")),
+            Mode::Generate => Some(porter_engine::destinations::payload::generated_dir(project)),
             Mode::Prompt | Mode::Spec => Some(reports.to_path_buf()),
         }
     }

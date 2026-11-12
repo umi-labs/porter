@@ -248,7 +248,7 @@ mod tests {
         ItemId::new(
             ItemKind::Media,
             &SourceRef {
-                connector: "media".into(),
+                connector: porter_engine::project::MEDIA_CONNECTOR.into(),
                 source_id: n.to_string(),
                 url: None,
             },
@@ -357,7 +357,7 @@ mod tests {
                 statuses: vec![],
             },
             source: SourceRef {
-                connector: "media".into(),
+                connector: porter_engine::project::MEDIA_CONNECTOR.into(),
                 source_id: "h0".into(),
                 url: None,
             },

@@ -54,10 +54,7 @@ fn push_to(file: &Path, path: &Path) -> anyhow::Result<()> {
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = file.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&list)?)?;
-    std::fs::rename(&tmp, file)?;
-    Ok(())
+    porter_engine::mapping::edit::write_atomic(file, &serde_json::to_string_pretty(&list)?)
 }
 
 #[cfg(test)]

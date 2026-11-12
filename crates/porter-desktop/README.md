@@ -34,6 +34,8 @@ Homebrew and MSI installers; it has no macOS `.app` target, hence the script.)
 Quitting with Cmd-Q while a stage runs cancels it first. GPUI gives quit handlers only 100 ms
 and cannot ask a question, so a writing load is cancelled without the confirmation the window's
 close button shows; it stops at the next safe point and can be resumed.
+Closing a window waits up to 10 s for a running stage to stop; past that the window closes
+anyway and the stage stops at its next safe point.
 
 ## Build notes
 
@@ -64,7 +66,7 @@ To upgrade:
 3. Check `runtime_shaders` still exists: `cargo info gpui@<ver> -v | grep runtime_shaders`.
 4. `cargo build -p porter-desktop && cargo test -p porter-desktop`, fix API breaks, then launch
    it and run the smoke checklist below.
-5. Confirm the default build is still GPUI-free: `cargo tree -i gpui` (default members)
+5. Confirm the default build is still GPUI-free: `cargo tree -p porter-cli -e normal -i gpui`
    must report no match.
 
 ## Smoke checklist
@@ -72,7 +74,7 @@ To upgrade:
 - `cargo run -p porter-desktop` shows the launcher with recent projects.
 - *Open folder…* on a porter project opens a project window and adds it to the recent list.
 - *Open folder…* on a folder that is not a project shows the error verbatim in a dialog.
-- The project window shows the sidebar (eight sections; those not built yet say so), the top
+- The project window shows the sidebar (eight sections), the top
   bar (project name, source → destination, *Run all*, *Load (dry run)*, *Apply load…*) and the
   Overview: six stage cards, coverage, open issues by kind.
 - *Run* on a stage flips its card to running, shows progress, and ends in the true state (a
@@ -82,6 +84,12 @@ To upgrade:
 - *Apply load…* without a dry run, or after editing `porter.toml` or re-running normalise,
   refuses. After a fresh *Load (dry run)* it lists the counts, and *Apply* stays disabled until
   the destination host is typed; Enter never applies.
+- *Media* lists the files with thumbnails and which items use them; *URLs* lists the routes
+  and filters them (unresolved, chains, not found); *Issues* lists open issues and bulk
+  actions say what actually happened; *Destination* shows the mode and opens the output folder.
+- Closing a project window during a run waits for it to stop (up to 10 s) rather than losing it.
+- Opening the same project twice (recent list, then *Open folder…*) brings the existing window
+  to the front instead of opening a second one.
 
 ### Smoke results
 
@@ -101,5 +109,8 @@ OK). The build machine has no display, so **nothing below has been run**; every 
 | Edit the mapping, save; issues update | not yet run (needs a display) |
 | Runs: live log and history, dry run labelled | not yet run (needs a display) |
 | Apply load…: refuses without a fresh dry run; Enter never applies | not yet run (needs a display) |
+| Media, URLs, Issues, Destination sections load and behave | not yet run (needs a display) |
+| Window close during a run waits for it to stop (up to 10 s) | not yet run (needs a display) |
+| Opening the same project twice activates the existing window | not yet run (needs a display) |
 | Cmd-Q and window close during a run cancel it | not yet run (needs a display) |
 | `open target/Porter.app` launches (after the `xattr` step) | not yet run (needs a display) |

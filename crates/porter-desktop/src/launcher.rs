@@ -45,6 +45,12 @@ impl Launcher {
 
     /// Opens the session off the UI thread (it touches SQLite), then the project window.
     fn open(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        // The same project is never opened twice: a second window would be a second
+        // writer on the same database.
+        let path = path.canonicalize().unwrap_or(path);
+        if crate::app::activate_project_window(&path, cx) {
+            return;
+        }
         let opening = cx.background_spawn({
             let path = path.clone();
             async move { Session::open(&path) }
@@ -56,7 +62,10 @@ impl Launcher {
                     recent::push(&path);
                     this.recent = recent::load();
                     cx.notify();
-                    crate::app::open_project_window(Arc::new(session), cx);
+                    // A second click can finish opening while the first window is up.
+                    if !crate::app::activate_project_window(&path, cx) {
+                        crate::app::open_project_window(Arc::new(session), cx);
+                    }
                 }
                 Err(e) => {
                     let msg = SharedString::from(format!("{e:#}"));

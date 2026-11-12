@@ -244,7 +244,6 @@ impl Pipeline {
         }
     }
 
-    /// Live states (running, could not run, just finished) win over the stored run.
     /// What closing the window should do now. `confirmed`: the user already agreed to
     /// cancel a writing load; `closing`: a cancel-and-wait is already under way.
     pub fn close_step(&self, confirmed: bool, closing: bool) -> CloseStep {
@@ -270,6 +269,7 @@ impl Pipeline {
         self.close_step(true, self.cancelling) == CloseStep::CancelAndWait
     }
 
+    /// Live states (running, could not run, just finished) win over the stored run.
     pub fn rows(&self) -> Vec<StageRow> {
         let empty = Overview::default();
         let ov = self.overview.as_ref().unwrap_or(&empty);
