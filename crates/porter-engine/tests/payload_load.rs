@@ -26,7 +26,6 @@ const KEY_ENV: &str = "PORTER_TEST_LOAD_KEY";
 struct State {
     /// (collection, doc)
     docs: Vec<(String, Value)>,
-    next_id: u64,
     /// (method, path, body)
     log: Vec<(String, String, Value)>,
     posts: usize,
@@ -95,9 +94,17 @@ impl Respond for Fake {
                 if st.fail_title.is_some() && body["title"].as_str() == st.fail_title.as_deref() {
                     return ResponseTemplate::new(503).insert_header("Retry-After", "0");
                 }
-                st.next_id += 1;
+                // Ids are per collection, as in Payload's SQL adapters.
+                let next = st
+                    .docs
+                    .iter()
+                    .filter(|(c, _)| c == coll)
+                    .filter_map(|(_, d)| d["id"].as_u64())
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
                 let mut doc = body.clone();
-                doc["id"] = json!(st.next_id);
+                doc["id"] = json!(next);
                 st.docs.push((coll.to_string(), doc.clone()));
                 st.posts += 1;
                 if let Some((n, tok)) = &st.cancel_after_posts
@@ -574,7 +581,6 @@ async fn media_uploads_collide_then_go_one_at_a_time() {
     {
         // ids[0] was uploaded on an earlier run, with older metadata.
         let mut st = fake.0.lock().unwrap();
-        st.next_id = 100;
         st.docs.push((
             "media".into(),
             json!({"id": 100, "legacyId": ids[0].to_string(), "alt": "Old"}),
@@ -600,6 +606,336 @@ async fn media_uploads_collide_then_go_one_at_a_time() {
     );
     drop(st);
     assert_eq!(f.p.store().dest_ids().unwrap().len(), 5);
+}
+
+/// A Payload config for `pages` and `posts`, written to a temp dir.
+fn site(fields: &str, blocks: &str) -> tempfile::TempDir {
+    let site = tempfile::tempdir().unwrap();
+    std::fs::write(
+        site.path().join("payload.config.ts"),
+        format!(
+            r#"import {{ buildConfig }} from 'payload'
+export default buildConfig({{
+  collections: [
+    {{ slug: 'pages', fields: [
+      {{ name: 'title', type: 'text' }},
+      {{ name: 'legacyId', type: 'text', unique: true }},
+      {fields}
+    ] }},
+    {{ slug: 'posts', fields: [
+      {{ name: 'title', type: 'text' }},
+      {{ name: 'legacyId', type: 'text', unique: true }},
+    ] }},
+  ],
+  blocks: [{blocks}],
+}})
+"#
+        ),
+    )
+    .unwrap();
+    site
+}
+
+fn map_field(f: &mut Fx, ty: &str, from: &str, to: &str) {
+    f.cfg.mapping.types.get_mut(ty).unwrap().fields.insert(
+        from.into(),
+        porter_engine::mapping::FieldMap {
+            to: to.into(),
+            ..Default::default()
+        },
+    );
+}
+
+fn with_posts(f: &mut Fx) {
+    f.cfg.mapping.types.insert(
+        "post".into(),
+        TypeMap {
+            to: Some("posts".into()),
+            ..TypeMap::default()
+        },
+    );
+}
+
+fn issues_of(f: &Fx, id: ItemId) -> Vec<porter_model::Issue> {
+    f.p.store()
+        .issues(&IssueFilter::default())
+        .unwrap()
+        .into_iter()
+        .filter(|i| i.item == Some(id))
+        .collect()
+}
+
+fn patch_of(fake: &Fake, path: &str) -> Value {
+    fake.writes()
+        .into_iter()
+        .rfind(|(m, p, _)| m == "PATCH" && p == path)
+        .unwrap()
+        .2
+}
+
+/// Ids are per collection: a pages id sent to a posts-only field would silently point
+/// at an unrelated post.
+#[tokio::test]
+async fn relation_to_wrong_collection_is_unresolved() {
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let mut f = fx(&s.uri());
+    let dir = site(
+        "{ name: 'hero', type: 'relationship', relationTo: 'posts' }",
+        "",
+    );
+    f.cfg.destination.config_dir = Some(dir.path().to_path_buf());
+    with_posts(&mut f);
+    f.cfg.mapping.types.get_mut("page").unwrap().fields.clear();
+    map_field(&mut f, "page", "rel", "hero");
+    let mut a = doc("page", "post:1", "a", None);
+    a.fields
+        .insert("rel".into(), FieldValue::Doc(did("post:2")));
+    let mut b = doc("page", "post:3", "b", None);
+    b.fields
+        .insert("rel".into(), FieldValue::Doc(did("post:4")));
+    f.put(&a);
+    f.put(&doc("page", "post:2", "other-page", None));
+    f.put(&b);
+    f.put(&doc("post", "post:4", "a-post", None));
+    f.load(true, CancellationToken::new()).await;
+    // pages/1 -> a page: wrong collection, so null and a warning.
+    assert_eq!(patch_of(&fake, "pages/1")["hero"], Value::Null);
+    assert!(
+        issues_of(&f, did("post:1"))
+            .iter()
+            .any(|i| i.kind == IssueKind::UnresolvedRelation
+                && i.message.contains("posts")
+                && i.message.contains("pages")),
+        "{:?}",
+        issues_of(&f, did("post:1"))
+    );
+    assert!(matches!(
+        f.status(did("post:1")),
+        Some(ItemStatus::Partial { .. })
+    ));
+    // pages/3 -> a post: right collection, plain id.
+    assert_eq!(patch_of(&fake, "pages/3")["hero"], json!(1));
+}
+
+#[tokio::test]
+async fn parent_in_other_collection_is_not_written() {
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let mut f = fx(&s.uri());
+    with_posts(&mut f);
+    f.put(&doc("page", "post:1", "a", None));
+    f.put(&doc("post", "post:2", "b", Some("post:1")));
+    f.load(true, CancellationToken::new()).await;
+    let patch = patch_of(&fake, "posts/1");
+    assert!(patch.get("parent").is_none(), "{patch}");
+    assert!(
+        issues_of(&f, did("post:2"))
+            .iter()
+            .any(|i| i.kind == IssueKind::ParentMissing && i.message.contains("pages"))
+    );
+    assert!(matches!(
+        f.status(did("post:2")),
+        Some(ItemStatus::Partial { .. })
+    ));
+}
+
+/// pages:3 and posts:3 both exist; a block reference must carry its own collection.
+#[tokio::test]
+async fn block_polymorphic_relation_uses_item_collection() {
+    use porter_engine::mapping::{BlockMap, BlockMatch};
+    use porter_model::{Block, BlockKind};
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let mut f = fx(&s.uri());
+    let dir = site("{ name: 'layout', type: 'blocks', blocks: [Card] }", "");
+    // The block, inline in the config reader's eyes via a const.
+    let cfg = std::fs::read_to_string(dir.path().join("payload.config.ts")).unwrap();
+    std::fs::write(
+        dir.path().join("payload.config.ts"),
+        format!(
+            "const Card = {{ slug: 'card', fields: [\n  {{ name: 'link', type: 'relationship', relationTo: ['pages', 'posts'] }},\n  {{ name: 'page', type: 'relationship', relationTo: 'pages' }},\n] }}\n{cfg}"
+        ),
+    )
+    .unwrap();
+    f.cfg.destination.config_dir = Some(dir.path().to_path_buf());
+    with_posts(&mut f);
+    f.cfg.mapping.types.get_mut("page").unwrap().fields.clear();
+    map_field(&mut f, "page", "layout", "layout");
+    f.cfg.mapping.blocks = vec![BlockMap {
+        r#match: BlockMatch {
+            kind: Some("image".into()),
+            module: None,
+        },
+        to: "card".into(),
+        fields: [("link", "link"), ("page", "page")]
+            .into_iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect(),
+    }];
+    for i in 1..=3 {
+        f.put(&doc("post", &format!("post:b{i}"), &format!("b{i}"), None));
+    }
+    let mut block = Block {
+        kind: BlockKind::Image,
+        props: IndexMap::new(),
+        children: vec![],
+        original: None,
+    };
+    block
+        .props
+        .insert("link".into(), FieldValue::Doc(did("post:b3")));
+    // A post given to a pages-only field: must not become pages/3.
+    block
+        .props
+        .insert("page".into(), FieldValue::Doc(did("post:b3")));
+    let mut a = doc("page", "post:1", "a", None);
+    a.fields
+        .insert("layout".into(), FieldValue::Layout(vec![block]));
+    f.put(&a);
+    f.put(&doc("page", "post:2", "p2", None));
+    f.put(&doc("page", "post:3", "p3", None));
+    f.load(true, CancellationToken::new()).await;
+    let ids = f.p.store().dest_ids().unwrap();
+    let dest = |sid: &str| ids.iter().find(|(i, ..)| *i == did(sid)).unwrap().clone();
+    assert_eq!(dest("post:3").1, "pages");
+    assert_eq!(dest("post:3").2, json!(3));
+    assert_eq!(dest("post:b3").1, "posts");
+    assert_eq!(dest("post:b3").2, json!(3));
+    let a_path = format!("pages/{}", sv(&dest("post:1").2));
+    let layout = &patch_of(&fake, &a_path)["layout"];
+    assert_eq!(
+        layout,
+        &json!([{"blockType": "card", "link": {"relationTo": "posts", "value": 3}, "page": null}]),
+        "{layout}"
+    );
+    assert!(
+        issues_of(&f, did("post:1"))
+            .iter()
+            .any(|i| i.kind == IssueKind::UnresolvedRelation && i.message.contains("page"))
+    );
+}
+
+#[tokio::test]
+async fn dry_run_reports_media_without_a_file() {
+    use porter_model::Media;
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let f = fx(&s.uri());
+    let src = SourceRef {
+        connector: "media".into(),
+        source_id: "nohash".into(),
+        url: None,
+    };
+    let m = Media {
+        id: ItemId::new(ItemKind::Media, &src),
+        hash: "ab".repeat(32),
+        variants: vec![],
+        filename: "gone.png".into(),
+        mime: "image/png".into(),
+        width: None,
+        height: None,
+        alt: None,
+        caption: None,
+        title: None,
+        credit: None,
+        folder: None,
+        usages: vec![],
+    };
+    f.p.store()
+        .put_item(ItemKind::Media, m.id, &src, &m)
+        .unwrap();
+    let sum = f.load(false, CancellationToken::new()).await;
+    assert_eq!(exit_code(&sum), 2, "{sum:?}");
+    assert!(matches!(f.status(m.id), Some(ItemStatus::Failed { .. })));
+    assert!(
+        issues_of(&f, m.id)
+            .iter()
+            .any(|i| i.kind == IssueKind::MissingMedia)
+    );
+    assert!(fake.log().is_empty());
+}
+
+#[tokio::test]
+async fn redirect_to_unloaded_doc_warns() {
+    use porter_model::{Redirect, RedirectOrigin};
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let f = fx(&s.uri());
+    let gone = doc("member", "member:9", "gone", None);
+    f.put(&gone);
+    let rsrc = SourceRef {
+        connector: "wordpress".into(),
+        source_id: "redirect:1".into(),
+        url: None,
+    };
+    let rid = ItemId::new(ItemKind::Redirect, &rsrc);
+    let r = Redirect {
+        from: "/old/".into(),
+        to: gone.source.url.clone().unwrap(),
+        code: 301,
+        origin: RedirectOrigin::Plugin,
+    };
+    f.p.store()
+        .put_item(ItemKind::Redirect, rid, &rsrc, &r)
+        .unwrap();
+    f.load(true, CancellationToken::new()).await;
+    assert!(
+        issues_of(&f, rid)
+            .iter()
+            .any(|i| i.kind == IssueKind::UnresolvedLink),
+        "{:?} {:?} {:?}",
+        issues_of(&f, rid),
+        f.status(rid),
+        f.p.store().lookup_url(&r.to)
+    );
+    assert!(matches!(f.status(rid), Some(ItemStatus::Partial { .. })));
+}
+
+#[tokio::test]
+async fn required_forward_reference_says_rerun_fixes_it() {
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let mut f = fx(&s.uri());
+    let dir = site(
+        "{ name: 'hero', type: 'relationship', relationTo: 'pages', required: true }",
+        "",
+    );
+    f.cfg.destination.config_dir = Some(dir.path().to_path_buf());
+    f.cfg.mapping.types.get_mut("page").unwrap().fields.clear();
+    map_field(&mut f, "page", "rel", "hero");
+    let mut a = doc("page", "post:1", "a", None);
+    a.fields
+        .insert("rel".into(), FieldValue::Doc(did("post:2")));
+    let mut b = doc("page", "post:2", "b", None);
+    b.fields
+        .insert("rel".into(), FieldValue::Doc(did("post:3")));
+    // The chain's root: a draft, so Payload doesn't require `hero`.
+    let mut c = doc("page", "post:3", "c", None);
+    c.status = DocStatus::Draft;
+    f.put(&a);
+    f.put(&b);
+    f.put(&c);
+    f.load(true, CancellationToken::new()).await;
+    match f.status(did("post:1")) {
+        Some(ItemStatus::Failed { error }) => {
+            assert!(
+                error.contains("forward reference") && error.contains(&did("post:2").to_string()),
+                "{error}"
+            )
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(
+        f.status(did("post:2")),
+        Some(ItemStatus::Failed { .. })
+    ));
+    assert_eq!(f.status(did("post:3")), Some(ItemStatus::Done));
+    // Each re-run loads the next link of the chain.
+    f.load(true, CancellationToken::new()).await;
+    assert_eq!(f.status(did("post:2")), Some(ItemStatus::Done));
+    f.load(true, CancellationToken::new()).await;
+    assert_eq!(f.status(did("post:1")), Some(ItemStatus::Done));
 }
 
 // ---- live ----

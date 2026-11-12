@@ -77,7 +77,22 @@ pub(super) async fn terms(l: &mut Loader<'_>) -> Result<()> {
         let mut issues = vec![];
         let mut data = json!({"title": t.name, "slug": t.slug});
         if let Some(p) = t.parent {
-            data["parent"] = l.relation(p, None, IssueKind::ParentMissing, &mut issues);
+            // Only a parent in this term's own collection; otherwise leave it unset.
+            match l.ids.get(p) {
+                Some(r) if r.collection == *coll => data["parent"] = r.id,
+                found => issues.push(PendingIssue {
+                    kind: IssueKind::ParentMissing,
+                    severity: Severity::Warning,
+                    message: match found {
+                        Some(r) => format!(
+                            "parent term {p} was loaded into {}, not {coll}",
+                            r.collection
+                        ),
+                        None => format!("parent term {p} is not loaded"),
+                    },
+                    details: json!({"parent": p}),
+                }),
+            }
         }
         put(l, id, ItemKind::Term, coll, KEY, &key(id), data, issues).await?;
     }
@@ -349,8 +364,23 @@ pub(super) async fn redirects(l: &mut Loader<'_>) -> Result<()> {
         if l.cancelled() {
             return Ok(());
         }
+        let mut issues = vec![];
         let target = match l.ctx.project.store().lookup_url(&r.to)? {
-            Some(RouteTarget::Document(d)) => l.ids.get(d).and_then(|x| x.path),
+            Some(RouteTarget::Document(d)) => {
+                let path = l.ids.get(d).and_then(|x| x.path);
+                if path.is_none() {
+                    issues.push(PendingIssue {
+                        kind: IssueKind::UnresolvedLink,
+                        severity: Severity::Warning,
+                        message: format!(
+                            "redirect {} -> {}: target document {d} is not loaded or has no new path, kept the old URL",
+                            r.from, r.to
+                        ),
+                        details: json!({"from": r.from, "to": r.to, "target": d}),
+                    });
+                }
+                path
+            }
             _ => None,
         };
         let mut data = json!({"from": r.from,
@@ -367,7 +397,7 @@ pub(super) async fn redirects(l: &mut Loader<'_>) -> Result<()> {
             "from",
             &from,
             data,
-            vec![],
+            issues,
         )
         .await?;
     }

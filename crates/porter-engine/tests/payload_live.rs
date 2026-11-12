@@ -83,7 +83,7 @@ async fn live_upload_and_upsert() {
 #[tokio::test]
 async fn live_lexical_and_blocks_round_trip() {
     use indexmap::IndexMap;
-    use porter_engine::destinations::payload::blocks::to_blocks;
+    use porter_engine::destinations::payload::blocks::{settle_relations, to_blocks};
     use porter_engine::destinations::payload::lexical::{DestRef, MemIdMap};
     use porter_engine::mapping::{BlockMap, BlockMatch};
     use porter_model::{
@@ -248,6 +248,8 @@ async fn live_lexical_and_blocks_round_trip() {
     ];
     let (blocks, issues) = to_blocks(&layout, &maps, &ids, None);
     assert!(issues.is_empty(), "{issues:?}");
+    let mut blocks = serde_json::Value::Array(blocks);
+    assert!(settle_relations(&mut blocks, None).is_empty());
 
     let (page, _) = c
         .upsert(

@@ -86,14 +86,6 @@ pub(super) async fn load(l: &mut Loader<'_>) -> Result<()> {
             }
         }
         let data = Value::Object(data);
-        if !l.apply() {
-            let mut body = data.clone();
-            body[KEY] = json!(m.id.to_string());
-            l.preview(&coll, m.id, &body)?;
-            l.placeholder(m.id, &coll);
-            l.finish(m.id, KIND, partial.remove(&m.id))?;
-            continue;
-        }
         let file = store.media_path(m.id)?;
         if !file.exists() {
             let error = format!("no downloaded file for {}", m.filename);
@@ -105,6 +97,14 @@ pub(super) async fn load(l: &mut Loader<'_>) -> Result<()> {
                 json!({"url": m.variants.first()}),
             )?;
             l.status(m.id, KIND, porter_model::ItemStatus::Failed { error })?;
+            continue;
+        }
+        if !l.apply() {
+            let mut body = data.clone();
+            body[KEY] = json!(m.id.to_string());
+            l.preview(&coll, m.id, &body)?;
+            l.placeholder(m.id, &coll);
+            l.finish(m.id, KIND, partial.remove(&m.id))?;
             continue;
         }
         jobs.push_back(Job {
@@ -251,7 +251,10 @@ async fn folder(
     name: &str,
     parent: Option<&Value>,
 ) -> Result<Value> {
-    let mut filter = vec![("where[name][equals]".to_string(), name.to_string())];
+    let mut filter = vec![
+        ("where[name][equals]".to_string(), name.to_string()),
+        ("where[folderType][contains]".to_string(), coll.to_string()),
+    ];
     match parent {
         Some(p) => filter.push((
             "where[folder][equals]".into(),
@@ -262,16 +265,22 @@ async fn folder(
     if let Some(found) = c.find_one(FOLDERS, &filter).await? {
         return Ok(found["id"].clone());
     }
-    // ponytail: unkeyed create (sent once); a lost response can leave a duplicate folder,
-    // which the next run's find_one then reports as a duplicate.
-    let doc = c
+    // Unkeyed create, sent once. On an error, look again before reporting: Payload may
+    // have committed before failing.
+    let created = c
         .create(
             FOLDERS,
             &json!({"name": name, "folder": parent, "folderType": [coll]}),
             false,
         )
-        .await?;
-    Ok(doc["id"].clone())
+        .await;
+    match created {
+        Ok(doc) => Ok(doc["id"].clone()),
+        Err(e) => match c.find_one(FOLDERS, &filter).await? {
+            Some(found) => Ok(found["id"].clone()),
+            None => Err(e),
+        },
+    }
 }
 
 fn lexical(s: &str) -> Value {

@@ -1,8 +1,12 @@
 //! Neutral layout blocks -> a Payload `blocks` field value, via the `[[mapping.blocks]]` maps.
+//! References come out as `{relationTo, value}`; `settle_relations` then shapes each for
+//! its destination field before the value is sent.
 
 use super::lexical::{IdMap, to_html, to_lexical};
+use super::ts::DestField;
 use crate::html::PendingIssue;
 use crate::mapping::BlockMap;
+use indexmap::IndexMap;
 use porter_model::{Block, BlockKind, FieldValue, IssueKind, Severity};
 use serde_json::{Map, Value, json};
 
@@ -180,10 +184,10 @@ impl W<'_> {
                 v
             }
             FieldValue::Layout(bs) => Value::Array(self.blocks(bs)),
-            // ponytail: plain id fits upload and single-collection relationship fields;
-            // polymorphic ones need `{relationTo, value}` once the schema stage knows.
+            // Collection and id together: ids are per collection, so `settle_relations`
+            // needs both to shape (and check) it for the destination field.
             FieldValue::Media(id) | FieldValue::Doc(id) => match self.ids.get(*id) {
-                Some(d) => d.id,
+                Some(d) => json!({"relationTo": d.collection, "value": d.id}),
                 None => {
                     self.issue(
                         IssueKind::UnresolvedRelation,
@@ -201,6 +205,76 @@ impl W<'_> {
                     .collect(),
             ),
         })
+    }
+}
+
+/// A reference as `to_blocks` writes it.
+fn reference(v: &Value) -> Option<(&str, &Value)> {
+    let o = v.as_object()?;
+    (o.len() == 2)
+        .then(|| Some((o.get("relationTo")?.as_str()?, o.get("value")?)))
+        .flatten()
+}
+
+/// Shapes every reference in a `to_blocks` value for its field, looked up in `blocks`
+/// (block slug -> fields, from the Payload config): polymorphic fields keep
+/// `{relationTo, value}`, others get the plain id. A field that doesn't take the target's
+/// collection gets null plus an `unresolved-relation` warning, never another
+/// collection's id. Unknown fields (or no schema) get the plain id.
+pub fn settle_relations(
+    v: &mut Value,
+    blocks: Option<&IndexMap<String, Vec<DestField>>>,
+) -> Vec<PendingIssue> {
+    let mut out = vec![];
+    settle(v, None, blocks, &mut out);
+    out
+}
+
+fn settle(
+    v: &mut Value,
+    f: Option<&DestField>,
+    blocks: Option<&IndexMap<String, Vec<DestField>>>,
+    out: &mut Vec<PendingIssue>,
+) {
+    if let Some((coll, id)) = reference(v) {
+        let accepts =
+            |f: &DestField| f.relation_to.is_empty() || f.relation_to.iter().any(|c| c == coll);
+        *v = match f {
+            Some(f) if !accepts(f) => {
+                out.push(PendingIssue {
+                    kind: IssueKind::UnresolvedRelation,
+                    severity: Severity::Warning,
+                    message: format!(
+                        "block field `{}` takes {} but {coll} {id} was given: reference left empty",
+                        f.name,
+                        f.relation_to.join("/")
+                    ),
+                    details: json!({"field": f.name, "collection": coll, "id": id, "accepts": f.relation_to}),
+                });
+                Value::Null
+            }
+            Some(f) if f.polymorphic => return,
+            _ => id.clone(),
+        };
+        return;
+    }
+    match v {
+        Value::Array(a) => a.iter_mut().for_each(|x| settle(x, f, blocks, out)),
+        // Lexical state (a richText value): its link and upload nodes already carry
+        // `{relationTo, value}` as Payload wants it.
+        Value::Object(o) if o.contains_key("root") => {}
+        Value::Object(o) => {
+            // A block reads its slug's fields; a group or array row its field's sub-fields.
+            let fields = match o.get("blockType").and_then(Value::as_str) {
+                Some(slug) => blocks.and_then(|b| b.get(slug)).map(|f| &f[..]),
+                None => f.map(|f| &f.fields[..]),
+            };
+            for (k, x) in o.iter_mut() {
+                let sub = fields.and_then(|fs| fs.iter().find(|f| &f.name == k));
+                settle(x, sub, blocks, out);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -257,8 +331,14 @@ mod tests {
             )],
         );
         let maps = [map("image", "mediaBlock", &[("media", "media")])];
-        let (v, issues) = to_blocks(&[tree], &maps, &ids(), None);
-        assert_eq!(v, vec![json!({"blockType": "mediaBlock", "media": 3})]);
+        let (mut v, issues) = to_blocks(&[tree], &maps, &ids(), None);
+        assert_eq!(
+            v,
+            vec![json!({"blockType": "mediaBlock", "media": {"relationTo": "media", "value": 3}})]
+        );
+        let mut arr = Value::Array(std::mem::take(&mut v));
+        assert!(settle_relations(&mut arr, None).is_empty());
+        assert_eq!(arr, json!([{"blockType": "mediaBlock", "media": 3}]));
         assert!(issues.is_empty(), "{issues:?}");
     }
 
@@ -300,7 +380,7 @@ mod tests {
             "hi"
         );
         assert_eq!(v[0]["heading"], "T");
-        assert_eq!(v[0]["page"], 7);
+        assert_eq!(v[0]["page"], json!({"relationTo": "pages", "value": 7}));
         assert!(v[0].get("x").is_none(), "nulls are omitted");
         // `unmapped` reported; the unmatched image is an error.
         assert_eq!(issues.len(), 2, "{issues:?}");
@@ -348,6 +428,16 @@ mod tests {
     }
 
     #[test]
+    fn settle_leaves_rich_text_links_alone() {
+        let mut v = json!([{"blockType": "richText", "content": {"root": {"children": [
+            {"type": "link", "fields": {"doc": {"relationTo": "posts", "value": 8}}}
+        ]}}}]);
+        let before = v.clone();
+        assert!(settle_relations(&mut v, None).is_empty());
+        assert_eq!(v, before);
+    }
+
+    #[test]
     fn blocks_matched_container_keeps_children() {
         let mut col = b(BlockKind::Column { width: None }, vec![image("pic")]);
         col.props
@@ -357,10 +447,12 @@ mod tests {
             map("image", "image", &[("media", "image")]),
         ];
         let (v, issues) = to_blocks(&[col], &maps, &ids(), None);
+        let mut v = Value::Array(v);
+        assert!(settle_relations(&mut v, None).is_empty());
         assert_eq!(
             v,
-            vec![json!({"blockType": "column", "bg": "dark",
-                "items": [{"blockType": "image", "image": 3}]})]
+            json!([{"blockType": "column", "bg": "dark",
+                "items": [{"blockType": "image", "image": 3}]}])
         );
         assert!(issues.is_empty(), "{issues:?}");
     }

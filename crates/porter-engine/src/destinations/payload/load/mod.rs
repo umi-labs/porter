@@ -300,7 +300,9 @@ impl Loader<'_> {
     }
 
     /// The relation value for `id` in field `f`: `{relationTo, value}` when the field is
-    /// polymorphic, else the plain id. None (plus an issue of `kind`) if it isn't loaded.
+    /// polymorphic, else the plain id. Null plus a warning when the target isn't loaded
+    /// (issue `kind`), or when the field is known and doesn't accept the target's
+    /// collection: Payload ids are per collection, so a wrong one would point elsewhere.
     fn relation(
         &self,
         id: ItemId,
@@ -308,26 +310,50 @@ impl Loader<'_> {
         kind: IssueKind,
         out: &mut Vec<PendingIssue>,
     ) -> Value {
-        match self.ids.get(id) {
-            Some(r) if f.is_some_and(|f| f.polymorphic) => {
-                json!({"relationTo": r.collection, "value": r.id})
-            }
-            Some(r) => r.id,
-            None => {
-                let what = if kind == IssueKind::MissingMedia {
-                    "media"
-                } else {
-                    "document"
-                };
-                out.push(PendingIssue {
-                    kind,
-                    severity: Severity::Warning,
-                    message: format!("{what} {id} is not loaded: reference left empty"),
-                    details: json!({"target": id, "old_url": self.ids.old_url(id)}),
-                });
+        let Some(r) = self.ids.get(id) else {
+            let what = if kind == IssueKind::MissingMedia {
+                "media"
+            } else {
+                "document"
+            };
+            out.push(PendingIssue {
+                kind,
+                severity: Severity::Warning,
+                message: format!("{what} {id} is not loaded: reference left empty"),
+                details: json!({"target": id, "old_url": self.ids.old_url(id)}),
+            });
+            return Value::Null;
+        };
+        match f {
+            Some(f) if !accepts(f, &r.collection) => {
+                out.push(wrong_collection(&f.name, id, &r.collection, &f.relation_to));
                 Value::Null
             }
+            Some(f) if f.polymorphic => json!({"relationTo": r.collection, "value": r.id}),
+            _ => r.id,
         }
+    }
+}
+
+/// Whether relation field `f` takes `collection` (unknown `relationTo`: can't tell, yes).
+pub(super) fn accepts(f: &DestField, collection: &str) -> bool {
+    f.relation_to.is_empty() || f.relation_to.iter().any(|c| c == collection)
+}
+
+pub(super) fn wrong_collection(
+    field: &str,
+    id: impl std::fmt::Display,
+    have: &str,
+    want: &[String],
+) -> PendingIssue {
+    PendingIssue {
+        kind: IssueKind::UnresolvedRelation,
+        severity: Severity::Warning,
+        message: format!(
+            "`{field}` takes {} but {id} was loaded into {have}: reference left empty",
+            want.join("/")
+        ),
+        details: json!({"field": field, "target": id.to_string(), "collection": have, "accepts": want}),
     }
 }
 

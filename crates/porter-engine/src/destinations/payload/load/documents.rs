@@ -2,7 +2,7 @@
 //! pass 2, once every id is known, writes references, rich text, layouts and `parent`.
 
 use super::{Loader, NOT_MAPPED, required_gap, set_path, settle_nulls};
-use crate::destinations::payload::blocks::to_blocks;
+use crate::destinations::payload::blocks::{settle_relations, to_blocks};
 use crate::destinations::payload::lexical::{IdMap, to_lexical};
 use crate::destinations::payload::schema_check::find;
 use crate::destinations::payload::ts::DestField;
@@ -140,11 +140,25 @@ pub(super) async fn load(l: &mut Loader<'_>) -> Result<()> {
             && let Some(fields) = l.coll(coll).map(|c| &c.fields)
             && let Some(gap) = required_gap(fields, &full.data, "")
         {
-            schema_fail(
-                l,
-                d.id,
-                format!("required field `{coll}.{gap}` is empty after mapping"),
-            )?;
+            // Empty only because its target is created later in this pass?
+            let top = gap.split('.').next().unwrap_or(&gap);
+            let later: HashSet<String> = todo[i + 1..]
+                .iter()
+                .map(|(d, ..)| d.id.to_string())
+                .collect();
+            let forward = full.refs.contains(top).then(|| {
+                full.issues.iter().find_map(|x| {
+                    let t = x.details["target"].as_str()?;
+                    later.contains(t).then(|| t.to_string())
+                })
+            });
+            let msg = match forward.flatten() {
+                Some(t) => format!(
+                    "required field `{coll}.{gap}` is empty: unresolved forward reference to {t} (re-run will fix)"
+                ),
+                None => format!("required field `{coll}.{gap}` is empty after mapping"),
+            };
+            schema_fail(l, d.id, msg)?;
             continue;
         }
         let required = |k: &str| {
@@ -318,19 +332,28 @@ fn build(l: &Loader, d: &Document, tm: &TypeMap, coll: &str) -> Built {
     match d.parent {
         Some(p) => {
             b.refs.insert("parent".into());
-            let v = match l.ids.get(p) {
-                Some(_) => l.relation(p, pf, IssueKind::ParentMissing, &mut b.issues),
-                None => {
-                    b.issues.push(PendingIssue {
-                        kind: IssueKind::ParentMissing,
-                        severity: Severity::Warning,
-                        message: format!("parent {p} is not loaded"),
-                        details: json!({"parent": p, "old_url": l.ids.old_url(p)}),
-                    });
-                    Value::Null
-                }
+            // nested-docs parents are in the item's own collection; another collection's id
+            // would point at an unrelated doc, so the parent is left unset instead.
+            let miss = match l.ids.get(p) {
+                Some(r) if r.collection == coll => None,
+                Some(r) => Some(format!(
+                    "parent {p} was loaded into {}, not {coll}",
+                    r.collection
+                )),
+                None => Some(format!("parent {p} is not loaded")),
             };
-            b.data.insert("parent".into(), v);
+            match miss {
+                None => {
+                    let v = l.relation(p, pf, IssueKind::ParentMissing, &mut b.issues);
+                    b.data.insert("parent".into(), v);
+                }
+                Some(message) => b.issues.push(PendingIssue {
+                    kind: IssueKind::ParentMissing,
+                    severity: Severity::Warning,
+                    message,
+                    details: json!({"parent": p, "old_url": l.ids.old_url(p)}),
+                }),
+            }
         }
         None if pf.is_some() => {
             b.data.insert("parent".into(), Value::Null);
@@ -358,7 +381,10 @@ fn value(l: &Loader, v: &FieldValue, f: Option<&DestField>, out: &mut Vec<Pendin
             let (arr, issues) = to_blocks(blocks, &l.ctx.config.mapping.blocks, &l.ids, raw);
             out.extend(issues);
             let mut v = Value::Array(arr);
-            wrap_polymorphic(l, &mut v, out);
+            out.extend(settle_relations(
+                &mut v,
+                l.schema.as_ref().map(|d| &d.blocks),
+            ));
             v
         }
         FieldValue::Media(id) => l.relation(*id, f, IssueKind::MissingMedia, out),
@@ -375,50 +401,5 @@ fn value(l: &Loader, v: &FieldValue, f: Option<&DestField>, out: &mut Vec<Pendin
                 })
                 .collect(),
         ),
-    }
-}
-
-/// The blocks writer emits relations as plain ids; a polymorphic block field needs
-/// `{relationTo, value}`, so find the collection among loaded items with that id.
-// ponytail: linear scan of the IdMap per polymorphic value; index by id if layouts get big.
-fn wrap_polymorphic(l: &Loader, v: &mut Value, out: &mut Vec<PendingIssue>) {
-    match v {
-        Value::Array(a) => a.iter_mut().for_each(|x| wrap_polymorphic(l, x, out)),
-        Value::Object(o) => {
-            let fields = o
-                .get("blockType")
-                .and_then(Value::as_str)
-                .and_then(|slug| l.schema.as_ref()?.blocks.get(slug));
-            for (k, x) in o.iter_mut() {
-                let f = fields.and_then(|fs| fs.iter().find(|f| &f.name == k));
-                match f {
-                    Some(f) if f.polymorphic && !x.is_null() && !x.is_object() => {
-                        let hits: Vec<String> = l
-                            .ids
-                            .refs
-                            .values()
-                            .filter(|r| r.id == *x && f.relation_to.contains(&r.collection))
-                            .map(|r| r.collection.clone())
-                            .collect();
-                        if let [c] = hits.as_slice() {
-                            *x = json!({"relationTo": c, "value": x.clone()});
-                        } else {
-                            out.push(PendingIssue {
-                                kind: IssueKind::UnresolvedRelation,
-                                severity: Severity::Warning,
-                                message: format!(
-                                    "block field `{k}` is polymorphic but id {x} matches {} loaded collections",
-                                    hits.len()
-                                ),
-                                details: json!({"field": k, "id": x.clone()}),
-                            });
-                            *x = Value::Null;
-                        }
-                    }
-                    _ => wrap_polymorphic(l, x, out),
-                }
-            }
-        }
-        _ => {}
     }
 }
