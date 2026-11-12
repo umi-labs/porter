@@ -8,6 +8,10 @@ use ratatui::{
 };
 
 mod detail;
+mod filter;
+mod issues;
+mod items;
+mod modal;
 mod project;
 pub mod stages;
 
@@ -64,11 +68,10 @@ pub fn view(app: &App, f: &mut Frame) {
     ])
     .areas(left);
 
-    let focus = |p| app.focus == p;
     self::project::render(app, f, project);
     self::stages::render(app, f, stages);
-    f.render_widget(panel("Issues", focus(Panel::Issues)), issues);
-    f.render_widget(panel("Items", focus(Panel::Items)), items);
+    self::issues::render(app, f, issues);
+    self::items::render(app, f, items);
     self::detail::render(app, f, detail);
     let log_block = panel("Log", false);
     let inner = log_block.inner(log);
@@ -84,20 +87,43 @@ pub fn view(app: &App, f: &mut Frame) {
         .collect();
     f.render_widget(Paragraph::new(tail), inner);
     f.render_widget(
-        Paragraph::new("tab focus · space run · R all · v verify · c cancel · q quit")
-            .style(Style::default().add_modifier(Modifier::DIM)),
+        Paragraph::new(footer_text(app)).style(Style::default().add_modifier(Modifier::DIM)),
         footer,
     );
 
-    if app.modal == Some(Modal::ConfirmQuit) {
-        let r = centered(area, 44, 5);
-        f.render_widget(Clear, r);
-        f.render_widget(
-            Paragraph::new("A stage is running. Cancel it and quit?\n\ny yes · n no")
-                .block(panel("Quit", true)),
-            r,
-        );
+    match &app.modal {
+        Some(Modal::ConfirmQuit) => {
+            let r = centered(area, 44, 5);
+            f.render_widget(Clear, r);
+            f.render_widget(
+                Paragraph::new("A stage is running. Cancel it and quit?\n\ny yes · n no")
+                    .block(panel("Quit", true)),
+                r,
+            );
+        }
+        Some(Modal::Resolve(m)) => modal::resolve(m, f, area),
+        None => {}
     }
+}
+
+fn footer_text(app: &App) -> &'static str {
+    match (app.focus, app.detail.last()) {
+        (_, Some(crate::app::DetailView::Issues(_))) => {
+            "j/k move · enter open · x resolve · esc back · q quit"
+        }
+        (_, Some(crate::app::DetailView::Issue(_))) => "g jump to item · x resolve · esc back",
+        (_, Some(crate::app::DetailView::Item(_))) => "esc back · tab focus · q quit",
+        (Panel::Issues | Panel::Items, None) => {
+            "j/k move · enter open · / filter · f all/open/errors · tab focus · q quit"
+        }
+        _ => "tab focus · space run · R all · v verify · c cancel · q quit",
+    }
+}
+
+/// The rows of a list of `len` to draw in `h` lines so that `sel` stays visible.
+pub(crate) fn window(sel: usize, len: usize, h: usize) -> std::ops::Range<usize> {
+    let start = (sel + 1).saturating_sub(h.max(1));
+    start..(start + h).min(len)
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -289,6 +315,299 @@ mod tests {
                 label: "files".into(),
             }),
         );
+        insta::assert_snapshot!(render(&app, 120, 40));
+    }
+
+    #[test]
+    fn finished_stage_never_shows_a_stale_tick() {
+        // The stored overview says Extract was clean; the run that just ended had errors.
+        let (mut app, _d) = app_with(sum(|_| {}), true);
+        let errors = Summary {
+            errors: 1,
+            ..Default::default()
+        };
+        update(
+            &mut app,
+            Msg::Engine(Event::StageFinished {
+                stage: Stage::Extract,
+                run: RunId(uuid::Uuid::nil()),
+                summary: errors.clone(),
+            }),
+        );
+        let out = stages_panel(&app);
+        assert!(!out.contains('✓') && out.contains('✗'), "{out}");
+        // Still true while a stale overview answer is the last thing to have arrived.
+        let stale = Overview {
+            last_runs: app.panels.overview.clone().unwrap().last_runs,
+            ..Default::default()
+        };
+        update(
+            &mut app,
+            Msg::Data(DataMsg::Overview(Box::new(stale.clone()))),
+        );
+        assert!(
+            stages_panel(&app).contains('✓'),
+            "overview refresh landed: stored state rules"
+        );
+        // RunDone does the same through its summaries.
+        let (mut app, _d) = app_with(sum(|_| {}), true);
+        update(
+            &mut app,
+            Msg::RunDone(RunOutcome {
+                code: 2,
+                per_stage: vec![(Stage::Extract, 2, None)],
+                summaries: vec![(Stage::Extract, errors)],
+                ..Default::default()
+            }),
+        );
+        let out = stages_panel(&app);
+        assert!(!out.contains('✓') && out.contains('✗'), "{out}");
+    }
+
+    #[test]
+    fn live_state_survives_until_the_last_overview_lands() {
+        let (mut app, _d) = app_with(sum(|_| {}), true);
+        let errors = Summary {
+            errors: 1,
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            update(
+                &mut app,
+                Msg::Engine(Event::StageFinished {
+                    stage: Stage::Extract,
+                    run: RunId(uuid::Uuid::nil()),
+                    summary: errors.clone(),
+                }),
+            );
+        }
+        let old = app.panels.overview.clone().unwrap();
+        update(&mut app, Msg::Data(DataMsg::Overview(Box::new(old))));
+        assert!(
+            stages_panel(&app).contains('✗'),
+            "one query is still in flight"
+        );
+    }
+
+    // --- Issues / Items / Detail / modal at 120x40 -------------------------------
+
+    use crate::app::{DetailView, Modal, ResolveModal};
+    use crate::lists::{Group, IssueList, Window};
+    use crate::msg::DataMsg;
+    use porter_engine::session::{ItemDetail, ItemRow, Page, Paged};
+    use porter_model::{
+        Issue, IssueKind, ItemId, ItemKind, ItemStatus, Resolution, Severity, SourceRef,
+    };
+    use uuid::Uuid;
+
+    fn id(n: u128) -> ItemId {
+        ItemId(Uuid::from_u128(n))
+    }
+
+    fn mk_issue(n: u128, kind: IssueKind, sev: Severity, msg: &str) -> Issue {
+        Issue {
+            id: Uuid::from_u128(n),
+            kind,
+            severity: sev,
+            item: Some(id(n)),
+            stage: Stage::Normalise,
+            message: msg.into(),
+            details: serde_json::json!({"href": "/old/page", "context": {"block": "paragraph"}}),
+            resolution: Resolution::Open,
+        }
+    }
+
+    fn lists_app() -> (App, tempfile::TempDir) {
+        let (mut app, d) = app_with(None, false);
+        let seq = app.next_seq();
+        app.panels.issues.seq = seq;
+        update(
+            &mut app,
+            Msg::Data(DataMsg::IssueGroups {
+                seq,
+                groups: vec![
+                    Group {
+                        kind: IssueKind::MissingMedia,
+                        total: 450,
+                        worst: Severity::Error,
+                    },
+                    Group {
+                        kind: IssueKind::UnresolvedLink,
+                        total: 12,
+                        worst: Severity::Warning,
+                    },
+                    Group {
+                        kind: IssueKind::UnmappedField,
+                        total: 3,
+                        worst: Severity::Info,
+                    },
+                ],
+            }),
+        );
+        let seq = app.next_seq();
+        app.panels.items.win.reset(seq);
+        let rows = vec![
+            ItemRow {
+                id: id(1),
+                kind: ItemKind::Document,
+                label: "/about".into(),
+                title: Some("About us".into()),
+                statuses: vec![(Stage::Extract, ItemStatus::Done)],
+            },
+            ItemRow {
+                id: id(2),
+                kind: ItemKind::Document,
+                label: "/contact".into(),
+                title: Some("Contact".into()),
+                statuses: vec![(
+                    Stage::Load,
+                    ItemStatus::Failed {
+                        error: "422 unprocessable".into(),
+                    },
+                )],
+            },
+            ItemRow {
+                id: id(3),
+                kind: ItemKind::Media,
+                label: "/uploads/hero.jpg".into(),
+                title: None,
+                statuses: vec![(
+                    Stage::Load,
+                    ItemStatus::Partial {
+                        reason: "no alt text".into(),
+                    },
+                )],
+            },
+        ];
+        update(
+            &mut app,
+            Msg::Data(DataMsg::Items {
+                seq,
+                page: Page {
+                    offset: 0,
+                    limit: 500,
+                },
+                paged: Paged {
+                    rows,
+                    total: 50_000,
+                },
+            }),
+        );
+        (app, d)
+    }
+
+    #[test]
+    fn issues_panel_120x40() {
+        let (mut app, _d) = lists_app();
+        app.focus = Panel::Issues;
+        insta::assert_snapshot!(render(&app, 120, 40));
+    }
+
+    #[test]
+    fn items_panel_120x40() {
+        let (mut app, _d) = lists_app();
+        app.focus = Panel::Items;
+        insta::assert_snapshot!(render(&app, 120, 40));
+    }
+
+    #[test]
+    fn issue_list_and_issue_detail_120x40() {
+        let (mut app, _d) = lists_app();
+        app.focus = Panel::Issues;
+        let mut win = Window::new(200);
+        let seq = app.next_seq();
+        win.reset(seq);
+        win.apply(
+            seq,
+            0,
+            Paged {
+                rows: vec![
+                    mk_issue(
+                        1,
+                        IssueKind::MissingMedia,
+                        Severity::Error,
+                        "hero.jpg not found",
+                    ),
+                    mk_issue(
+                        2,
+                        IssueKind::MissingMedia,
+                        Severity::Warning,
+                        "logo.svg unreadable",
+                    ),
+                ],
+                total: 450,
+            },
+        );
+        app.detail.push(DetailView::Issues(IssueList {
+            kind: IssueKind::MissingMedia,
+            mode: crate::lists::Mode::All,
+            win,
+            sel: 0,
+        }));
+        insta::assert_snapshot!("issue_list_detail_120x40", render(&app, 120, 40));
+        let i = mk_issue(
+            1,
+            IssueKind::MissingMedia,
+            Severity::Error,
+            "hero.jpg not found",
+        );
+        app.detail.push(DetailView::Issue(i));
+        insta::assert_snapshot!(render(&app, 120, 40));
+    }
+
+    #[test]
+    fn item_detail_120x40() {
+        let (mut app, _d) = lists_app();
+        app.focus = Panel::Items;
+        let data = serde_json::json!({
+            "title": "About us", "type": "page", "path": "/about", "parent": null,
+            "fields": (0..60).map(|i| (format!("f{i}"), serde_json::json!(i))).collect::<serde_json::Map<_, _>>(),
+        });
+        app.detail.push(DetailView::Item(Box::new(ItemDetail {
+            row: ItemRow {
+                id: id(1),
+                kind: ItemKind::Document,
+                label: "/about".into(),
+                title: Some("About us".into()),
+                statuses: vec![
+                    (Stage::Extract, ItemStatus::Done),
+                    (
+                        Stage::Load,
+                        ItemStatus::Failed {
+                            error: "422 unprocessable".into(),
+                        },
+                    ),
+                ],
+            },
+            source: SourceRef {
+                connector: "wordpress".into(),
+                source_id: "42".into(),
+                url: Some("/about".into()),
+            },
+            data,
+            issues: vec![mk_issue(
+                1,
+                IssueKind::UnresolvedLink,
+                Severity::Warning,
+                "link to /gone",
+            )],
+        })));
+        let out = render(&app, 120, 40);
+        assert!(out.contains("more lines"), "long JSON is truncated");
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn resolve_modal_120x40() {
+        let (mut app, _d) = lists_app();
+        app.focus = Panel::Issues;
+        app.modal = Some(Modal::Resolve(ResolveModal {
+            issue: Uuid::from_u128(1),
+            title: "missing-media: hero.jpg not found".into(),
+            choice: 0,
+            note: "re-uploaded by hand".into(),
+            error: None,
+        }));
         insta::assert_snapshot!(render(&app, 120, 40));
     }
 }

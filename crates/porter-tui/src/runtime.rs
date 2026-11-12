@@ -1,10 +1,12 @@
 use crate::app::{App, update};
+use crate::lists::{ALL_KINDS, Group, Mode, issue_filter};
 use crate::msg::{Cmd, DataMsg, Msg, RefreshScope};
 use crate::{term, ui};
 use anyhow::Result;
 use crossterm::event::{Event as TermEvent, EventStream};
 use futures::StreamExt;
-use porter_engine::session::{RunOutcome, Session};
+use porter_engine::session::{IssueQuery, Page, RunOutcome, Session};
+use porter_model::Severity;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::path::Path;
 use std::sync::Arc;
@@ -36,7 +38,7 @@ pub async fn run_tui(dir: &Path) -> Result<i32> {
         let mut events = EventStream::new();
         let mut tick = interval(Duration::from_millis(100));
         let mut run = RunSlot::default();
-        let mut cmds = vec![Cmd::Refresh(RefreshScope::All)];
+        let mut cmds = app.refresh_cmds();
 
         loop {
             let mut quit = false;
@@ -154,12 +156,95 @@ fn exec(cmd: Cmd, app: &App, tx: &mpsc::UnboundedSender<Msg>, run: &mut RunSlot)
             tokio::spawn(async move {
                 let m = match session.overview().await {
                     Ok(o) => DataMsg::Overview(Box::new(o)),
+                    Err(e) => DataMsg::OverviewFailed(format!("{e:#}")),
+                };
+                let _ = tx.send(Msg::Data(m));
+            });
+        }
+        Cmd::Items { q, page, seq } => {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let m = match session.items(q, page).await {
+                    Ok(paged) => DataMsg::Items { seq, page, paged },
                     Err(e) => DataMsg::Error(format!("{e:#}")),
                 };
                 let _ = tx.send(Msg::Data(m));
             });
         }
+        Cmd::Issues { q, page, seq } => {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let m = match session.issues(q, page).await {
+                    Ok(paged) => DataMsg::IssuePage { seq, page, paged },
+                    Err(e) => DataMsg::Error(format!("{e:#}")),
+                };
+                let _ = tx.send(Msg::Data(m));
+            });
+        }
+        Cmd::IssueGroups { mode, seq } => {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let m = match issue_groups(&session, mode).await {
+                    Ok(groups) => DataMsg::IssueGroups { seq, groups },
+                    Err(e) => DataMsg::Error(format!("{e:#}")),
+                };
+                let _ = tx.send(Msg::Data(m));
+            });
+        }
+        Cmd::Item(id) => {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let m = match session.item(id).await {
+                    Ok(d) => DataMsg::Item(Box::new(d)),
+                    Err(e) => DataMsg::Error(format!("{e:#}")),
+                };
+                let _ = tx.send(Msg::Data(m));
+            });
+        }
+        Cmd::Resolve(id, r) => {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let r2 = r.clone();
+                let res = tokio::task::spawn_blocking(move || session.resolve_issue(id, r2)).await;
+                let m = match res {
+                    Ok(Ok(())) => Ok((id, r)),
+                    Ok(Err(e)) => Err(format!("{e:#}")),
+                    Err(e) => Err(e.to_string()),
+                };
+                let _ = tx.send(Msg::Data(DataMsg::Resolved(m)));
+            });
+        }
         // Wired up with the panels in later tasks.
         Cmd::OpenEditor | Cmd::OpenReport(_) | Cmd::Copy(_) | Cmd::Quit => {}
     }
+}
+
+/// Issue counts per kind with the worst severity in each. One count query per kind, then
+/// severity probes of one row each, so nothing proportional to the issue count is held.
+async fn issue_groups(s: &Session, mode: Mode) -> Result<Vec<Group>> {
+    let one = Page {
+        offset: 0,
+        limit: 1,
+    };
+    let mut out = vec![];
+    for kind in ALL_KINDS {
+        let q = issue_filter(mode, Some(kind));
+        let total = s.issues(q.clone(), one).await?.total;
+        if total == 0 {
+            continue;
+        }
+        let mut worst = Severity::Info;
+        for sev in [Severity::Error, Severity::Warning] {
+            let probe = IssueQuery {
+                severity: Some(sev),
+                ..q.clone()
+            };
+            if s.issues(probe, one).await?.total > 0 {
+                worst = sev;
+                break;
+            }
+        }
+        out.push(Group { kind, total, worst });
+    }
+    Ok(out)
 }

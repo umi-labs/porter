@@ -1,11 +1,15 @@
+use crate::lists::{ISSUES_PAGE, IssueList, IssuesState, ItemsState, Window, kind_name};
 use crate::msg::{Cmd, DataMsg, Msg, RefreshScope};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use porter_engine::events::Event;
-use porter_engine::session::{Overview, RunInfo, RunOutcome, RunPlan, STAGES, Session, StageOpts};
+use porter_engine::events::{Event, Summary};
+use porter_engine::session::{
+    ItemDetail, Overview, RunInfo, RunOutcome, RunPlan, STAGES, Session, StageOpts,
+};
 use porter_engine::stage::SchemaMode;
-use porter_model::{ItemStatus, Severity, Stage};
+use porter_model::{Issue, ItemStatus, Resolution, Severity, Stage};
 use std::collections::VecDeque;
 use std::sync::Arc;
+use uuid::Uuid;
 
 const LOG_CAP: usize = 1000;
 
@@ -45,6 +49,9 @@ pub struct StagesState {
     pub running: Option<Stage>,
     progress: [Option<Progress>; 6],
     could_not_run: [Option<String>; 6],
+    /// How a stage that just finished ended, until the overview re-query lands: no frame
+    /// may show the previous run's state for a stage whose new run is already over.
+    finished: [Option<Summary>; 6],
     pub live: Live,
 }
 
@@ -61,21 +68,45 @@ impl StagesState {
         self.could_not_run[idx(s)].as_deref()
     }
 
+    pub fn finished_of(&self, s: Stage) -> Option<&Summary> {
+        self.finished[idx(s)].as_ref()
+    }
+
     pub fn selected(&self) -> Stage {
         STAGES[self.sel.min(STAGES.len() - 1)]
     }
 }
 
-/// Per-panel state; Tasks 4-5 add Issues and Items.
+/// Per-panel state.
 #[derive(Default)]
 pub struct Panels {
     pub overview: Option<Overview>,
     pub stages: StagesState,
+    pub issues: IssuesState,
+    pub items: ItemsState,
+}
+
+/// What the Detail pane shows when it has been entered with Enter; Esc pops.
+pub enum DetailView {
+    Issues(IssueList),
+    Issue(Issue),
+    Item(Box<ItemDetail>),
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ResolveModal {
+    pub issue: Uuid,
+    pub title: String,
+    /// 0 handled manually, 1 won't fix, 2 reopen.
+    pub choice: usize,
+    pub note: String,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum Modal {
     ConfirmQuit,
+    Resolve(ResolveModal),
 }
 
 pub struct LogLine(pub String);
@@ -86,6 +117,10 @@ pub struct App {
     pub focus: Panel,
     pub panels: Panels,
     pub modal: Option<Modal>,
+    pub detail: Vec<DetailView>,
+    /// Overview queries in flight; the live finished state stays until the last lands.
+    pending_overview: u32,
+    seq: u64,
     pub log: VecDeque<LogLine>,
     pub running: Option<RunInfo>,
     pub size: (u16, u16),
@@ -105,6 +140,9 @@ impl App {
             focus: Panel::Project,
             panels: Panels::default(),
             modal: None,
+            detail: vec![],
+            pending_overview: 0,
+            seq: 0,
             log: VecDeque::new(),
             running: None,
             size,
@@ -122,6 +160,43 @@ impl App {
         self.log.push_back(LogLine(s));
     }
 
+    pub(crate) fn next_seq(&mut self) -> u64 {
+        self.seq += 1;
+        self.seq
+    }
+
+    fn overview_cmd(&mut self) -> Cmd {
+        self.pending_overview += 1;
+        Cmd::Refresh(RefreshScope::All)
+    }
+
+    /// Re-queries what is on screen: the overview, the issue counts, the visible page of
+    /// items and of any open issue list. Never more than one page per list.
+    pub fn refresh_cmds(&mut self) -> Vec<Cmd> {
+        let mut v = vec![self.overview_cmd()];
+        let seq = self.next_seq();
+        self.panels.issues.seq = seq;
+        v.push(Cmd::IssueGroups {
+            mode: self.panels.issues.mode,
+            seq,
+        });
+        let it = &mut self.panels.items;
+        let off = it.win.refresh();
+        v.push(it.cmd(off));
+        for d in &mut self.detail {
+            if let DetailView::Issues(l) = d {
+                let off = l.win.refresh();
+                v.push(l.cmd(off));
+            }
+        }
+        v
+    }
+
+    fn set_focus(&mut self, p: Panel) {
+        self.focus = p;
+        self.detail.clear();
+    }
+
     fn on_event(&mut self, e: Event) {
         let st = &mut self.panels.stages;
         match e {
@@ -129,6 +204,7 @@ impl App {
                 st.running = Some(stage);
                 st.progress[idx(stage)] = None;
                 st.could_not_run[idx(stage)] = None;
+                st.finished[idx(stage)] = None;
                 st.live = Live::default();
             }
             Event::Progress {
@@ -159,6 +235,7 @@ impl App {
                 if st.running == Some(stage) {
                     st.running = None;
                 }
+                st.finished[idx(stage)] = Some(summary.clone());
                 self.push_log(format!(
                     "{stage:?} finished: {} done, {} failed, {} errors, {} warnings",
                     summary.done, summary.failed, summary.errors, summary.warnings
@@ -174,6 +251,9 @@ impl App {
         st.running = None;
         st.progress = Default::default();
         let mut failures = 0;
+        for (stage, sum) in &o.summaries {
+            st.finished[idx(*stage)] = Some(sum.clone());
+        }
         for (stage, code, err) in &o.per_stage {
             if *code == 1 {
                 failures += 1;
@@ -207,6 +287,7 @@ impl App {
         if let RunPlan::Stage(s, _) = &plan {
             self.panels.stages.running = Some(*s);
             self.panels.stages.could_not_run[idx(*s)] = None;
+            self.panels.stages.finished[idx(*s)] = None;
         }
         self.running = Some(RunInfo { plan: plan.clone() });
         vec![Cmd::Run(plan)]
@@ -247,19 +328,17 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
             let finished = matches!(e, Event::StageFinished { .. });
             app.on_event(e);
             app.stale = true;
-            return if finished {
-                vec![Cmd::Refresh(RefreshScope::All)]
-            } else {
-                vec![]
-            };
+            return if finished { app.refresh_cmds() } else { vec![] };
         }
         Msg::Resize(w, h) => app.size = (w, h),
-        Msg::Data(DataMsg::Overview(o)) => app.panels.overview = Some(*o),
-        Msg::Data(DataMsg::Error(e)) => app.push_log(format!("error: {e}")),
+        Msg::Data(d) => {
+            app.dirty = true;
+            return on_data(app, d);
+        }
         Msg::RunDone(o) => {
             app.on_run_done(o);
             app.dirty = true;
-            return vec![Cmd::Refresh(RefreshScope::All)];
+            return vec![app.overview_cmd()];
         }
         Msg::Key(k) => {
             app.dirty = true;
@@ -288,14 +367,26 @@ fn key(app: &mut App, k: KeyEvent) -> Vec<Cmd> {
             _ => vec![],
         };
     }
+    if matches!(app.modal, Some(Modal::Resolve(_))) {
+        return resolve_key(app, k);
+    }
+    if let Some(c) = filter_key(app, k) {
+        return c;
+    }
+    if let Some(c) = detail_key(app, k) {
+        return c;
+    }
+    if let Some(c) = list_key(app, k) {
+        return c;
+    }
     let stages = app.focus == Panel::Stages;
     match k.code {
-        KeyCode::Tab => app.focus = app.focus.step(1),
-        KeyCode::BackTab => app.focus = app.focus.step(3),
-        KeyCode::Char('1') => app.focus = Panel::Project,
-        KeyCode::Char('2') => app.focus = Panel::Stages,
-        KeyCode::Char('3') => app.focus = Panel::Issues,
-        KeyCode::Char('4') => app.focus = Panel::Items,
+        KeyCode::Tab => app.set_focus(app.focus.step(1)),
+        KeyCode::BackTab => app.set_focus(app.focus.step(3)),
+        KeyCode::Char('1') => app.set_focus(Panel::Project),
+        KeyCode::Char('2') => app.set_focus(Panel::Stages),
+        KeyCode::Char('3') => app.set_focus(Panel::Issues),
+        KeyCode::Char('4') => app.set_focus(Panel::Items),
         KeyCode::Char('j') | KeyCode::Down if stages => {
             let st = &mut app.panels.stages;
             st.sel = (st.sel + 1).min(STAGES.len() - 1);
@@ -328,6 +419,295 @@ fn key(app: &mut App, k: KeyEvent) -> Vec<Cmd> {
             };
         }
         KeyCode::Char('c') => return app.cancel(),
+        _ => {}
+    }
+    vec![]
+}
+
+/// Results the runtime ran off the render loop. Pages that answer a replaced query or a
+/// page that is no longer wanted are dropped; a page that left the selection outside the
+/// window (the list shrank) asks for the right one.
+fn on_data(app: &mut App, d: DataMsg) -> Vec<Cmd> {
+    match d {
+        DataMsg::Overview(o) => {
+            app.panels.overview = Some(*o);
+            landed_overview(app);
+        }
+        DataMsg::OverviewFailed(e) => {
+            app.push_log(format!("error: {e}"));
+            landed_overview(app);
+        }
+        DataMsg::Error(e) => app.push_log(format!("error: {e}")),
+        DataMsg::Items { seq, page, paged } => {
+            let it = &mut app.panels.items;
+            if it.win.apply(seq, page.offset, paged) {
+                it.sel = it.sel.min(it.win.total.saturating_sub(1));
+                it.fsel = it.fsel.min(it.shown().len().saturating_sub(1));
+                let sel = it.sel;
+                return it.win.move_to(sel).map(|o| it.cmd(o)).into_iter().collect();
+            }
+        }
+        DataMsg::IssueGroups { seq, groups } => {
+            let st = &mut app.panels.issues;
+            if seq == st.seq {
+                st.groups = groups;
+                st.sel = st.sel.min(st.shown().len().saturating_sub(1));
+            }
+        }
+        DataMsg::IssuePage { seq, page, paged } => {
+            for d in &mut app.detail {
+                if let DetailView::Issues(l) = d
+                    && l.win.apply(seq, page.offset, paged.clone())
+                {
+                    l.sel = l.sel.min(l.win.total.saturating_sub(1));
+                    let sel = l.sel;
+                    return l.win.move_to(sel).map(|o| l.cmd(o)).into_iter().collect();
+                }
+            }
+        }
+        DataMsg::Item(d) => app.detail.push(DetailView::Item(d)),
+        DataMsg::Resolved(Ok((id, r))) => {
+            app.push_log(format!("issue {id} resolved: {r:?}"));
+            for d in &mut app.detail {
+                match d {
+                    DetailView::Issue(i) if i.id == id => i.resolution = r.clone(),
+                    DetailView::Issues(l) => {
+                        for i in l.win.rows.iter_mut().filter(|i| i.id == id) {
+                            i.resolution = r.clone();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            return app.refresh_cmds();
+        }
+        DataMsg::Resolved(Err(e)) => app.push_log(format!("could not resolve: {e}")),
+    }
+    vec![]
+}
+
+/// The stored overview is now current; drop the live finished state once no query is left.
+fn landed_overview(app: &mut App) {
+    app.pending_overview = app.pending_overview.saturating_sub(1);
+    if app.pending_overview == 0 {
+        app.panels.stages.finished = Default::default();
+    }
+}
+
+fn delta(k: KeyCode) -> Option<i64> {
+    match k {
+        KeyCode::Char('j') | KeyCode::Down => Some(1),
+        KeyCode::Char('k') | KeyCode::Up => Some(-1),
+        KeyCode::PageDown => Some(20),
+        KeyCode::PageUp => Some(-20),
+        _ => None,
+    }
+}
+
+/// Keys of the Issues and Items panels themselves (Detail closed).
+fn list_key(app: &mut App, k: KeyEvent) -> Option<Vec<Cmd>> {
+    if !matches!(app.focus, Panel::Issues | Panel::Items) {
+        return None;
+    }
+    let items = app.focus == Panel::Items;
+    if let Some(d) = delta(k.code) {
+        if items {
+            return Some(app.panels.items.step(d));
+        }
+        let st = &mut app.panels.issues;
+        let n = st.shown().len();
+        st.sel = if d < 0 {
+            st.sel.saturating_sub(d.unsigned_abs() as usize)
+        } else {
+            st.sel + d as usize
+        }
+        .min(n.saturating_sub(1));
+        return Some(vec![]);
+    }
+    match k.code {
+        KeyCode::Char('/') => {
+            let f = if items {
+                &mut app.panels.items.filter
+            } else {
+                &mut app.panels.issues.filter
+            };
+            f.editing = true;
+            Some(vec![])
+        }
+        KeyCode::Char('f') if items => {
+            let it = &mut app.panels.items;
+            it.mode = it.mode.next();
+            it.fsel = 0;
+            Some(vec![])
+        }
+        KeyCode::Char('f') => {
+            let mode = app.panels.issues.mode.next();
+            let seq = app.next_seq();
+            let st = &mut app.panels.issues;
+            st.mode = mode;
+            st.sel = 0;
+            st.seq = seq;
+            Some(vec![Cmd::IssueGroups { mode, seq }])
+        }
+        KeyCode::Esc => Some(clear_filter(app)),
+        KeyCode::Enter if items => {
+            let id = app.panels.items.selected()?.id;
+            app.detail.clear();
+            Some(vec![Cmd::Item(id)])
+        }
+        KeyCode::Enter => {
+            let (kind, mode) = (app.panels.issues.selected()?.kind, app.panels.issues.mode);
+            let seq = app.next_seq();
+            let mut win = Window::new(ISSUES_PAGE);
+            win.reset(seq);
+            let list = IssueList {
+                kind,
+                mode,
+                win,
+                sel: 0,
+            };
+            let cmd = list.cmd(0);
+            app.detail = vec![DetailView::Issues(list)];
+            Some(vec![cmd])
+        }
+        _ => None,
+    }
+}
+
+/// Drops the `/` text of the focused list; an items text the server was given is re-queried.
+fn clear_filter(app: &mut App) -> Vec<Cmd> {
+    if app.focus == Panel::Issues {
+        let st = &mut app.panels.issues;
+        st.filter.text.clear();
+        st.filter.editing = false;
+        st.sel = 0;
+        return vec![];
+    }
+    let it = &mut app.panels.items;
+    it.filter.text.clear();
+    it.filter.editing = false;
+    it.fsel = 0;
+    if it.filter.server.take().is_some() {
+        return reload_items(app);
+    }
+    vec![]
+}
+
+fn reload_items(app: &mut App) -> Vec<Cmd> {
+    let seq = app.next_seq();
+    let it = &mut app.panels.items;
+    it.win.reset(seq);
+    it.sel = 0;
+    it.fsel = 0;
+    vec![it.cmd(0)]
+}
+
+/// Typing into the `/` filter: fuzzy and incremental on the loaded page; Enter also hands
+/// the text to the server so it narrows the whole result; Esc clears.
+fn filter_key(app: &mut App, k: KeyEvent) -> Option<Vec<Cmd>> {
+    let items = app.focus == Panel::Items;
+    let f = match app.focus {
+        Panel::Items => &mut app.panels.items.filter,
+        Panel::Issues => &mut app.panels.issues.filter,
+        _ => return None,
+    };
+    if !f.editing {
+        return None;
+    }
+    match k.code {
+        KeyCode::Esc => return Some(clear_filter(app)),
+        KeyCode::Enter => {
+            f.editing = false;
+            if items {
+                let text = Some(f.text.trim().to_string()).filter(|t| !t.is_empty());
+                if text != f.server {
+                    f.server = text;
+                    return Some(reload_items(app));
+                }
+            }
+        }
+        KeyCode::Backspace => {
+            f.text.pop();
+        }
+        KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => f.text.push(c),
+        _ => {}
+    }
+    app.panels.items.fsel = 0;
+    app.panels.issues.sel = if items { app.panels.issues.sel } else { 0 };
+    Some(vec![])
+}
+
+fn resolve_modal(i: &Issue) -> Modal {
+    Modal::Resolve(ResolveModal {
+        issue: i.id,
+        title: format!("{}: {}", kind_name(i.kind), i.message),
+        choice: 0,
+        note: String::new(),
+        error: None,
+    })
+}
+
+/// Keys inside an opened Detail view.
+fn detail_key(app: &mut App, k: KeyEvent) -> Option<Vec<Cmd>> {
+    let top = app.detail.last_mut()?;
+    match (k.code, top) {
+        (KeyCode::Esc, _) => {
+            app.detail.pop();
+            Some(vec![])
+        }
+        (c, DetailView::Issues(l)) if delta(c).is_some() => Some(l.step(delta(c)?)),
+        (KeyCode::Enter, DetailView::Issues(l)) => {
+            let i = l.win.at(l.sel)?.clone();
+            app.detail.push(DetailView::Issue(i));
+            Some(vec![])
+        }
+        (KeyCode::Char('x'), DetailView::Issues(l)) => {
+            let m = resolve_modal(l.win.at(l.sel)?);
+            app.modal = Some(m);
+            Some(vec![])
+        }
+        (KeyCode::Char('x'), DetailView::Issue(i)) => {
+            let m = resolve_modal(i);
+            app.modal = Some(m);
+            Some(vec![])
+        }
+        (KeyCode::Enter | KeyCode::Char('g'), DetailView::Issue(i)) => {
+            Some(i.item.map(Cmd::Item).into_iter().collect())
+        }
+        _ => None,
+    }
+}
+
+fn resolve_key(app: &mut App, k: KeyEvent) -> Vec<Cmd> {
+    let Some(Modal::Resolve(m)) = &mut app.modal else {
+        return vec![];
+    };
+    match k.code {
+        KeyCode::Esc => app.modal = None,
+        KeyCode::Down | KeyCode::Tab => m.choice = (m.choice + 1) % 3,
+        KeyCode::Up | KeyCode::BackTab => m.choice = (m.choice + 2) % 3,
+        KeyCode::Backspace if m.choice == 0 => {
+            m.note.pop();
+        }
+        KeyCode::Char(c) if m.choice == 0 && !k.modifiers.contains(KeyModifiers::CONTROL) => {
+            m.note.push(c);
+        }
+        KeyCode::Enter => {
+            let r = match m.choice {
+                0 if m.note.trim().is_empty() => {
+                    m.error = Some("a note is required for \"handled manually\"".into());
+                    return vec![];
+                }
+                0 => Resolution::HandledManually {
+                    note: m.note.trim().to_string(),
+                },
+                1 => Resolution::WontFix,
+                _ => Resolution::Open,
+            };
+            let id = m.issue;
+            app.modal = None;
+            return vec![Cmd::Resolve(id, r)];
+        }
         _ => {}
     }
     vec![]
@@ -565,7 +945,11 @@ mod tests {
                 summary: Summary::default(),
             }),
         );
-        assert_eq!(cmds, [Cmd::Refresh(RefreshScope::All)]);
+        // The overview, the issue counts and the one visible page of items: nothing more.
+        assert_eq!(cmds.len(), 3);
+        assert_eq!(cmds[0], Cmd::Refresh(RefreshScope::All));
+        assert!(matches!(cmds[1], Cmd::IssueGroups { .. }));
+        assert!(matches!(cmds[2], Cmd::Items { .. }));
         let cmds = update(&mut app, Msg::RunDone(Default::default()));
         assert_eq!(cmds, [Cmd::Refresh(RefreshScope::All)]);
     }

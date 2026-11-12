@@ -1,6 +1,6 @@
 use super::{accent, panel, tint};
 use crate::app::{App, Panel, Progress};
-use porter_engine::events::Summary;
+use porter_engine::events::{Summary, exit_code};
 use porter_engine::session::{Overview, STAGES, StageState, stage_state};
 use porter_engine::store::RunRow;
 use porter_model::Stage;
@@ -50,25 +50,48 @@ pub fn rows(app: &App) -> Vec<StageRow> {
     STAGES
         .iter()
         .map(|&stage| {
+            let fin = st.finished_of(stage);
             let state = if st.running == Some(stage) {
                 StageState::Running
             } else if let Some(e) = st.could_not_run_of(stage) {
                 StageState::CouldNotRun(e.to_string())
+            } else if let Some(sum) = fin {
+                finished_state(sum)
             } else {
                 stage_state(ov, stage)
             };
+            let stored: Option<RunSummaryView> = ov
+                .last_runs
+                .iter()
+                .find(|(s, _)| *s == stage)
+                .map(|(_, r)| r.into());
             StageRow {
                 stage,
                 state,
-                last_run: ov
-                    .last_runs
-                    .iter()
-                    .find(|(s, _)| *s == stage)
-                    .map(|(_, r)| r.into()),
+                // A run that just ended shows its own counts, not the previous run's.
+                last_run: match fin {
+                    Some(sum) => Some(RunSummaryView {
+                        summary: Some(sum.clone()),
+                        started_at: "this session".into(),
+                        ended_at: Some("just now".into()),
+                        porter_version: env!("CARGO_PKG_VERSION").into(),
+                    }),
+                    None => stored,
+                },
                 progress: st.progress_of(stage).cloned(),
             }
         })
         .collect()
+}
+
+/// Same rules as `stage_state`, from a summary the engine just reported.
+fn finished_state(sum: &Summary) -> StageState {
+    match exit_code(sum) {
+        3 => StageState::Interrupted,
+        2 => StageState::Errors,
+        _ if sum.warnings > 0 => StageState::Warnings,
+        _ => StageState::Clean,
+    }
 }
 
 pub fn glyph(s: &StageState) -> (&'static str, Option<Color>) {
