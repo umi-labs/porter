@@ -17,3 +17,5 @@
 /tests/payload-app/media
 /tests/payload-app/next-env.d.ts
 /tests/payload-app/payload-dev.log
+/acceptance/*/project/
+/acceptance/*/snapshot/
