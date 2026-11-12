@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use swc_core::ecma::ast::Module;
+use swc_ecma_ast::Module;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionSchema {
@@ -39,23 +39,51 @@ pub struct FieldAdmin {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[allow(non_snake_case)]
 pub enum FieldType {
-    Text { min_length: Option<u32>, max_length: Option<u32> },
-    Number { min: Option<f64>, max: Option<f64> },
-    Date { admin: Option<DateAdmin> },
+    Text {
+        min_length: Option<u32>,
+        max_length: Option<u32>,
+    },
+    Number {
+        min: Option<f64>,
+        max: Option<f64>,
+    },
+    Date {
+        admin: Option<DateAdmin>,
+    },
     Checkbox,
-    Select { options: Vec<SelectOption> },
-    Relationship { relationTo: String },
-    Array { fields: Vec<FieldDefinition> },
-    Group { fields: Vec<FieldDefinition> },
-    Blocks { blocks: Vec<String> },
-    Tabs { tabs: Vec<TabDefinition> },
-    Upload { relationTo: String },
+    Select {
+        options: Vec<SelectOption>,
+    },
+    Relationship {
+        relationTo: String,
+    },
+    Array {
+        fields: Vec<FieldDefinition>,
+    },
+    Group {
+        fields: Vec<FieldDefinition>,
+    },
+    Blocks {
+        blocks: Vec<String>,
+    },
+    Tabs {
+        tabs: Vec<TabDefinition>,
+    },
+    Upload {
+        relationTo: String,
+    },
     RichText,
     Json,
     Point,
-    Row { fields: Vec<FieldDefinition> },
-    Collapsible { fields: Vec<FieldDefinition>, label: String },
+    Row {
+        fields: Vec<FieldDefinition>,
+    },
+    Collapsible {
+        fields: Vec<FieldDefinition>,
+        label: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

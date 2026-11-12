@@ -2,6 +2,7 @@
 //! field renames and transforms, builder blocks, URL patterns. Platform-free.
 
 pub mod paths;
+pub mod summary;
 pub mod transforms;
 
 use crate::connectors::RawItem;

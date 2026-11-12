@@ -34,6 +34,11 @@ quick-xml.workspace = true
 globset.workspace = true
 regex.workspace = true
 keyring.workspace = true
+thiserror.workspace = true
+swc_ecma_parser.workspace = true
+swc_ecma_ast.workspace = true
+swc_common.workspace = true
+swc_atoms.workspace = true
 
 [dev-dependencies]
 wiremock.workspace = true

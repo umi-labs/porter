@@ -2,10 +2,15 @@
 pub mod blocks;
 pub mod client;
 pub mod lexical;
+pub mod schema_check;
+pub mod schema_generate;
+pub mod schema_prompt;
+pub mod ts;
 
 use crate::config::DestinationConfig;
+use crate::mapping::summary::TypeSummary;
 use crate::stage::{Capabilities, Destination, Feature, SchemaMode, StageCtx};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use client::PayloadClient;
 use porter_model::ItemId;
@@ -58,8 +63,68 @@ impl Destination for PayloadDestination {
         }
     }
 
-    async fn schema(&self, _mode: SchemaMode, _ctx: &StageCtx) -> Result<()> {
-        bail!("not implemented yet")
+    async fn schema(&self, mode: SchemaMode, ctx: &StageCtx) -> Result<()> {
+        let summary = TypeSummary::from_store(ctx.project.store())?;
+        let mapping = &ctx.config.mapping;
+        let project = ctx.project.dir();
+        let config_dir = self.cfg.config_dir.as_ref().map(|d| project.join(d));
+        let reports = ctx.project.reports_dir();
+        let mut written = vec![];
+        match mode {
+            SchemaMode::Check => {
+                let Some(dir) = config_dir else {
+                    bail!(
+                        "destination.config_dir is not set: point it at the Payload site's source folder"
+                    );
+                };
+                let dest = ts::read_payload_config(&dir)?;
+                let issues = schema_check::check(&summary, mapping, &dest);
+                let json: Vec<_> = issues
+                    .iter()
+                    .map(|i| {
+                        serde_json::json!({
+                            "kind": i.kind,
+                            "severity": i.severity,
+                            "message": i.message,
+                            "details": i.details,
+                        })
+                    })
+                    .collect();
+                let p = reports.join("schema-check.json");
+                write(&p, &serde_json::to_string_pretty(&json)?)?;
+                written.push(p);
+                for i in issues {
+                    ctx.issue(i.kind, i.severity, None, i.message, i.details)?;
+                }
+            }
+            SchemaMode::Generate => {
+                let out = project.join("generated").join("payload");
+                written = schema_generate::generate(&summary, mapping, &out)?;
+            }
+            SchemaMode::Prompt => {
+                let dest = config_dir.unwrap_or_else(|| project.join("<payload site>"));
+                let p = reports.join("schema-prompt.md");
+                write(
+                    &p,
+                    &schema_prompt::prompt(&summary, mapping, &dest, project),
+                )?;
+                written.push(p);
+            }
+            SchemaMode::Spec => {
+                let dest = config_dir.unwrap_or_else(|| project.join("<payload site>"));
+                let (md, html) = schema_prompt::spec(&summary, mapping, &dest, project);
+                for (ext, text) in [("md", md), ("html", html)] {
+                    let p = reports.join(format!("schema-spec.{ext}"));
+                    write(&p, &text)?;
+                    written.push(p);
+                }
+            }
+        }
+        let n = written.len() as u64;
+        for (i, p) in written.iter().enumerate() {
+            ctx.progress(i as u64 + 1, Some(n), format!("wrote {}", p.display()));
+        }
+        Ok(())
     }
 
     async fn load(&self, _ctx: &StageCtx, _apply: bool) -> Result<()> {
@@ -78,6 +143,13 @@ impl Destination for PayloadDestination {
         // Task 21 adds the dest_ids table this needs.
         Ok(None)
     }
+}
+
+fn write(path: &std::path::Path, text: &str) -> Result<()> {
+    if let Some(d) = path.parent() {
+        std::fs::create_dir_all(d).with_context(|| format!("create {}", d.display()))?;
+    }
+    std::fs::write(path, text).with_context(|| format!("write {}", path.display()))
 }
 
 #[cfg(test)]

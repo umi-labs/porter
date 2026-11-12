@@ -218,7 +218,7 @@ fn runs_table(runs: &[RunRow]) -> Markup {
     }
 }
 
-const CSS: &str = r#"
+pub(crate) const CSS: &str = r#"
 :root{--bg:#fafaf9;--fg:#1c1917;--muted:#6b6560;--card:#fff;--line:#e4e0db;--accent:#2457c5;--ok:#1a7f45;--warn:#9a6700;--err:#b42318}
 @media (prefers-color-scheme:dark){:root{--bg:#161412;--fg:#ece9e4;--muted:#9a948d;--card:#1f1c19;--line:#35302b;--accent:#8ab0ff;--ok:#5ccd8b;--warn:#e3b341;--err:#ff8077}}
 *{box-sizing:border-box}

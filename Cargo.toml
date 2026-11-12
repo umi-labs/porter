@@ -45,6 +45,10 @@ quick-xml = "0.37"
 globset = "0.4"
 regex = "1"
 keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+swc_ecma_parser = "47"
+swc_ecma_ast = "30"
+swc_common = "27"
+swc_atoms = "10"
 porter-model = { path = "crates/porter-model" }
 
 # The profile that 'dist' will build with
