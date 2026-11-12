@@ -112,6 +112,7 @@ pub fn detect_platform(html: &str, headers: &HeaderMap) -> Detected {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
 pub struct PageHead {
     pub url: String,
     pub status: Option<u16>,
@@ -122,6 +123,9 @@ pub struct PageHead {
     pub og: BTreeMap<String, String>,
     /// `(lang, href)`
     pub hreflang: Vec<(String, String)>,
+    /// Classes on `<body>`; WordPress puts `postid-N` / `page-id-N` there.
+    #[serde(default)]
+    pub body_classes: Vec<String>,
 }
 
 fn sel(s: &str) -> Selector {
@@ -153,6 +157,11 @@ fn parse_head(doc: &Html) -> PageHead {
             _ => {}
         }
     }
+    h.body_classes = doc
+        .select(&sel("body"))
+        .next()
+        .map(|b| b.value().classes().map(str::to_string).collect())
+        .unwrap_or_default();
     h.canonical = doc
         .select(&sel("link[rel=canonical]"))
         .next()
@@ -979,7 +988,7 @@ async fn crawl(ctx: &StageCtx, opts: &Opts, extract: bool) -> Result<()> {
             Severity::Warning,
             None,
             format!("crawl stopped at max_pages ({max})"),
-            serde_json::json!({ "max_pages": max }),
+            serde_json::json!({ "connector": NAME, "max_pages": max }),
         )?;
     }
     if !extract {

@@ -37,7 +37,11 @@ fn json_stdout_is_pure_ndjson() {
 #[test]
 fn json_errors_keep_stdout_empty() {
     let d = tempfile::tempdir().unwrap();
-    init(d.path());
+    porter(d.path())
+        .args(["init", "demo", "--adapter", "nope"])
+        .write_stdin("")
+        .assert()
+        .success();
     porter(d.path())
         .args(["--json", "analyse"])
         .assert()
@@ -63,13 +67,17 @@ fn missing_config_exits_1_naming_key() {
 #[test]
 fn unregistered_adapter_exits_1_naming_it() {
     let d = tempfile::tempdir().unwrap();
-    init(d.path());
+    porter(d.path())
+        .args(["init", "demo", "--adapter", "nope"])
+        .write_stdin("")
+        .assert()
+        .success();
     porter(d.path())
         .arg("analyse")
         .assert()
         .code(1)
         .stderr(predicate::str::contains(
-            "no source adapter named \"wordpress\" (available: none)",
+            "no source adapter named \"nope\" (available: wordpress)",
         ));
 }
 
@@ -148,4 +156,26 @@ fn export_writes_file() {
     let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(f).unwrap()).unwrap();
     assert_eq!(v["v"], 1);
     assert!(v["issues"].is_array());
+}
+
+#[test]
+fn analyse_wordpress_wxr_end_to_end() {
+    let d = tempfile::tempdir().unwrap();
+    init(d.path());
+    let wxr = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-engine/tests/fixtures/wxr/basic.xml");
+    let toml = d.path().join("porter.toml");
+    let mut text = std::fs::read_to_string(&toml).unwrap();
+    text.push_str(&format!(
+        "\n[[connectors]]\nkind = \"wxr\"\npath = {:?}\n",
+        wxr.display().to_string()
+    ));
+    std::fs::write(&toml, text).unwrap();
+    porter(d.path())
+        .args(["--json", "analyse"])
+        .assert()
+        .success();
+    assert!(d.path().join("raw/analysis/coverage.json").exists());
+    porter(d.path()).arg("report").assert().success();
+    assert!(d.path().join("reports/analysis.html").exists());
 }

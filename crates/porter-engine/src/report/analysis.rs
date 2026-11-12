@@ -39,12 +39,12 @@ fn render_node(n: &Node) -> Markup {
 
 pub fn render_analysis(project: &Project) -> Result<String> {
     let store = project.store();
-    let docs: Vec<(ItemId, _, Document)> = store.items(ItemKind::Document)?;
-    let routes: Vec<(ItemId, _, Route)> = store.items(ItemKind::Route)?;
-    let redirects: Vec<(ItemId, _, Redirect)> = store.items(ItemKind::Redirect)?;
-    let media: Vec<(ItemId, _, Media)> = store.items(ItemKind::Media)?;
-    let forms: Vec<(ItemId, _, Form)> = store.items(ItemKind::Form)?;
-    let menus: Vec<(ItemId, _, Menu)> = store.items(ItemKind::Menu)?;
+    let docs: Vec<(ItemId, _, Document)> = store.items_decodable(ItemKind::Document)?;
+    let routes: Vec<(ItemId, _, Route)> = store.items_decodable(ItemKind::Route)?;
+    let redirects: Vec<(ItemId, _, Redirect)> = store.items_decodable(ItemKind::Redirect)?;
+    let media: Vec<(ItemId, _, Media)> = store.items_decodable(ItemKind::Media)?;
+    let forms: Vec<(ItemId, _, Form)> = store.items_decodable(ItemKind::Form)?;
+    let menus: Vec<(ItemId, _, Menu)> = store.items_decodable(ItemKind::Menu)?;
     let status: HashMap<ItemId, ItemStatus> = store.statuses(Stage::Analyse)?.into_iter().collect();
     let issues = store.issues(&IssueFilter {
         stage: Some(Stage::Analyse),

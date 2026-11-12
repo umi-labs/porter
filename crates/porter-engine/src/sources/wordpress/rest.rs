@@ -212,7 +212,7 @@ impl WpRestConnector {
                     Severity::Info,
                     None,
                     format!("keyring entry '{name}' is unavailable or unreadable; using PORTER_WP_* environment variables only"),
-                    json!({ "keyring": name }),
+                    json!({ "connector": NAME, "keyring": name }),
                 )?,
             }
         }
@@ -312,7 +312,7 @@ impl Api<'_> {
             Severity::Warning,
             None,
             format!("{endpoint}: {why}"),
-            json!({ "endpoint": endpoint }),
+            json!({ "connector": NAME, "endpoint": endpoint }),
         )
     }
 
@@ -910,7 +910,7 @@ impl Connector for WpRestConnector {
                     Severity::Info,
                     None,
                     format!("/yoast/v1/get_head: no SEO head for {misses} published URLs"),
-                    json!({ "count": misses }),
+                    json!({ "connector": NAME, "count": misses }),
                 )?;
             }
         }

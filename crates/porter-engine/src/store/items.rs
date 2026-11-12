@@ -71,6 +71,19 @@ impl Store {
         Ok(out)
     }
 
+    /// Like `items`, but rows whose data is not a `T` are left out. Reports use it because
+    /// before normalise the rows hold connectors' raw summaries, not neutral-model values.
+    pub fn items_decodable<T: DeserializeOwned>(
+        &self,
+        kind: ItemKind,
+    ) -> Result<Vec<(ItemId, SourceRef, T)>> {
+        Ok(self
+            .items::<serde_json::Value>(kind)?
+            .into_iter()
+            .filter_map(|(id, src, v)| Some((id, src, serde_json::from_value(v).ok()?)))
+            .collect())
+    }
+
     pub fn set_status(
         &self,
         run: RunId,

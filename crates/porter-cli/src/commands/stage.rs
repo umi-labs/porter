@@ -113,8 +113,9 @@ async fn exec(env: &Env, cmd: StageCmd) -> Result<Summary> {
     ) {
         let Some(src) = registry::source(&cfg.source.adapter) else {
             bail!(
-                "no source adapter named \"{}\" (available: none)",
-                cfg.source.adapter
+                "no source adapter named \"{}\" (available: {})",
+                cfg.source.adapter,
+                list(registry::source_names())
             );
         };
         let (p, c, e, k, s) = go(stage);
@@ -142,8 +143,9 @@ async fn exec(env: &Env, cmd: StageCmd) -> Result<Summary> {
     }
     let Some(dest) = registry::destination(&cfg.destination.adapter, cfg) else {
         bail!(
-            "no destination adapter named \"{}\" (available: none)",
-            cfg.destination.adapter
+            "no destination adapter named \"{}\" (available: {})",
+            cfg.destination.adapter,
+            list(registry::destination_names())
         );
     };
     let (p, c, e, k, s) = go(stage);
@@ -167,6 +169,14 @@ async fn exec(env: &Env, cmd: StageCmd) -> Result<Summary> {
         }
         // ponytail: Task 22 swaps this for porter_engine::verify::run.
         _ => bail!("verify not available in this build"),
+    }
+}
+
+fn list(names: &[&str]) -> String {
+    if names.is_empty() {
+        "none".into()
+    } else {
+        names.join(", ")
     }
 }
 
