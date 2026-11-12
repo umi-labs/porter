@@ -120,10 +120,17 @@ fn footer_text(app: &App) -> &'static str {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn render_items_for_test(app: &App, f: &mut Frame, area: Rect) {
+    items::render(app, f, area);
+}
+
 /// The rows of a list of `len` to draw in `h` lines so that `sel` stays visible.
 pub(crate) fn window(sel: usize, len: usize, h: usize) -> std::ops::Range<usize> {
+    // `sel` can sit past the loaded rows while the next page loads: clamp so the range is valid.
+    let sel = sel.min(len.saturating_sub(1));
     let start = (sel + 1).saturating_sub(h.max(1));
-    start..(start + h).min(len)
+    start..(start + h).min(len).max(start.min(len))
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {

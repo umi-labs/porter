@@ -7,7 +7,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
 
 pub fn status_text(s: &ItemStatus) -> String {
@@ -54,11 +54,13 @@ pub fn render(app: &App, f: &mut Frame, area: Rect) {
             usize::try_from(st.sel.saturating_sub(st.win.offset)).unwrap_or(0),
         )
     };
+    let loaded = st.win.rows.len();
     let base = if st.filtered() {
         format!(
-            "Items {}/{} on this page",
-            shown.len().min(pos + 1),
-            shown.len()
+            "Items — {}: {} in loaded {loaded} of {}",
+            st.mode.label(),
+            shown.len(),
+            st.win.total
         )
     } else if st.win.total == 0 {
         "Items".to_string()
@@ -71,7 +73,16 @@ pub fn render(app: &App, f: &mut Frame, area: Rect) {
     f.render_widget(block, area);
     if shown.is_empty() {
         f.render_widget(
-            Paragraph::new("no items").style(Style::default().add_modifier(Modifier::DIM)),
+            Paragraph::new(if st.filtered() {
+                format!(
+                    "no matches in loaded {loaded} of {} items (other pages not searched — press Enter on / to search all)",
+                    st.win.total
+                )
+            } else {
+                "no items".to_string()
+            })
+            .wrap(Wrap { trim: false })
+            .style(Style::default().add_modifier(Modifier::DIM)),
             inner,
         );
         return;

@@ -62,7 +62,11 @@ fn items_of(cmds: &[Cmd]) -> Vec<&Cmd> {
 }
 
 fn loaded(total: u64) -> App {
-    let mut app = App::new(None, (120, 40));
+    let d = tempfile::tempdir().unwrap();
+    porter_engine::project::Project::init(d.path(), "demo", "wordpress").unwrap();
+    let s = porter_engine::session::Session::open(d.path()).unwrap();
+    let mut app = App::new(Some(std::sync::Arc::new(s)), (120, 40));
+    std::mem::forget(d);
     let cmds = app.refresh_cmds();
     let first = items_of(&cmds)[0].clone();
     deliver_items(&mut app, &first, total);
@@ -254,4 +258,84 @@ fn issue_groups_enter_opens_paged_list() {
         }
     );
     assert!(matches!(app.detail.last(), Some(DetailView::Issues(_))));
+}
+
+#[test]
+fn pagedown_past_page_end_never_panics() {
+    for h in 1..=40u16 {
+        let mut app = loaded(1200);
+        // PageDown from the last row: selection runs past the loaded rows while page 2 loads.
+        for _ in 0..30 {
+            press(&mut app, KeyCode::PageDown);
+        }
+        let area = ratatui::layout::Rect::new(0, 0, 40, h);
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, h)).unwrap();
+        t.draw(|f| crate::ui::render_items_for_test(&app, f, area))
+            .unwrap();
+        // The shared window helper is valid for every selection, length and height.
+        for len in 0..30usize {
+            for sel in 0..(len + 25) {
+                let r = crate::ui::window(sel, len, usize::from(h));
+                assert!(r.start <= r.end && r.end <= len, "{sel} {len} {h} {r:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn stale_seq_page_is_dropped() {
+    let mut app = loaded(1200);
+    let cmds = press(&mut app, KeyCode::Char('/'));
+    assert!(cmds.is_empty());
+    for c in "x".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    let new = press(&mut app, KeyCode::Enter);
+    let old_seq = match &new[0] {
+        Cmd::Items { seq, .. } => seq - 1,
+        c => panic!("{c:?}"),
+    };
+    update(
+        &mut app,
+        Msg::Data(DataMsg::Items {
+            seq: old_seq,
+            page: Page {
+                offset: 0,
+                limit: 500,
+            },
+            paged: Paged {
+                rows: rows(0, 500),
+                total: 1200,
+            },
+        }),
+    );
+    assert!(
+        app.panels.items.win.rows.is_empty(),
+        "answer to the replaced query is ignored"
+    );
+}
+
+#[test]
+fn selection_clamped_after_shrunk_page() {
+    let mut app = loaded(1200);
+    for _ in 0..100 {
+        press(&mut app, KeyCode::Char('j'));
+    }
+    let cmds = app.refresh_cmds();
+    let c = items_of(&cmds)[0].clone();
+    deliver_items(&mut app, &c, 10);
+    assert_eq!(app.panels.items.sel, 9);
+    assert!(app.panels.items.selected().is_some());
+}
+
+#[test]
+fn filtered_empty_result_says_scope() {
+    let mut app = loaded(1200);
+    press(&mut app, KeyCode::Char('f'));
+    press(&mut app, KeyCode::Char('f'));
+    let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+    t.draw(|f| crate::ui::view(&app, f)).unwrap();
+    let out = t.backend().to_string();
+    assert!(out.contains("0 in loaded 500 of 1200"), "{out}");
+    assert!(out.contains("no matches in loaded 500 of 1200"));
 }
