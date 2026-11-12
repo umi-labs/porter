@@ -1,0 +1,16 @@
+{
+  "name": "@porter-hub/worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@porter-hub/db": "workspace:*",
+    "@porter-hub/porter": "workspace:*",
+    "@porter-hub/storage": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "postgres": "^4.1.1"
+  }
+}

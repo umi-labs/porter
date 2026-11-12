@@ -7,6 +7,7 @@
     "test": "docker compose up -d --wait db storage && vitest run; s=$?; docker compose down -v; exit $s",
     "typecheck": "tsc --noEmit && tsc --noEmit -p apps/web",
     "lint": "biome check .",
+    "worker": "pnpm -C apps/worker dev",
     "db:generate": "pnpm -C packages/db generate",
     "auth:generate": "pnpm -C packages/db auth:generate"
   },

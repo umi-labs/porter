@@ -41,6 +41,9 @@ importers:
       '@porter-hub/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@porter-hub/porter':
+        specifier: workspace:*
+        version: link:../../packages/porter
       '@porter-hub/storage':
         specifier: workspace:*
         version: link:../../packages/storage
@@ -56,6 +59,9 @@ importers:
       nodemailer:
         specifier: ^10.5.0
         version: 10.5.0
+      postgres:
+        specifier: ^4.1.1
+        version: 4.1.1
       react:
         specifier: ^19.3.1
         version: 19.3.1
@@ -85,6 +91,24 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  apps/worker:
+    dependencies:
+      '@porter-hub/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@porter-hub/porter':
+        specifier: workspace:*
+        version: link:../../packages/porter
+      '@porter-hub/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
+      drizzle-orm:
+        specifier: ^0.45.4
+        version: 0.45.4(kysely@0.29.8)(postgres@4.1.1)
+      postgres:
+        specifier: ^4.1.1
+        version: 4.1.1
+
   packages/db:
     dependencies:
       better-auth:
@@ -101,14 +125,36 @@ importers:
         specifier: 1.7.21
         version: 1.7.21(@better-fetch/fetch@1.3.3)(better-call@1.4.5(zod@4.6.7))(drizzle-kit@0.31.11)(drizzle-orm@0.45.4(kysely@0.29.8)(postgres@4.1.1))(jose@6.2.17)(kysely@0.29.8)(nanostores@1.5.5)(next@15.5.29(@babel/core@7.29.13)(@types/node@26.6.6)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(vitest@5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)))
 
+  packages/porter:
+    dependencies:
+      smol-toml:
+        specifier: ^1.9.1
+        version: 1.9.1
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+
   packages/storage:
     dependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.1167.0
+        version: 3.1167.0
+      '@aws-sdk/s3-request-presigner':
+        specifier: ^3.1167.0
+        version: 3.1167.0
       '@porter-hub/db':
         specifier: workspace:*
         version: link:../db
       drizzle-orm:
         specifier: ^0.45.4
         version: 0.45.4(kysely@0.29.8)(postgres@4.1.1)
+      tar-stream:
+        specifier: ^3.2.2
+        version: 3.2.2(bare-buffer@3.7.1)
+    devDependencies:
+      '@types/tar-stream':
+        specifier: ^3.1.5
+        version: 3.1.5
 
 packages:
 
@@ -2207,6 +2253,10 @@ packages:
     resolution: {integrity: sha512-2WCqLdt12eN6ehLI50S2/ZxoowXU3DD1KVPRyVP0WEsFahrGZZmCdq1K59qjJljMRIDTwx1D9YaRK+hDneBUMg==}
     engines: {node: '>=20'}
 
+  smol-toml@1.9.1:
+    resolution: {integrity: sha512-j7WyPdf0CJoutMzMoPLF/bVXHtKZIT9Rb4eGeEbWw8X2t5oirjPgpL+OpaENZrILYaXqYwnVH+qgUwVbl+pUJQ==}
+    engines: {node: '>= 18'}
+
   source-map-js@1.2.2:
     resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
     engines: {node: '>=0.10.0'}
@@ -4136,6 +4186,8 @@ snapshots:
   sisteransi@1.0.5: {}
 
   sisteransi@2.0.0: {}
+
+  smol-toml@1.9.1: {}
 
   source-map-js@1.2.2: {}
 

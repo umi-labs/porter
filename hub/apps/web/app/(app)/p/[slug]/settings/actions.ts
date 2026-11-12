@@ -2,6 +2,7 @@
 import { getDb } from "@porter-hub/db";
 import { revalidatePath } from "next/cache";
 import * as svc from "../../../../../lib/projects";
+import * as secrets from "../../../../../lib/secrets";
 import { requireUser } from "../../../../../lib/session";
 import * as shares from "../../../../../lib/shares";
 
@@ -50,6 +51,27 @@ export async function revokeShare(slug: string, id: string) {
     await shares.revokeShare(getDb(), await requireUser(), slug, id);
   } catch (e) {
     if (!(e instanceof svc.HttpError && e.status === 404)) throw e; // already revoked in another tab
+  }
+  done(slug);
+}
+
+/** Run secrets are write-only: the value goes in once and never comes back to the page. */
+export async function putSecret(slug: string, _prev: unknown, f: FormData) {
+  const name = str(f, "name").trim();
+  try {
+    await secrets.putSecret(getDb(), await requireUser(), slug, name, { value: str(f, "value") });
+    done(slug);
+    return { saved: name };
+  } catch (e) {
+    if (e instanceof svc.HttpError) return { error: e.message };
+    throw e;
+  }
+}
+export async function deleteSecret(slug: string, name: string) {
+  try {
+    await secrets.deleteSecret(getDb(), await requireUser(), slug, name);
+  } catch (e) {
+    if (!(e instanceof svc.HttpError && e.status === 404)) throw e; // already deleted in another tab
   }
   done(slug);
 }

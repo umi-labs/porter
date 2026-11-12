@@ -2,9 +2,11 @@ import { getDb } from "@porter-hub/db";
 import { notFound } from "next/navigation";
 import { roleCan } from "../../../../../lib/permissions";
 import { access, HttpError, listInvitations, listMembers } from "../../../../../lib/projects";
+import { listSecrets } from "../../../../../lib/secrets";
 import { requireUser } from "../../../../../lib/session";
 import { listShares } from "../../../../../lib/shares";
-import { invite, removeMember, revoke, revokeShare, setRole } from "./actions";
+import { deleteSecret, invite, removeMember, revoke, revokeShare, setRole } from "./actions";
+import { SecretForm } from "./secret-form";
 import { ShareForm } from "./share-form";
 
 export const dynamic = "force-dynamic";
@@ -18,13 +20,17 @@ export default async function Settings({ params }: { params: Promise<{ slug: str
   let members: Awaited<ReturnType<typeof listMembers>> = [];
   let invitations: Awaited<ReturnType<typeof listInvitations>> = [];
   let shares: Awaited<ReturnType<typeof listShares>> = [];
+  let secrets: Awaited<ReturnType<typeof listSecrets>> = [];
   let canShare: boolean;
   let canMembers: boolean;
+  let canSecrets: boolean;
   try {
     const { role } = await access(db, user, slug, "view");
     canShare = roleCan(role, "share");
     canMembers = roleCan(role, "manage_members");
-    if (!canShare && !canMembers) notFound();
+    canSecrets = roleCan(role, "manage_secrets");
+    if (!canShare && !canMembers && !canSecrets) notFound();
+    if (canSecrets) secrets = await listSecrets(db, user, slug);
     if (canMembers)
       [members, invitations] = await Promise.all([
         listMembers(db, user, slug),
@@ -105,7 +111,27 @@ export default async function Settings({ params }: { params: Promise<{ slug: str
         <p>You can't manage share links.</p>
       )}
       <h2>Run secrets</h2>
-      <p>Coming soon.</p>
+      {canSecrets ? (
+        <>
+          <p>
+            Passed to remote runs as environment variables only. Values are encrypted and never shown again;
+            replace or delete them here.
+          </p>
+          <ul>
+            {secrets.map((x) => (
+              <li key={x.name}>
+                <code>{x.name}</code> set <SecretForm slug={slug} name={x.name} />{" "}
+                <form action={deleteSecret.bind(null, slug, x.name)} style={inline}>
+                  <button type="submit">Delete</button>
+                </form>
+              </li>
+            ))}
+          </ul>
+          <SecretForm slug={slug} />
+        </>
+      ) : (
+        <p>You can't manage run secrets.</p>
+      )}
       <h2>Retention</h2>
       <p>Coming soon.</p>
     </main>

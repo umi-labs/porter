@@ -43,6 +43,13 @@
       "when": 1794479008556,
       "tag": "0005_black_loa",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794480359950,
+      "tag": "0006_curious_diamondback",
+      "breakpoints": true
     }
   ]
 }

@@ -1,8 +1,11 @@
 import { getDb } from "@porter-hub/db";
 import { getAuth } from "./auth";
+import { getListener, type Listener } from "./listen";
 import type { Db } from "./permissions";
 import * as svc from "./projects";
 import { type Actor, HttpError, parse, schemas } from "./projects";
+import * as runs from "./runs";
+import * as sec from "./secrets";
 import * as sh from "./shares";
 import * as up from "./uploads";
 import * as ver from "./versions";
@@ -11,7 +14,27 @@ type GetActor = (req: Request) => Promise<Actor | null>;
 type P = Record<string, string>;
 
 /** Route handlers, with the database and the session lookup injected so tests can drive them. */
-export function makeApi(db: Db, getActor: GetActor) {
+export function makeApi(
+  db: Db,
+  getActor: GetActor,
+  opts: { listener?: () => Listener; readToml?: runs.ReadToml } = {},
+) {
+  const fail = (e: unknown) => {
+    if (e instanceof HttpError) return Response.json({ ...e.extra, error: e.message }, { status: e.status });
+    console.error(e);
+    return Response.json({ error: "Internal error" }, { status: 500 });
+  };
+  /** For handlers that build their own Response (the SSE stream). */
+  const raw =
+    (fn: (actor: Actor, req: Request, params: P) => Promise<Response>) => async (req: Request, params: P) => {
+      try {
+        const actor = await getActor(req);
+        if (!actor) throw new HttpError(401, "Sign in required");
+        return await fn(actor, req, params);
+      } catch (e) {
+        return fail(e);
+      }
+    };
   const route =
     <Ctx extends P | undefined = undefined>(
       fn: (actor: Actor, req: Request, params: Ctx) => Promise<unknown>,
@@ -23,10 +46,7 @@ export function makeApi(db: Db, getActor: GetActor) {
         if (!actor) throw new HttpError(401, "Sign in required");
         return Response.json(await fn(actor, req, params), { status });
       } catch (e) {
-        if (e instanceof HttpError)
-          return Response.json({ ...e.extra, error: e.message }, { status: e.status });
-        console.error(e);
-        return Response.json({ error: "Internal error" }, { status: 500 });
+        return fail(e);
       }
     };
   const body = async (req: Request) => req.json().catch(() => undefined);
@@ -80,6 +100,17 @@ export function makeApi(db: Db, getActor: GetActor) {
     abortUpload: route<P>((a, _r, p) => up.abortUpload(db, a, slugOf(p), p.id)),
     downloadUpload: route<P>((a, _r, p) => up.downloadUpload(db, a, slugOf(p), p.id)),
     mediaUrls: route<P>(async (a, r, p) => ver.mediaUrls(db, a, slugOf(p), await body(r))),
+    createRun: route<P>(
+      async (a, r, p) => runs.createRun(db, a, slugOf(p), await body(r), opts.readToml),
+      201,
+    ),
+    listRuns: route<P>((a, _r, p) => runs.listRuns(db, a, slugOf(p))),
+    getRun: route<P>((a, _r, p) => runs.getRun(db, a, slugOf(p), p.id)),
+    cancelRun: route<P>((a, _r, p) => runs.cancelRun(db, a, slugOf(p), p.id)),
+    runEvents: raw((a, r, p) => runs.runEvents(db, (opts.listener ?? getListener)(), a, slugOf(p), p.id, r)),
+    listSecrets: route<P>((a, _r, p) => sec.listSecrets(db, a, slugOf(p))),
+    putSecret: route<P>(async (a, r, p) => sec.putSecret(db, a, slugOf(p), p.name, await body(r))),
+    deleteSecret: route<P>((a, _r, p) => sec.deleteSecret(db, a, slugOf(p), p.name)),
   };
 }
 

@@ -1,107 +1,22 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createWriteStream, existsSync, readdirSync } from "node:fs";
-import { mkdir, rename, rm } from "node:fs/promises";
+import { existsSync, readdirSync } from "node:fs";
+import { rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Readable, Transform } from "node:stream";
-import { pipeline } from "node:stream/promises";
-import { createZstdDecompress } from "node:zlib";
 import { projectVersion } from "@porter-hub/db";
+import { extractTarZst } from "@porter-hub/storage/tar";
 import { desc, eq } from "drizzle-orm";
-import * as tar from "tar-stream";
 import type { Db } from "./permissions";
 import { getStream } from "./storage";
 
 // node:sqlite (built in, no native build) and zlib's zstd both need Node >= 22.15; the Dockerfile must use at least that.
 
+/** Moved to @porter-hub/storage (shared with the worker); re-exported for existing callers. */
+export { extractTarZst };
 export const PAGE_SIZE = 100;
-const MAX_ENTRIES = 200_000;
 const cacheDir = () => process.env.HUB_CACHE_DIR || join(tmpdir(), "porter-hub-cache");
 const maxBytes = () => Number(process.env.HUB_SNAPSHOT_MAX_BYTES) || 2 * 1024 ** 3;
-
-/** Throws unless `name` is a relative path with no `..`; returns it without a leading ./ or trailing /. "" is the archive root ("./"). */
-function safeName(name: string) {
-  const n = name.replace(/^(\.\/)+/, "").replace(/\/+$/, "");
-  if (
-    name.startsWith("/") ||
-    n.includes("\0") ||
-    n.split("/").some((s) => s === ".." || (s === "" && n !== ""))
-  ) {
-    throw new Error(`unsafe path in snapshot: ${JSON.stringify(name)}`);
-  }
-  return n === "." ? "" : n;
-}
-
-/** Passes bytes through, failing once more than `limit` have gone by. */
-const capBytes = (limit: number, what: string, seen: { n: number }) =>
-  new Transform({
-    transform(chunk, _enc, cb) {
-      seen.n += chunk.length;
-      cb(seen.n > limit ? new Error(`${what} is larger than ${limit} bytes`) : null, chunk);
-    },
-  });
-
-/**
- * Streams a tar.zst (zstd -> tar parser -> files) into `dest`; memory stays O(chunk), the event loop is never blocked.
- * Only regular files and directories are accepted: a symlink, hardlink or device entry, an absolute path or a
- * `..` rejects the whole archive. The cap counts bytes actually decompressed and written, not sizes the archive declares.
- * If `hash` is given it is fed the compressed bytes.
- */
-export async function extractTarZst(
-  source: Buffer | Readable,
-  dest: string,
-  limit = maxBytes(),
-  hash?: ReturnType<typeof createHash>,
-) {
-  const root = resolve(dest);
-  await mkdir(root, { recursive: true });
-  const input = Buffer.isBuffer(source) ? Readable.from([source]) : source;
-  if (hash) input.on("data", (c) => hash.update(c));
-  const extract = tar.extract();
-  const written = { n: 0 };
-  const run = pipeline(
-    input,
-    createZstdDecompress(),
-    capBytes(limit + 1024 * 1024, "snapshot", { n: 0 }),
-    extract,
-  );
-  const walk = (async () => {
-    let entries = 0;
-    for await (const entry of extract) {
-      const { name, type } = entry.header;
-      if (++entries > MAX_ENTRIES) throw new Error("snapshot has too many entries");
-      if (type !== "file" && type !== "directory") {
-        throw new Error(
-          `snapshot entry ${JSON.stringify(name)} has unsupported type ${JSON.stringify(type)}`,
-        );
-      }
-      const rel = safeName(name);
-      const out = resolve(root, rel);
-      if (!rel && type === "directory") {
-        entry.resume();
-        continue;
-      }
-      if (!rel || !out.startsWith(root + sep))
-        throw new Error(`unsafe path in snapshot: ${JSON.stringify(name)}`);
-      if (type === "directory") {
-        await mkdir(out, { recursive: true, mode: 0o755 });
-        entry.resume();
-      } else {
-        await mkdir(dirname(out), { recursive: true, mode: 0o755 });
-        await pipeline(entry, capBytes(limit, "snapshot", written), createWriteStream(out, { mode: 0o644 }));
-      }
-    }
-  })();
-  // Whichever side fails first rejects; tear the source down so S3 stops sending.
-  try {
-    await Promise.all([run, walk]);
-  } catch (e) {
-    input.destroy();
-    extract.destroy();
-    throw e;
-  }
-}
 
 const inflight = new Map<string, Promise<string>>();
 
@@ -114,6 +29,21 @@ export async function latestSnapshot(db: Db, projectId: string) {
     .orderBy(desc(projectVersion.number))
     .limit(1);
   if (!v) return null;
+  return {
+    dir: await versionDir(v),
+    version: {
+      id: v.id,
+      number: v.number,
+      createdAt: v.createdAt,
+      message: v.message,
+      porterVersion: v.porterVersion,
+    },
+  };
+}
+export type Snapshot = NonNullable<Awaited<ReturnType<typeof latestSnapshot>>>;
+
+/** One version's extracted snapshot dir, cached by version id. */
+export async function versionDir(v: { id: string; snapshotKey: string; snapshotSha256: string | null }) {
   const final = join(cacheDir(), v.id);
   // Single-flight per version: concurrent requests share one extraction. A failure clears the entry so the next request retries.
   let p = inflight.get(v.id);
@@ -141,18 +71,8 @@ export async function latestSnapshot(db: Db, projectId: string) {
     })().finally(() => inflight.delete(v.id));
     inflight.set(v.id, p);
   }
-  return {
-    dir: await p,
-    version: {
-      id: v.id,
-      number: v.number,
-      createdAt: v.createdAt,
-      message: v.message,
-      porterVersion: v.porterVersion,
-    },
-  };
+  return p;
 }
-export type Snapshot = NonNullable<Awaited<ReturnType<typeof latestSnapshot>>>;
 
 type Row = Record<string, string | number | null>;
 /** Runs `fn` against project.db opened read-only; null only for "no such table/column" (older snapshot). Other errors throw. */

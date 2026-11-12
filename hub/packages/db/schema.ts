@@ -187,6 +187,12 @@ export const run = pgTable(
     exitCode: integer("exit_code"),
     resultVersionId: uuid("result_version_id").references(() => projectVersion.id, { onDelete: "set null" }),
     requestedBy: text("requested_by").references(() => user.id, { onDelete: "set null" }),
+    /** Set by the cancel API; the worker sends porter SIGINT when it sees it. */
+    cancelRequested: boolean("cancel_requested").notNull().default(false),
+    /** Worker lease: refreshed every 15 s while running; older than 60 s means the worker is gone. */
+    heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
+    /** Why a failed run failed, in words ("worker lost", "interrupted", porter's own error...). */
+    error: text("error"),
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     createdAt: createdAt(),
