@@ -6,6 +6,7 @@ import {
   CreateBucketCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
   HeadObjectCommand,
@@ -111,6 +112,22 @@ export async function presignGet(key: string, expiresIn = URL_TTL_SECONDS, conte
 export async function deleteObject(key: string) {
   await ensureBucket();
   await s3().send(new DeleteObjectCommand({ Bucket: need("S3_BUCKET"), Key: key }));
+}
+
+/** Deletes every object under `prefix` (1000 per S3 call); returns how many. */
+export async function deletePrefix(prefix: string) {
+  await ensureBucket();
+  const Bucket = need("S3_BUCKET");
+  let n = 0;
+  for (;;) {
+    // Always the first page: what was listed is deleted, so the next list starts after it.
+    const r = await s3().send(new ListObjectsV2Command({ Bucket, Prefix: prefix }));
+    const Objects = (r.Contents ?? []).flatMap((o) => (o.Key ? [{ Key: o.Key }] : []));
+    if (!Objects.length) return n;
+    const d = await s3().send(new DeleteObjectsCommand({ Bucket, Delete: { Objects, Quiet: true } }));
+    if (d.Errors?.length) throw new Error(`deleting ${prefix}: ${d.Errors[0].Key}: ${d.Errors[0].Message}`);
+    n += Objects.length;
+  }
 }
 
 /** Multipart. Parts are PUT straight from the browser to presigned URLs; the server only lists and completes. */

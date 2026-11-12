@@ -6,7 +6,7 @@ export default defineConfig({
   test: {
     include: ["packages/**/*.test.ts", "apps/**/*.test.ts"],
     testTimeout: 30000,
-    // Dev MinIO from docker-compose.yml; its own bucket so tests never touch dev data.
+    // Dev MinIO from docker-compose.dev.yml; its own bucket so tests never touch dev data.
     env: {
       S3_ENDPOINT: "http://localhost:59100",
       S3_BUCKET: "porter-hub-test",

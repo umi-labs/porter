@@ -3,6 +3,7 @@ import {
   account,
   auditLog,
   type connect,
+  ensureStaffOrg,
   getDb,
   invitation,
   member,
@@ -10,6 +11,7 @@ import {
   projectInvitation,
   projectMember,
   schema,
+  staffOrgSlug,
   user,
 } from "@porter-hub/db";
 import { betterAuth } from "better-auth";
@@ -80,19 +82,8 @@ async function mayGetMagicLink(db: Db, email: string) {
   return invited.length + client.length > 0;
 }
 
-/** The one staff org (org membership there = staff). */
-export const staffOrgSlug = () => process.env.STAFF_ORG_SLUG || "umi";
-
-/** Creates the staff org if missing (server-side only, idempotent); returns its id. */
-export async function ensureStaffOrg(db: Db) {
-  const slug = staffOrgSlug();
-  await db
-    .insert(org)
-    .values({ id: randomUUID(), name: "Umi", slug, createdAt: new Date() })
-    .onConflictDoNothing({ target: org.slug });
-  const [o] = await db.select({ id: org.id }).from(org).where(eq(org.slug, slug));
-  return o.id;
-}
+// The one staff org (org membership there = staff); shared with the worker's invite-staff script.
+export { ensureStaffOrg, staffOrgSlug };
 
 /** Adds a verified staff-domain user who signed in with Google to the staff org, once. */
 async function provisionGoogleStaff(db: Db, userId: string, domain: string) {
@@ -110,6 +101,43 @@ async function provisionGoogleStaff(db: Db, userId: string, domain: string) {
     .insert(member)
     .values({ id: randomUUID(), organizationId: orgId, userId, role: "member", createdAt: new Date() })
     .onConflictDoNothing({ target: [member.organizationId, member.userId] });
+}
+
+/**
+ * The password route for staff: a verified user with a pending, unexpired staff-org invitation (invite-staff)
+ * becomes a staff-org member on sign-in, as Better Auth's accept-invitation would.
+ */
+async function acceptStaffInvite(db: Db, userId: string) {
+  const [u] = await db.select().from(user).where(eq(user.id, userId));
+  if (!u?.emailVerified) return;
+  await db.transaction(async (tx) => {
+    const accepted = await tx
+      .update(invitation)
+      .set({ status: "accepted" })
+      .where(
+        and(
+          inArray(
+            invitation.organizationId,
+            tx.select({ id: org.id }).from(org).where(eq(org.slug, staffOrgSlug())),
+          ),
+          lower(invitation.email, u.email),
+          eq(invitation.status, "pending"),
+          gt(invitation.expiresAt, new Date()),
+        ),
+      )
+      .returning();
+    if (!accepted.length) return;
+    await tx
+      .insert(member)
+      .values({
+        id: randomUUID(),
+        organizationId: accepted[0].organizationId,
+        userId,
+        role: accepted[0].role ?? "member",
+        createdAt: new Date(),
+      })
+      .onConflictDoNothing({ target: [member.organizationId, member.userId] });
+  });
 }
 
 /** Staff-org member, or an owner/developer on some project. */
@@ -275,6 +303,7 @@ export function createAuth(
         create: {
           after: async (s) => {
             await provisionGoogleStaff(db, s.userId, domain);
+            await acceptStaffInvite(db, s.userId);
             await acceptProjectInvites(db, s.userId);
           },
         },

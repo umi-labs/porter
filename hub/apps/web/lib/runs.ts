@@ -68,11 +68,20 @@ const isActiveConflict = (e: unknown) => {
 };
 
 /** Queues a run on the latest version. Apply needs `confirm_host` equal to that version's destination host. */
+/** Stages before load: re-running any of them invalidates load's dry run. */
+const UPSTREAM_OF_LOAD: readonly string[] = ["analyse", "extract", "normalise", "schema-check"];
+
 export async function createRun(db: Db, actor: Actor, slug: string, input: unknown, toml = readToml) {
   const { project: p } = await access(db, actor, slug, "run");
   const body = parse(schemas.create, input);
   if (body.apply && body.stages !== "all" && !body.stages.includes("load"))
     throw new HttpError(400, "apply: only meaningful with the load stage (or all)");
+  // The engine refuses a load --apply whose dry run predates an upstream re-run, so this always fails late.
+  if (body.apply && body.stages !== "all" && body.stages.some((s) => UPSTREAM_OF_LOAD.includes(s)))
+    throw new HttpError(
+      400,
+      "apply with upstream stages would be refused at load (they re-run after the dry run); run them as a dry run first, then apply load alone, or use all",
+    );
   const [v] = await db
     .select()
     .from(projectVersion)

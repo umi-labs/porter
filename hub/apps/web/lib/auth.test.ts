@@ -1,6 +1,7 @@
 import {
   auditLog,
   connect,
+  invitation,
   member,
   organization,
   project,
@@ -352,6 +353,24 @@ describe("email and password", () => {
     await expect(signUp("contractor@example.com", "short-pw")).rejects.toThrow();
     await expect(signUp("contractor@example.com", "long-enough-password")).resolves.toBeDefined();
     expect(sent.some((m) => m.to === "contractor@example.com")).toBe(true); // verification email
+
+    // Unverified: signing in is refused and makes no member. Verified: sign-in accepts the staff invitation.
+    const signIn = () =>
+      auth.api.signInEmail({
+        body: { email: "contractor@example.com", password: "long-enough-password" },
+        headers: new Headers(),
+      });
+    await expect(signIn()).rejects.toMatchObject({ statusCode: 403 });
+    await conn.db.update(user).set({ emailVerified: true }).where(eq(user.email, "contractor@example.com"));
+    await signIn();
+    const contractor = await userByEmail("contractor@example.com");
+    const memberships = await conn.db.select().from(member).where(eq(member.userId, contractor.id));
+    expect(memberships.map((m) => m.organizationId)).toEqual([staffOrg.id]);
+    const [inv] = await conn.db.select().from(invitation).where(eq(invitation.id, "inv1"));
+    expect(inv.status).toBe("accepted");
+    // The other org's invitation was not accepted.
+    const [side] = await conn.db.select().from(invitation).where(eq(invitation.id, "inv0"));
+    expect(side.status).toBe("pending");
   });
 });
 

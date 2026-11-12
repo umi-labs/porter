@@ -1,4 +1,4 @@
-# Dev services only (Postgres 17 + MinIO). Production compose is Task 15.
+# Dev services for `pnpm test` and local development (Postgres 17 + MinIO). Production: docker-compose.yml.
 services:
   db:
     image: postgres:17

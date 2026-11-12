@@ -72,7 +72,8 @@ export function secretNameProblem(name: string) {
   return null;
 }
 
-function key() {
+/** The 32-byte run-secret key; throws if HUB_SECRET_KEY is missing or malformed. Production checks it at boot. */
+export function secretKey() {
   const k = Buffer.from(process.env.HUB_SECRET_KEY ?? "", "base64");
   if (k.length !== 32) throw new Error("HUB_SECRET_KEY must be 32 bytes, base64 (openssl rand -base64 32)");
   return k;
@@ -83,14 +84,14 @@ const aad = (projectId: string, name: string) => Buffer.from(`${projectId}\0${na
 /** AES-256-GCM under HUB_SECRET_KEY. `ciphertext` is base64(ct || 16-byte tag), `nonce` base64 (12 bytes). */
 export function encryptSecret(projectId: string, name: string, value: string) {
   const nonce = randomBytes(12);
-  const c = createCipheriv("aes-256-gcm", key(), nonce).setAAD(aad(projectId, name));
+  const c = createCipheriv("aes-256-gcm", secretKey(), nonce).setAAD(aad(projectId, name));
   const ct = Buffer.concat([c.update(value, "utf8"), c.final(), c.getAuthTag()]);
   return { ciphertext: ct.toString("base64"), nonce: nonce.toString("base64") };
 }
 
 export function decryptSecret(projectId: string, name: string, row: { ciphertext: string; nonce: string }) {
   const ct = Buffer.from(row.ciphertext, "base64");
-  const d = createDecipheriv("aes-256-gcm", key(), Buffer.from(row.nonce, "base64")).setAAD(
+  const d = createDecipheriv("aes-256-gcm", secretKey(), Buffer.from(row.nonce, "base64")).setAAD(
     aad(projectId, name),
   );
   d.setAuthTag(ct.subarray(ct.length - 16));

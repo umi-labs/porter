@@ -4,10 +4,11 @@
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "test": "docker compose up -d --wait db storage && vitest run; s=$?; docker compose down -v; exit $s",
+    "test": "docker compose -f docker-compose.dev.yml up -d --wait db storage && vitest run; s=$?; docker compose -f docker-compose.dev.yml down -v; exit $s",
     "typecheck": "tsc --noEmit && tsc --noEmit -p apps/web",
     "lint": "biome check .",
     "worker": "pnpm -C apps/worker dev",
+    "admin:invite-staff": "tsx --env-file-if-exists=.env apps/worker/src/invite-staff.ts",
     "db:generate": "pnpm -C packages/db generate",
     "auth:generate": "pnpm -C packages/db auth:generate"
   },

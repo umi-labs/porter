@@ -65,3 +65,17 @@ test("only one active run per project", async () => {
   );
   await sql.end();
 });
+
+test("several replicas migrating one fresh db at once: all succeed, each migration applied once", async () => {
+  const other = await freshDb();
+  try {
+    await Promise.all([runMigrations(other.url), runMigrations(other.url), runMigrations(other.url)]);
+    const sql = postgres(other.url, { max: 1 });
+    const [{ n }] = await sql`select count(*)::int as n from drizzle.__drizzle_migrations`;
+    await sql.end();
+    const journal = await import("./migrations/meta/_journal.json", { with: { type: "json" } });
+    expect(n).toBe(journal.default.entries.length);
+  } finally {
+    await other.drop();
+  }
+});

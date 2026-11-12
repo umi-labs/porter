@@ -231,6 +231,23 @@ describe("run requests", () => {
     expect((await go({ stages: ["load"] })).status).toBe(201);
   });
 
+  test("apply with a stage before load is refused up front; load (+ verify) alone or all is accepted", async () => {
+    const go = (stages: string[] | "all") =>
+      api.createRun(req("dev", { stages, apply: true, confirm_host: "cms.example.com:8443" }), slug);
+    for (const up of ["analyse", "extract", "normalise", "schema-check"]) {
+      const r = await go([up, "load"]);
+      expect(r.status).toBe(400);
+      expect((await json(r)).error).toBe(
+        "apply with upstream stages would be refused at load (they re-run after the dry run); run them as a dry run first, then apply load alone, or use all",
+      );
+    }
+    expect(await conn.db.select().from(run).where(eq(run.projectId, pid))).toHaveLength(0);
+    expect((await go(["load", "verify"])).status).toBe(201);
+    await clearRuns();
+    expect((await go("all")).status).toBe(201);
+    await clearRuns();
+  });
+
   test("apply reads the destination host from the version's real snapshot", async () => {
     const dir = mkdtempSync(join(tmpdir(), "runs-snap-"));
     writeFileSync(join(dir, "porter.toml"), TOML);

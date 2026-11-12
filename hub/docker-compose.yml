@@ -1,0 +1,127 @@
+# Porter hub, production (Dokploy). Step by step: DEPLOY.md. Dev services for tests: docker-compose.dev.yml.
+# Every setting comes from the environment (Dokploy's Environment tab writes .env next to this file).
+# MinIO is optional: set COMPOSE_PROFILES=minio to run it here, or leave it unset and point S3_* at R2/AWS.
+
+x-build: &build
+  context: ..
+  dockerfile: hub/Dockerfile
+
+# What web and worker both need.
+x-common-env: &common-env
+  NODE_ENV: production
+  DATABASE_URL: ${DATABASE_URL:-postgres://porter:${POSTGRES_PASSWORD}@db:5432/porter}
+  HUB_SECRET_KEY: ${HUB_SECRET_KEY:?set HUB_SECRET_KEY (openssl rand -base64 32)}
+  S3_ENDPOINT: ${S3_ENDPOINT:-http://storage:9000}
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:?set S3_PUBLIC_ENDPOINT (browser- and CLI-reachable storage URL)}
+  S3_BUCKET: ${S3_BUCKET:-porter-hub}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-${MINIO_ROOT_USER:-porter}}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-}}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  HUB_CACHE_DIR: /var/cache/porter-hub
+  HUB_SNAPSHOT_MAX_BYTES: ${HUB_SNAPSHOT_MAX_BYTES:-}
+  UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-}
+
+services:
+  web:
+    build: { <<: *build, target: web }
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET (openssl rand -base64 32)}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:?set BETTER_AUTH_URL (https://hub.example.com)}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      STAFF_EMAIL_DOMAIN: ${STAFF_EMAIL_DOMAIN:-}
+      STAFF_ORG_SLUG: ${STAFF_ORG_SLUG:-umi}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    expose: ["3000"]
+    volumes: [cache:/var/cache/porter-hub]
+    depends_on:
+      db: { condition: service_healthy }
+      storage: { condition: service_healthy, required: false }
+    healthcheck:
+      # /api/health: no auth, answers only whether the database does.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s # first start applies migrations
+
+  worker:
+    build: { <<: *build, target: worker }
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      WORKER_SCRATCH_DIR: /var/lib/porter-worker
+    volumes:
+      # Scratch is this worker's own; never share it with a worker on another database.
+      - scratch:/var/lib/porter-worker
+      # Shared with web so retention can delete a deleted project's extracted snapshots.
+      - cache:/var/cache/porter-hub
+    depends_on:
+      db: { condition: service_healthy }
+      web: { condition: service_healthy } # web has applied the migrations
+    # SIGTERM interrupts running porter processes; their results are still saved. Give them time.
+    stop_grace_period: 60s
+    healthcheck:
+      # The run loop touches this file every second.
+      test:
+        - CMD
+        - node
+        - -e
+        - "process.exit(Date.now()-require('fs').statSync('/tmp/porter-worker.alive').mtimeMs<120000?0:1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: porter
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD (URL-safe, e.g. openssl rand -hex 24)}
+      POSTGRES_DB: porter
+    volumes: [dbdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U porter -d porter"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  storage:
+    profiles: [minio]
+    # minio/minio is gone from Docker Hub. Chainguard's free tier only keeps `latest`, so this digest can vanish;
+    # DEPLOY.md says how to re-pin (or use R2/S3, recommended).
+    image: cgr.dev/chainguard/minio@sha256:3c60a2a8c4d33409a9bc7a623a7fcbfb4605adc3d89422d2f53b3f673a6e5597
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-porter}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+      # Browsers PUT upload parts straight to storage from the hub's origin.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${BETTER_AUTH_URL:-}
+      # Abort incomplete multipart uploads after 7 days (the worker gives up on them then too).
+      MINIO_API_STALE_UPLOADS_EXPIRY: 168h
+    expose: ["9000"]
+    volumes: [miniodata:/data]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  dbdata:
+  miniodata:
+  cache:
+  scratch:
