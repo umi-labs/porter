@@ -1,4 +1,5 @@
 use super::{NOW, RunId, Store, wire};
+use crate::connectors::crawl::site_of;
 use crate::url::normalise_url;
 use anyhow::Result;
 use porter_model::{ItemId, ItemKind, ItemStatus, Route, RouteTarget, SourceRef, Stage};
@@ -483,7 +484,8 @@ impl Store {
     /// THE definition of "unresolved: leads nowhere on the new site". True when the old
     /// route has no target (and answered 2xx, or was never fetched); or its target is not
     /// a live item of the expected kind; or a document target has no string `path`; or a
-    /// redirect target's `to` lands on no document path or route.
+    /// redirect target's `to` (on this site) lands on no document path or route. A `to` on
+    /// another site is external and counts as resolved.
     fn route_unresolved(&self, r: &Route, landing: &HashSet<String>) -> Result<bool> {
         let (t, kind) = match &r.target {
             RouteTarget::None => {
@@ -502,10 +504,16 @@ impl Store {
         let text = |key: &str| data.get(key).and_then(|v| v.as_str());
         Ok(match kind {
             ItemKind::Document => text("path").is_none(),
-            ItemKind::Redirect => match text("to").and_then(Self::path_key) {
-                Some(p) => !landing.contains(&p),
-                None => true,
-            },
+            ItemKind::Redirect => {
+                let to = text("to").unwrap_or_default();
+                // An absolute `to` on another site leaves this one: external, resolved,
+                // and never matched against this site's paths.
+                let site = |u: &str| ::url::Url::parse(u).ok().as_ref().and_then(site_of);
+                if site(to).is_some() && site(to) != site(&r.url) {
+                    return Ok(false);
+                }
+                Self::path_key(to).is_none_or(|p| !landing.contains(&p))
+            }
             _ => false,
         })
     }

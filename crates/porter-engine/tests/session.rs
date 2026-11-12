@@ -454,6 +454,18 @@ async fn routes_filter_and_page() {
         id
     };
     route("doc-nopath", Some(200), RouteTarget::Document(pathless));
+    // An absolute `to` on another site is external: resolved, never matched against this
+    // site's paths. The same site's absolute URL is local.
+    let r_offsite = redirect("e", "https://elsewhere.test/nowhere");
+    route("red-offsite", Some(301), RouteTarget::Redirect(r_offsite));
+    let r_samesite = redirect("f", "https://www.old.test/new-1");
+    route("red-samesite", Some(301), RouteTarget::Redirect(r_samesite));
+    let r_samesite_gone = redirect("g", "https://old.test/nowhere");
+    route(
+        "red-samesite-gone",
+        Some(301),
+        RouteTarget::Redirect(r_samesite_gone),
+    );
     route("wrong-kind", Some(200), RouteTarget::Media(doc));
     // Dead links the old site already had are 404s, not unresolved.
     route("nf-target", Some(410), RouteTarget::None);
@@ -499,7 +511,7 @@ async fn routes_filter_and_page() {
     let every = got(RouteFilter::All).await;
     assert_eq!(
         (every.matching, every.total, every.rows.len()),
-        (11, 11, 11)
+        (14, 14, 14)
     );
     let doc_row = every.rows.iter().find(|r| r.url.ends_with("/doc")).unwrap();
     assert_eq!(doc_row.status, Some(200));
@@ -528,10 +540,11 @@ async fn routes_filter_and_page() {
             "nonenull",
             "red-gone",
             "red-nowhere",
+            "red-samesite-gone",
             "wrong-kind"
         ]
     );
-    assert_eq!((un.matching, un.total), (6, 11));
+    assert_eq!((un.matching, un.total), (7, 14));
     // The filter and the row flag are one definition: the count is what All flags.
     assert_eq!(
         every.rows.iter().filter(|r| r.unresolved).count() as u64,
@@ -549,7 +562,7 @@ async fn routes_filter_and_page() {
         )
         .await
         .unwrap();
-    assert_eq!((tail.rows.len(), tail.matching), (2, 6));
+    assert_eq!((tail.rows.len(), tail.matching), (3, 7));
 
     let ch = got(RouteFilter::Chains).await;
     assert_eq!(ch.rows.len(), 1);
@@ -570,5 +583,5 @@ async fn routes_filter_and_page() {
         )
         .await
         .unwrap();
-    assert_eq!((p.rows.len(), p.matching, p.total), (5, 11, 11));
+    assert_eq!((p.rows.len(), p.matching, p.total), (5, 14, 14));
 }

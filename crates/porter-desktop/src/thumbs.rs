@@ -59,6 +59,27 @@ fn type_label(mime: &str, filename: &str) -> Thumb {
     Thumb::Placeholder(label)
 }
 
+/// Opens `path` without blocking (a FIFO swapped in after the path check would otherwise
+/// hang the open) and keeps it only if the opened file is a regular one.
+fn open_regular(path: &Path) -> Result<File, Thumb> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut opts, libc::O_NONBLOCK);
+    let file = match opts.open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            return Err(Thumb::Placeholder("missing file".into()));
+        }
+        Err(e) => return Err(cant(e)),
+    };
+    match file.metadata() {
+        Ok(m) if m.is_file() => Ok(file),
+        Ok(_) => Err(cant("not a regular file")),
+        Err(e) => Err(cant(e)),
+    }
+}
+
 fn decode_inner(path: &Path, mime: &str, filename: &str) -> Thumb {
     // Only a regular file, by what the path itself is (a symlink, FIFO or device is
     // refused unopened: opening a FIFO would block this thread for good).
@@ -73,12 +94,9 @@ fn decode_inner(path: &Path, mime: &str, filename: &str) -> Thumb {
         }
         Err(e) => return cant(e),
     }
-    let file = match File::open(path) {
+    let file = match open_regular(path) {
         Ok(f) => f,
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            return Thumb::Placeholder("missing file".into());
-        }
-        Err(e) => return cant(e),
+        Err(t) => return t,
     };
     let image_mime = mime.starts_with("image/") && mime != "image/svg+xml";
     // The store records no type for most files, so those are sniffed.
@@ -321,6 +339,33 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("decode blocked on a FIFO");
         assert_eq!(placeholder(t), "can't preview (not a regular file)");
+    }
+
+    /// The path check and the open are two steps: a FIFO swapped in between must still
+    /// not block the open, and is refused by what the opened fd is.
+    #[cfg(unix)]
+    #[test]
+    fn open_regular_fifo_does_not_block() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("pipe");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&p)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(open_regular(&p).map(|_| ()).map_err(placeholder));
+        });
+        let got = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("open blocked on a FIFO");
+        assert_eq!(got, Err("can't preview (not a regular file)".into()));
+        let f = d.path().join("ok.png");
+        std::fs::write(&f, png(2, 2)).unwrap();
+        assert!(open_regular(&f).is_ok());
     }
 
     #[cfg(unix)]
