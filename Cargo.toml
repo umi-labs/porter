@@ -1,8 +1,6 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-# 1.x code kept for reference only; deleted in the last phase-1 task.
-exclude = ["legacy"]
 
 [workspace.package]
 version = "2.0.0"

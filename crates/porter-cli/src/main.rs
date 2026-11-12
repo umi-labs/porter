@@ -96,6 +96,18 @@ pub enum Command {
     Export {
         file: PathBuf,
     },
+    /// Upgrade porter (Homebrew, or the GitHub release binary)
+    Upgrade {
+        /// Only report the latest version
+        #[arg(long)]
+        check: bool,
+        /// Replace the binary without asking
+        #[arg(long)]
+        yes: bool,
+        /// Upgrade even when already current
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn parse() -> Cli {
@@ -141,6 +153,9 @@ async fn dispatch(cli: Cli) -> Result<i32> {
         Command::Clean => clean::run(&dir, json),
         Command::Report => report::run(&dir, json),
         Command::Export { file } => export::run(&dir, json, &file),
+        Command::Upgrade { check, yes, force } => {
+            upgrade::run(json, cli.interactive, check, yes, force).await
+        }
         Command::Analyse { refresh } => stage::run(&dir, json, StageCmd::Analyse, refresh).await,
         Command::Extract { refresh } => stage::run(&dir, json, StageCmd::Extract, refresh).await,
         Command::Normalise { refresh } => {

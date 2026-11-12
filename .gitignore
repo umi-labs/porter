@@ -19,3 +19,6 @@
 /tests/payload-app/payload-dev.log
 /acceptance/*/project/
 /acceptance/*/snapshot/
+
+# IDE
+/.idea/

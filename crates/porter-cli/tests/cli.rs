@@ -303,3 +303,13 @@ fn normalise_umbraco_json_end_to_end() {
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     assert!(stdout.contains("normalise"), "{stdout}");
 }
+
+#[test]
+fn upgrade_args_parse() {
+    Command::cargo_bin("porter")
+        .unwrap()
+        .args(["upgrade", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--check").and(predicate::str::contains("--yes")));
+}

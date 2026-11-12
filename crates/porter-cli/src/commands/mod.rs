@@ -9,6 +9,7 @@ pub mod issues;
 pub mod report;
 pub mod stage;
 pub mod status;
+pub mod upgrade;
 
 pub fn open(dir: &Path) -> Result<Project> {
     tracing::debug!(dir = %dir.display(), "opening project");

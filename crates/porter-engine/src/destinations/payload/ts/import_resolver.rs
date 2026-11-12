@@ -1,12 +1,8 @@
-use super::ast_analyzer::{AstAnalyzer, ExportedItem};
 use super::errors::{Result, SchemaParseError};
-use super::schema::{
-    CollectionSchema, FieldAdmin, FieldDefinition, FieldType, ImportSpecifier, SourceLocation,
-};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use swc_common::{FileName, SourceMap, Spanned, sync::Lrc};
-use swc_ecma_ast::*;
+use swc_ecma_ast::Module;
 use swc_ecma_parser::{Parser, StringInput, Syntax, TsSyntax, lexer::Lexer};
 
 /// One tsconfig `paths` entry: `alias` like `@/*`, `paths` relative to the base dir.
@@ -55,20 +51,10 @@ pub fn parse_ts_str(cm: &Lrc<SourceMap>, name: FileName, src: String, tsx: bool)
     }
     Ok(module)
 }
-
+/// Resolves import specifiers (relative, `/`-rooted, tsconfig aliases) to files on disk.
 pub struct ImportResolver {
-    source_map: Lrc<SourceMap>,
     base_dir: PathBuf,
     alias_map: HashMap<String, Vec<PathBuf>>,
-    cache: HashMap<PathBuf, ParsedFile>,
-    resolution_stack: Vec<PathBuf>,
-}
-
-#[derive(Clone)]
-pub struct ParsedFile {
-    pub module: Module,
-    pub analyzer: AstAnalyzer,
-    pub exports: HashMap<String, ExportedItem>,
 }
 
 impl ImportResolver {
@@ -91,99 +77,9 @@ impl ImportResolver {
             }
         }
         Self {
-            source_map: Lrc::new(SourceMap::default()),
             base_dir,
             alias_map,
-            cache: HashMap::new(),
-            resolution_stack: Vec::new(),
         }
-    }
-
-    pub fn resolve_imports(
-        &mut self,
-        schema: &mut CollectionSchema,
-        file_path: &Path,
-    ) -> Result<()> {
-        // Check for circular dependencies
-        if self.resolution_stack.contains(&file_path.to_path_buf()) {
-            return Err(SchemaParseError::CircularDependency(
-                file_path.display().to_string(),
-                self.resolution_stack
-                    .last()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
-            ));
-        }
-
-        self.resolution_stack.push(file_path.to_path_buf());
-
-        let imports = schema.imports.clone();
-
-        for mut import in imports {
-            // Resolve the import path
-            match self.resolve_import_path(&import.source, file_path) {
-                Ok(resolved) => {
-                    import.resolved_path = Some(resolved.clone());
-
-                    // Parse the imported file
-                    match self.parse_file(&resolved) {
-                        Ok(parsed) => {
-                            // Merge the imported items based on specifiers
-                            for specifier in &import.specifiers {
-                                match specifier {
-                                    ImportSpecifier::Named { imported, local } => {
-                                        self.merge_named_import(schema, &parsed, imported, local)?;
-                                    }
-                                    ImportSpecifier::Default(local) => {
-                                        self.merge_default_import(schema, &parsed, local)?;
-                                    }
-                                    ImportSpecifier::Namespace(local) => {
-                                        self.merge_namespace_import(schema, &parsed, local)?;
-                                    }
-                                }
-                            }
-                        }
-                        Err(_e) => {
-                            // Continue with other imports
-                        }
-                    }
-                }
-                Err(_e) => {
-                    // Continue with other imports
-                }
-            }
-        }
-
-        // Resolve spread operations and references
-        self.resolve_field_references(schema)?;
-
-        self.resolution_stack.pop();
-        Ok(())
-    }
-
-    pub fn parse_file(&mut self, file_path: &Path) -> Result<ParsedFile> {
-        // Check cache
-        if let Some(cached) = self.cache.get(file_path) {
-            return Ok(ParsedFile {
-                module: cached.module.clone(),
-                analyzer: cached.analyzer.clone(),
-                exports: cached.exports.clone(),
-            });
-        }
-
-        let module = parse_ts(&self.source_map, file_path)?;
-        let mut analyzer = AstAnalyzer::new();
-        analyzer.analyze_module(&module)?;
-
-        let parsed = ParsedFile {
-            module: module.clone(),
-            exports: analyzer.exports.clone(),
-            analyzer,
-        };
-
-        self.cache.insert(file_path.to_path_buf(), parsed.clone());
-
-        Ok(parsed)
     }
 
     pub fn resolve_import_path(&self, import_path: &str, from_file: &Path) -> Result<PathBuf> {
@@ -310,404 +206,40 @@ impl ImportResolver {
             file: "filesystem".to_string(),
         })
     }
-
-    fn merge_named_import(
-        &self,
-        schema: &mut CollectionSchema,
-        parsed: &ParsedFile,
-        imported: &str,
-        local: &str,
-    ) -> Result<()> {
-        if let Some(export) = parsed.exports.get(imported) {
-            match export {
-                ExportedItem::Field(field) => {
-                    // Replace reference with actual field
-                    for field_mut in &mut schema.fields {
-                        if field_mut.name == format!("__ref__{}", local) {
-                            *field_mut = field.clone();
-                        }
-                    }
-                }
-                ExportedItem::Fields(fields) => {
-                    // Replace spread with actual fields
-                    let mut new_fields = Vec::new();
-                    for field in &schema.fields {
-                        if field.name == format!("__spread__{}", local) {
-                            new_fields.extend(fields.clone());
-                        } else {
-                            new_fields.push(field.clone());
-                        }
-                    }
-                    schema.fields = new_fields;
-                }
-                ExportedItem::Block(block) => {
-                    schema.blocks.insert(block.slug.clone(), block.clone());
-                }
-                ExportedItem::Object(obj)
-                    // Check if this object represents a field config
-                    if self.is_field_config_object(obj) => {
-                        if let Ok(field_def) = self.extract_field_from_object(obj, local) {
-                            let target_ref = format!("__ref__{}", local);
-
-                            // Debug: list all current field names
-                            for _field in schema.fields.iter() {
-                            }
-
-                            // Replace field reference with the extracted field
-                            let mut found = false;
-                            for field_mut in &mut schema.fields {
-                                if field_mut.name == target_ref {
-                                    *field_mut = field_def.clone();
-                                    found = true;
-                                    break;
-                                }
-                            }
-
-                            if !found {
-                            }
-                        }
-                    }
-                _ => {}
-            }
-        }
-
-        Ok(())
-    }
-
-    fn merge_default_import(
-        &self,
-        schema: &mut CollectionSchema,
-        parsed: &ParsedFile,
-        local: &str,
-    ) -> Result<()> {
-        if let Some(export) = parsed.exports.get("default") {
-            match export {
-                ExportedItem::Field(field) => {
-                    for field_mut in &mut schema.fields {
-                        if field_mut.name == format!("__ref__{}", local) {
-                            *field_mut = field.clone();
-                        }
-                    }
-                }
-                ExportedItem::Fields(fields) => {
-                    let mut new_fields = Vec::new();
-                    for field in &schema.fields {
-                        if field.name == format!("__spread__{}", local) {
-                            new_fields.extend(fields.clone());
-                        } else {
-                            new_fields.push(field.clone());
-                        }
-                    }
-                    schema.fields = new_fields;
-                }
-                _ => {}
-            }
-        }
-
-        Ok(())
-    }
-
-    fn merge_namespace_import(
-        &self,
-        _schema: &mut CollectionSchema,
-        _parsed: &ParsedFile,
-        _local: &str,
-    ) -> Result<()> {
-        // TODO: Handle namespace imports if needed
-        // This would involve making all exports available under the namespace
-        Ok(())
-    }
-
-    fn resolve_field_references(&self, schema: &mut CollectionSchema) -> Result<()> {
-        let mut resolved_fields = Vec::new();
-
-        for field in &schema.fields {
-            if let Some(func_name) = field.name.strip_prefix("__spread__call__") {
-                // Handle common Payload field functions
-                if func_name == "slugField" {
-                    resolved_fields.push(FieldDefinition {
-                        name: "slug".to_string(),
-                        field_type: FieldType::Text {
-                            min_length: None,
-                            max_length: None,
-                        },
-                        required: true,
-                        default_value: None,
-                        label: Some("Slug".to_string()),
-                        admin: Some(FieldAdmin {
-                            position: Some("sidebar".to_string()),
-                            description: None,
-                            condition: None,
-                            hidden: None,
-                        }),
-                        source_location: SourceLocation::default(),
-                    });
-                } else {
-                    // Keep unresolved references for now
-                    resolved_fields.push(field.clone());
-                }
-            } else if !field.name.starts_with("__") {
-                // Normal field
-                resolved_fields.push(field.clone());
-            }
-        }
-
-        schema.fields = resolved_fields;
-        Ok(())
-    }
-
-    /// Check if an ObjectLit represents a field config (has name and type properties)
-    fn is_field_config_object(&self, obj: &swc_ecma_ast::ObjectLit) -> bool {
-        use swc_ecma_ast::*;
-
-        let mut has_name = false;
-        let mut has_type = false;
-
-        for prop in &obj.props {
-            if let PropOrSpread::Prop(prop) = prop
-                && let Prop::KeyValue(kv) = &**prop
-                && let PropName::Ident(ident) = &kv.key
-            {
-                match ident.sym.as_ref() {
-                    "name" => has_name = true,
-                    "type" => has_type = true,
-                    _ => {}
-                }
-            }
-        }
-
-        has_name && has_type
-    }
-
-    /// Extract a field definition from an ObjectLit (field config)
-    fn extract_field_from_object(
-        &self,
-        obj: &swc_ecma_ast::ObjectLit,
-        name: &str,
-    ) -> Result<FieldDefinition> {
-        use crate::destinations::payload::ts::schema::FieldType;
-        use swc_ecma_ast::*;
-
-        let mut field = FieldDefinition {
-            name: name.to_string(),
-            field_type: FieldType::Group { fields: Vec::new() },
-            required: false,
-            default_value: None,
-            label: None,
-            admin: None,
-            source_location: crate::destinations::payload::ts::schema::SourceLocation::default(),
-        };
-
-        // Extract field properties
-        for prop in &obj.props {
-            if let PropOrSpread::Prop(prop) = prop
-                && let Prop::KeyValue(kv) = &**prop
-                && let PropName::Ident(key) = &kv.key
-            {
-                match key.sym.as_ref() {
-                    "name" => {
-                        if let Expr::Lit(Lit::Str(s)) = &*kv.value {
-                            field.name = s.value.to_atom_lossy().to_string();
-                        }
-                    }
-                    "type" => {
-                        if let Expr::Lit(Lit::Str(s)) = &*kv.value {
-                            // For now, assume group type for field configs
-                            // This should be expanded to handle other types
-                            if s.value.to_atom_lossy().as_str() == "group" {
-                                field.field_type = FieldType::Group { fields: Vec::new() };
-                            } else {
-                                field.field_type = FieldType::Text {
-                                    min_length: None,
-                                    max_length: None,
-                                };
-                            }
-                        }
-                    }
-                    "required" => {
-                        if let Expr::Lit(Lit::Bool(b)) = &*kv.value {
-                            field.required = b.value;
-                        }
-                    }
-                    "label" => {
-                        if let Expr::Lit(Lit::Str(s)) = &*kv.value {
-                            field.label = Some(s.value.to_atom_lossy().to_string());
-                        } else if let Expr::Lit(Lit::Bool(b)) = &*kv.value
-                            && !b.value
-                        {
-                            field.label = None;
-                        }
-                    }
-                    "fields" => {
-                        // For group fields, extract nested fields
-                        if let Expr::Array(arr) = &*kv.value
-                            && let Ok(nested_fields) = self.extract_fields_from_array(arr)
-                        {
-                            field.field_type = FieldType::Group {
-                                fields: nested_fields,
-                            };
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        Ok(field)
-    }
-
-    /// Extract fields from an array literal (helper for field configs)
-    fn extract_fields_from_array(
-        &self,
-        arr: &swc_ecma_ast::ArrayLit,
-    ) -> Result<Vec<FieldDefinition>> {
-        use swc_ecma_ast::*;
-
-        let mut fields = Vec::new();
-
-        for elem in arr.elems.iter().flatten() {
-            {
-                if let Expr::Object(obj) = &*elem.expr {
-                    if let Ok(Some(field)) = self.extract_simple_field_from_object(obj) {
-                        fields.push(field);
-                    }
-                } else if let Expr::Ident(ident) = &*elem.expr {
-                    // Handle field references within the array
-                    fields.push(FieldDefinition {
-                        name: format!("__ref__{}", ident.sym),
-                        field_type: FieldType::Text {
-                            min_length: None,
-                            max_length: None,
-                        },
-                        required: false,
-                        default_value: None,
-                        label: None,
-                        admin: None,
-                        source_location:
-                            crate::destinations::payload::ts::schema::SourceLocation::default(),
-                    });
-                }
-            }
-        }
-
-        Ok(fields)
-    }
-
-    /// Extract a simple field definition from an object (for nested fields)
-    fn extract_simple_field_from_object(
-        &self,
-        obj: &swc_ecma_ast::ObjectLit,
-    ) -> Result<Option<FieldDefinition>> {
-        use crate::destinations::payload::ts::schema::FieldType;
-        use swc_ecma_ast::*;
-
-        let mut field = FieldDefinition {
-            name: String::new(),
-            field_type: FieldType::Text {
-                min_length: None,
-                max_length: None,
-            },
-            required: false,
-            default_value: None,
-            label: None,
-            admin: None,
-            source_location: crate::destinations::payload::ts::schema::SourceLocation::default(),
-        };
-
-        let mut has_name = false;
-
-        for prop in &obj.props {
-            if let PropOrSpread::Prop(prop) = prop
-                && let Prop::KeyValue(kv) = &**prop
-                && let PropName::Ident(key) = &kv.key
-            {
-                match key.sym.as_ref() {
-                    "name" => {
-                        if let Expr::Lit(Lit::Str(s)) = &*kv.value {
-                            field.name = s.value.to_atom_lossy().to_string();
-                            has_name = true;
-                        }
-                    }
-                    "type" => {
-                        if let Expr::Lit(Lit::Str(s)) = &*kv.value {
-                            match s.value.to_atom_lossy().as_str() {
-                                "text" => {
-                                    field.field_type = FieldType::Text {
-                                        min_length: None,
-                                        max_length: None,
-                                    }
-                                }
-                                "select" => {
-                                    field.field_type = FieldType::Select {
-                                        options: Vec::new(),
-                                    }
-                                }
-                                "checkbox" => field.field_type = FieldType::Checkbox,
-                                "richText" => field.field_type = FieldType::RichText,
-                                "relationship" => {
-                                    field.field_type = FieldType::Relationship {
-                                        relationTo: String::new(),
-                                    }
-                                }
-                                "array" => {
-                                    field.field_type = FieldType::Array { fields: Vec::new() }
-                                }
-                                "group" => {
-                                    field.field_type = FieldType::Group { fields: Vec::new() }
-                                }
-                                _ => {
-                                    field.field_type = FieldType::Text {
-                                        min_length: None,
-                                        max_length: None,
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    "required" => {
-                        if let Expr::Lit(Lit::Bool(b)) = &*kv.value {
-                            field.required = b.value;
-                        }
-                    }
-                    "label" => {
-                        if let Expr::Lit(Lit::Str(s)) = &*kv.value {
-                            field.label = Some(s.value.to_atom_lossy().to_string());
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        if has_name { Ok(Some(field)) } else { Ok(None) }
-    }
 }
 
-/// The 1.x entry point: one collection file, imports merged in.
-pub struct PayloadSchemaParser {
-    resolver: ImportResolver,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
 
-impl PayloadSchemaParser {
-    pub fn new(base_dir: PathBuf, aliases: Option<&[PathAlias]>) -> Self {
-        Self {
-            resolver: ImportResolver::new(base_dir, aliases),
-        }
+    #[test]
+    fn alias_resolution() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dir = src.join("blocks/TestBlock");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("config.ts"), "export const a = 1").unwrap();
+        let r = ImportResolver::new(tmp.path().to_path_buf(), None);
+        let got = r
+            .resolve_import_path(
+                "@/blocks/TestBlock/config",
+                &src.join("collections/test.ts"),
+            )
+            .unwrap();
+        assert!(got.ends_with("src/blocks/TestBlock/config.ts"));
     }
 
-    pub fn parse_collection(&mut self, config_path: &Path) -> Result<CollectionSchema> {
-        let parsed = self.resolver.parse_file(config_path)?;
-        let mut schema = CollectionSchema {
-            slug: String::new(),
-            fields: parsed.analyzer.fields.clone(),
-            blocks: parsed.analyzer.blocks.clone(),
-            hooks: Default::default(),
-            access: Default::default(),
-            admin: Default::default(),
-            imports: parsed.analyzer.imports.clone(),
-            raw_ast: Some(parsed.module.clone()),
-        };
-        self.resolver.resolve_imports(&mut schema, config_path)?;
-        Ok(schema)
+    #[test]
+    fn relative_resolution() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(src.join("collections")).unwrap();
+        fs::write(src.join("collections/slug.ts"), "export const a = 1").unwrap();
+        let r = ImportResolver::new(tmp.path().to_path_buf(), None);
+        let got = r
+            .resolve_import_path("./slug", &src.join("collections/test.ts"))
+            .unwrap();
+        assert!(got.ends_with("collections/slug.ts"));
     }
 }
