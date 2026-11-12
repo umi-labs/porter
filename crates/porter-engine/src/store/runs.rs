@@ -15,8 +15,11 @@ impl Store {
         Ok(id)
     }
 
-    /// Records the summary, then marks every `Open` issue of the run's stage that
-    /// this run did not (re)open as `FixedByRerun`. Other resolutions are untouched.
+    /// Records the summary and resolves issues this run proved gone. An `Open`
+    /// issue of the run's stage, not reopened by this run, becomes `FixedByRerun`
+    /// only if the run was not interrupted AND this run wrote a status for the
+    /// issue's item in this stage. Item-less issues need only a complete
+    /// (non-interrupted) run. `HandledManually` and `WontFix` never change.
     pub fn end_run(&self, run: RunId, summary: &Summary) -> Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
@@ -33,10 +36,17 @@ impl Store {
             ),
             params![run_id, serde_json::to_string(summary)?],
         )?;
+        if summary.interrupted {
+            tx.commit()?;
+            return Ok(());
+        }
         tx.execute(
             &format!(
                 "UPDATE issues SET resolution = ?3, resolution_json = ?4, updated_at = {NOW}
-                 WHERE stage = ?1 AND run_id != ?2 AND resolution = ?5 AND deleted_at IS NULL"
+                 WHERE stage = ?1 AND run_id != ?2 AND resolution = ?5 AND deleted_at IS NULL
+                   AND (item_id = '' OR item_id IN (
+                     SELECT item_id FROM statuses
+                     WHERE stage = ?1 AND run_id = ?2 AND deleted_at IS NULL))"
             ),
             params![
                 stage,

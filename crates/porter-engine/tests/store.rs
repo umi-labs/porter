@@ -2,7 +2,9 @@ use porter_engine::config::ProjectConfig;
 use porter_engine::events::Summary;
 use porter_engine::project::Project;
 use porter_engine::store::IssueFilter;
-use porter_model::{Issue, IssueKind, ItemId, ItemKind, Resolution, Severity, SourceRef, Stage};
+use porter_model::{
+    Issue, IssueKind, ItemId, ItemKind, ItemStatus, Resolution, Severity, SourceRef, Stage,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use uuid::Uuid;
@@ -129,6 +131,9 @@ fn rerun_resolves_missing_issues() {
     .unwrap();
 
     let run2 = st.begin_run(Stage::Normalise).unwrap();
+    // A and B are both on item "1"; run 2 re-checks it.
+    st.set_status(run2, Stage::Normalise, item("1"), &ItemStatus::Done)
+        .unwrap();
     st.end_run(run2, &Summary::default()).unwrap();
 
     let all = st.issues(&IssueFilter::default()).unwrap();
@@ -240,4 +245,88 @@ to = "/new"
         "{errs:?}"
     );
     assert_eq!(errs.len(), 1, "{errs:?}");
+}
+
+fn item(id: &str) -> ItemId {
+    ItemId::new(ItemKind::Document, &src(id))
+}
+
+fn issue_on(msg: &str, on: Option<&str>) -> Issue {
+    Issue {
+        item: on.map(item),
+        ..issue(msg)
+    }
+}
+
+fn resolution_of(st: &porter_engine::store::Store, id: Uuid) -> Resolution {
+    st.issues(&IssueFilter::default())
+        .unwrap()
+        .into_iter()
+        .find(|i| i.id == id)
+        .unwrap()
+        .resolution
+}
+
+#[test]
+fn interrupted_run_resolves_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = Project::init(dir.path(), "demo", "example-src").unwrap();
+    let st = p.store();
+    let run1 = st.begin_run(Stage::Normalise).unwrap();
+    let a = issue_on("A", Some("x"));
+    st.open_issue(run1, a.clone()).unwrap();
+    st.end_run(run1, &Summary::default()).unwrap();
+
+    let run2 = st.begin_run(Stage::Normalise).unwrap();
+    st.set_status(run2, Stage::Normalise, item("x"), &ItemStatus::Done)
+        .unwrap();
+    let interrupted = Summary {
+        interrupted: true,
+        ..Default::default()
+    };
+    st.end_run(run2, &interrupted).unwrap();
+    assert_eq!(resolution_of(st, a.id), Resolution::Open);
+}
+
+#[test]
+fn unchecked_items_keep_issues() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = Project::init(dir.path(), "demo", "example-src").unwrap();
+    let st = p.store();
+    let run1 = st.begin_run(Stage::Normalise).unwrap();
+    let a = issue_on("A", Some("x"));
+    let c = issue_on("C", Some("y"));
+    st.open_issue(run1, a.clone()).unwrap();
+    st.open_issue(run1, c.clone()).unwrap();
+    st.end_run(run1, &Summary::default()).unwrap();
+
+    let run2 = st.begin_run(Stage::Normalise).unwrap();
+    st.set_status(run2, Stage::Normalise, item("x"), &ItemStatus::Done)
+        .unwrap();
+    st.end_run(run2, &Summary::default()).unwrap();
+    assert_eq!(resolution_of(st, a.id), Resolution::FixedByRerun);
+    assert_eq!(resolution_of(st, c.id), Resolution::Open);
+}
+
+#[test]
+fn itemless_issue_resolves_only_when_complete() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = Project::init(dir.path(), "demo", "example-src").unwrap();
+    let st = p.store();
+    let run1 = st.begin_run(Stage::Normalise).unwrap();
+    let g = issue_on("global", None);
+    st.open_issue(run1, g.clone()).unwrap();
+    st.end_run(run1, &Summary::default()).unwrap();
+
+    let run2 = st.begin_run(Stage::Normalise).unwrap();
+    let interrupted = Summary {
+        interrupted: true,
+        ..Default::default()
+    };
+    st.end_run(run2, &interrupted).unwrap();
+    assert_eq!(resolution_of(st, g.id), Resolution::Open);
+
+    let run3 = st.begin_run(Stage::Normalise).unwrap();
+    st.end_run(run3, &Summary::default()).unwrap();
+    assert_eq!(resolution_of(st, g.id), Resolution::FixedByRerun);
 }
