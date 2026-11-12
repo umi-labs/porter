@@ -19,6 +19,8 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 dirs = "6"
+# Thumbnails: only the formats sites actually hold. gpui already builds this crate.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 # Pinned exactly: GPUI is pre-1.0 and breaks its API between releases. See README.md before bumping.
 gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
 gpui-component = "=0.5.1"

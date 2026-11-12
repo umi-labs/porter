@@ -5407,6 +5407,7 @@ dependencies = [
  "dirs 6.0.0",
  "gpui",
  "gpui-component",
+ "image",
  "porter-engine",
  "porter-model",
  "serde",

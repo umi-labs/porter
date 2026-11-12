@@ -13,6 +13,7 @@ use std::sync::{Mutex, MutexGuard};
 use uuid::Uuid;
 
 pub use issues::IssueFilter;
+pub use items::RouteFilter;
 pub use media::MediaHandle;
 pub use runs::RunRow;
 

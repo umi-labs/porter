@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::destinations::payload::PREVIEW_DONE;
 pub use crate::store::IssueFilter as IssueQuery;
+pub use crate::store::RouteFilter;
 
 /// A finished dry-run load.
 #[derive(Clone, Debug, PartialEq)]
@@ -154,6 +155,42 @@ pub struct ItemDetail {
     /// The stored row: a connector's raw summary before normalise, the neutral model after.
     pub data: serde_json::Value,
     pub issues: Vec<Issue>,
+}
+
+/// One media item in the grid.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MediaRow {
+    pub id: ItemId,
+    /// Content hash: names the stored file and keys the thumbnail.
+    pub hash: String,
+    pub filename: String,
+    pub mime: String,
+    /// How many old URLs it was found at.
+    pub variants: u64,
+}
+
+/// One row of the URL table.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RouteRow {
+    pub id: ItemId,
+    /// The old URL.
+    pub url: String,
+    /// The status the old site answered with, when it was fetched.
+    pub status: Option<u16>,
+    pub target: porter_model::RouteTarget,
+    /// Where it lands: a document's new path, a redirect's destination or a media
+    /// filename; None when there is no target or the target is not there.
+    pub new_url: Option<String>,
+    /// The redirect it follows went through more than one hop.
+    pub chain: bool,
+}
+
+/// A page of routes: `matching` is what the filter keeps, `total` all of them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Routes {
+    pub rows: Vec<RouteRow>,
+    pub matching: u64,
+    pub total: u64,
 }
 
 /// One normalised document in the content tree.
@@ -491,6 +528,68 @@ impl Session {
                 })
                 .collect();
             Ok(Paged { rows, total })
+        })
+        .await
+    }
+
+    /// One page of the canonical media, by filename.
+    pub async fn media(&self, page: Page) -> Result<Paged<MediaRow>> {
+        let p = self.project.clone();
+        blocking(move || {
+            let (rows, total) = p.store().media_page(page.offset, page.limit)?;
+            let rows = rows
+                .into_iter()
+                .map(|(id, hash, filename, mime, variants)| MediaRow {
+                    id,
+                    hash,
+                    filename,
+                    mime,
+                    variants,
+                })
+                .collect();
+            Ok(Paged { rows, total })
+        })
+        .await
+    }
+
+    /// One page of the canonical routes that match `filter`, by old URL.
+    pub async fn routes(&self, filter: RouteFilter, page: Page) -> Result<Routes> {
+        use porter_model::RouteTarget;
+        let (p, connector) = (self.project.clone(), self.config().source.adapter.clone());
+        blocking(move || {
+            let store = p.store();
+            let (found, matching, total) =
+                store.route_page(&connector, filter, page.offset, page.limit)?;
+            let rows = found
+                .into_iter()
+                .map(|(id, r, chain)| {
+                    let (t, key) = match &r.target {
+                        RouteTarget::Document(t) => (Some(*t), "path"),
+                        RouteTarget::Redirect(t) => (Some(*t), "to"),
+                        RouteTarget::Media(t) => (Some(*t), "filename"),
+                        RouteTarget::None => (None, ""),
+                    };
+                    let new_url = match t {
+                        Some(t) => store.item_source(t)?.and_then(|(_, _, data)| {
+                            data.get(key).and_then(|v| v.as_str()).map(str::to_string)
+                        }),
+                        None => None,
+                    };
+                    Ok(RouteRow {
+                        id,
+                        url: r.url,
+                        status: r.http_status,
+                        target: r.target,
+                        new_url,
+                        chain,
+                    })
+                })
+                .collect::<Result<_>>()?;
+            Ok(Routes {
+                rows,
+                matching,
+                total,
+            })
         })
         .await
     }

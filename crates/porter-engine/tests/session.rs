@@ -307,3 +307,216 @@ async fn children_pages_the_document_tree() {
         5
     );
 }
+
+/// The media grid's paged query: canonical, live media only, by filename.
+#[tokio::test]
+async fn media_pages_canonical_live_only() {
+    use porter_model::Media;
+    let d = tempfile::tempdir().unwrap();
+    Project::init(d.path(), "t", "wordpress").unwrap();
+    let s = Session::open(d.path()).unwrap();
+    let store = s.project().store();
+    let put = |connector: &str, sid: &str, name: &str| {
+        let src = SourceRef {
+            connector: connector.into(),
+            source_id: sid.into(),
+            url: None,
+        };
+        let id = ItemId::new(ItemKind::Media, &src);
+        let m = Media {
+            id,
+            hash: sid.into(),
+            variants: vec![
+                "https://old.test/a.png".into(),
+                "https://old.test/b.png".into(),
+            ],
+            filename: name.into(),
+            mime: "image/png".into(),
+            width: Some(4),
+            height: Some(3),
+            alt: None,
+            caption: None,
+            title: None,
+            credit: None,
+            folder: None,
+            usages: vec![],
+        };
+        store.put_item(ItemKind::Media, id, &src, &m).unwrap();
+        id
+    };
+    for i in 0..5 {
+        put("media", &format!("h{i}"), &format!("pic{i}.png"));
+    }
+    put("crawl", "raw", "raw.png");
+    let gone = put("media", "gone", "gone.png");
+    store.soft_delete(gone).unwrap();
+    let a = s
+        .media(Page {
+            offset: 0,
+            limit: 3,
+        })
+        .await
+        .unwrap();
+    assert_eq!((a.total, a.rows.len()), (5, 3));
+    assert_eq!(a.rows[0].filename, "pic0.png");
+    assert_eq!(a.rows[0].hash, "h0");
+    assert_eq!(a.rows[0].variants, 2);
+    assert_eq!(a.rows[0].mime, "image/png");
+    let b = s
+        .media(Page {
+            offset: 3,
+            limit: 3,
+        })
+        .await
+        .unwrap();
+    assert_eq!(b.rows.len(), 2);
+    assert!(
+        b.rows
+            .iter()
+            .all(|r| r.filename != "raw.png" && r.filename != "gone.png")
+    );
+}
+
+/// The URL table: old URL, status, target and new URL, with the unresolved, chain and
+/// 404 filters done in SQL and counted honestly.
+#[tokio::test]
+async fn routes_filter_and_page() {
+    use porter_engine::session::RouteFilter;
+    use porter_model::{IssueKind, Redirect, RedirectOrigin, Route, RouteTarget, Severity};
+    let d = tempfile::tempdir().unwrap();
+    Project::init(d.path(), "t", "wordpress").unwrap();
+    let s = Session::open(d.path()).unwrap();
+    let store = s.project().store();
+    let src = |kind: &str, sid: &str, url: Option<&str>| SourceRef {
+        connector: "wordpress".into(),
+        source_id: format!("{kind}:{sid}"),
+        url: url.map(Into::into),
+    };
+    let route = |sid: &str, status: Option<u16>, target: RouteTarget| {
+        let url = format!("https://old.test/{sid}");
+        let sr = src("route", sid, Some(&url));
+        let id = ItemId::new(ItemKind::Route, &sr);
+        let r = Route {
+            url,
+            target,
+            http_status: status,
+            title: None,
+        };
+        store.put_item(ItemKind::Route, id, &sr, &r).unwrap();
+        id
+    };
+    let (doc, _) = {
+        let sr = src("post", "1", None);
+        let id = ItemId::new(ItemKind::Document, &sr);
+        let mut v = serde_json::json!({"path": "/new-1", "title": "One", "type": "post"});
+        v["id"] = serde_json::json!(id);
+        store.put_item(ItemKind::Document, id, &sr, &v).unwrap();
+        (id, ())
+    };
+    let redirect = |sid: &str, to: &str| {
+        let sr = src("redirect", sid, None);
+        let id = ItemId::new(ItemKind::Redirect, &sr);
+        let r = Redirect {
+            from: format!("/{sid}"),
+            to: to.into(),
+            code: 301,
+            origin: RedirectOrigin::Plugin,
+        };
+        store.put_item(ItemKind::Redirect, id, &sr, &r).unwrap();
+        id
+    };
+    let r_ok = redirect("a", "/new-1");
+    let r_chain = redirect("b", "/new-1");
+    let r_gone = redirect("c", "/new-1");
+    store.soft_delete(r_gone).unwrap();
+    route("doc", Some(200), RouteTarget::Document(doc));
+    route("none200", Some(200), RouteTarget::None);
+    route("nonenull", None, RouteTarget::None);
+    route("nf", Some(404), RouteTarget::None);
+    route("red-ok", Some(301), RouteTarget::Redirect(r_ok));
+    route("red-chain", Some(301), RouteTarget::Redirect(r_chain));
+    route("red-gone", Some(301), RouteTarget::Redirect(r_gone));
+    // Another connector's raw route never shows.
+    let raw = SourceRef {
+        connector: "wp-rest".into(),
+        source_id: "route:raw".into(),
+        url: None,
+    };
+    let rid = ItemId::new(ItemKind::Route, &raw);
+    let rr = Route {
+        url: "https://old.test/raw".into(),
+        target: RouteTarget::None,
+        http_status: Some(404),
+        title: None,
+    };
+    store.put_item(ItemKind::Route, rid, &raw, &rr).unwrap();
+    let run = store.begin_run(Stage::Normalise).unwrap();
+    store
+        .open_issue(
+            run,
+            porter_model::Issue {
+                id: uuid::Uuid::now_v7(),
+                kind: IssueKind::RedirectChain,
+                severity: Severity::Info,
+                item: Some(r_chain),
+                stage: Stage::Normalise,
+                message: "went through 2 redirects".into(),
+                details: serde_json::json!({"hops": 2}),
+                resolution: porter_model::Resolution::Open,
+            },
+        )
+        .unwrap();
+
+    let all = Page {
+        offset: 0,
+        limit: 100,
+    };
+    let got = |f| {
+        let s = &s;
+        async move { s.routes(f, all).await.unwrap() }
+    };
+    let every = got(RouteFilter::All).await;
+    assert_eq!((every.matching, every.total, every.rows.len()), (7, 7, 7));
+    let doc_row = every.rows.iter().find(|r| r.url.ends_with("/doc")).unwrap();
+    assert_eq!(doc_row.status, Some(200));
+    assert_eq!(doc_row.target, RouteTarget::Document(doc));
+    assert_eq!(doc_row.new_url.as_deref(), Some("/new-1"));
+    let ok = every
+        .rows
+        .iter()
+        .find(|r| r.url.ends_with("/red-ok"))
+        .unwrap();
+    assert_eq!(ok.new_url.as_deref(), Some("/new-1"));
+    assert!(!ok.chain);
+
+    let un = got(RouteFilter::Unresolved).await;
+    let mut urls: Vec<_> = un
+        .rows
+        .iter()
+        .map(|r| r.url.rsplit('/').next().unwrap())
+        .collect();
+    urls.sort();
+    assert_eq!(urls, ["none200", "nonenull", "red-gone"]);
+    assert_eq!((un.matching, un.total), (3, 7));
+
+    let ch = got(RouteFilter::Chains).await;
+    assert_eq!(ch.rows.len(), 1);
+    assert!(ch.rows[0].chain && ch.rows[0].url.ends_with("/red-chain"));
+
+    let nf = got(RouteFilter::NotFound).await;
+    assert_eq!((nf.matching, nf.rows.len()), (1, 1));
+    assert!(nf.rows[0].url.ends_with("/nf"));
+
+    // Paging is over the filtered set; `total` stays the unfiltered count.
+    let p = s
+        .routes(
+            RouteFilter::All,
+            Page {
+                offset: 5,
+                limit: 5,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!((p.rows.len(), p.matching, p.total), (2, 7, 7));
+}

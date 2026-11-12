@@ -284,34 +284,7 @@ fn detail(w: &ProjectWindow, cx: &mut Context<ProjectWindow>) -> gpui::AnyElemen
 
     out = out
         .child(heading("Issues"))
-        .child(if d.item.issues.is_empty() {
-            muted("No issues.").into_any_element()
-        } else {
-            v_flex()
-                .gap_1()
-                .children(d.item.issues.iter().map(|i| {
-                    let kind = serde_json::to_value(i.kind)
-                        .ok()
-                        .and_then(|v| v.as_str().map(str::to_string))
-                        .unwrap_or_default();
-                    h_flex()
-                        .gap_2()
-                        .text_sm()
-                        .child(
-                            div()
-                                .w_32()
-                                .text_color(tone_color(severity_tone(i.severity), theme))
-                                .child(kind),
-                        )
-                        .child(div().min_w_0().child(i.message.clone()))
-                        .child(
-                            div()
-                                .text_color(theme.muted_foreground)
-                                .child(format!("{:?}", i.resolution).to_lowercase()),
-                        )
-                }))
-                .into_any_element()
-        });
+        .child(issues_list(&d.item.issues, cx));
     out.into_any_element()
 }
 
@@ -340,4 +313,43 @@ fn rt_line(l: Line, cx: &Context<ProjectWindow>) -> impl IntoElement {
             None => el,
         }
     }))
+}
+
+/// An item's issues, or that it has none.
+pub fn issues_list(
+    issues: &[porter_model::Issue],
+    cx: &Context<ProjectWindow>,
+) -> gpui::AnyElement {
+    let theme = cx.theme();
+    if issues.is_empty() {
+        return div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("No issues.")
+            .into_any_element();
+    }
+    v_flex()
+        .gap_1()
+        .children(issues.iter().map(|i| {
+            let kind = serde_json::to_value(i.kind)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default();
+            h_flex()
+                .gap_2()
+                .text_sm()
+                .child(
+                    div()
+                        .w_32()
+                        .text_color(tone_color(severity_tone(i.severity), theme))
+                        .child(kind),
+                )
+                .child(div().min_w_0().child(i.message.clone()))
+                .child(
+                    div()
+                        .text_color(theme.muted_foreground)
+                        .child(format!("{:?}", i.resolution).to_lowercase()),
+                )
+        }))
+        .into_any_element()
 }

@@ -7,6 +7,7 @@ mod launcher;
 mod project_window;
 mod recent;
 mod sidebar;
+mod thumbs;
 mod views;
 mod vm;
 

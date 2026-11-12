@@ -1,6 +1,6 @@
 use super::{NOW, RunId, Store, wire};
 use anyhow::Result;
-use porter_model::{ItemId, ItemKind, ItemStatus, SourceRef, Stage};
+use porter_model::{ItemId, ItemKind, ItemStatus, Route, SourceRef, Stage};
 use rusqlite::{OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -391,5 +391,126 @@ impl Store {
             out.push((id.parse()?, serde_json::from_str(&status)?));
         }
         Ok(out)
+    }
+}
+
+/// What the URL table narrows to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RouteFilter {
+    #[default]
+    All,
+    /// A 2xx (or unfetched) route that points nowhere, or at an item that is not there.
+    Unresolved,
+    /// A route whose redirect went through more than one hop.
+    Chains,
+    /// Old status 404.
+    NotFound,
+}
+
+impl Store {
+    /// One page of `connector`'s live media items by filename: `(id, hash, filename, mime,
+    /// variant count)`, and how many there are.
+    #[allow(clippy::type_complexity)]
+    pub fn media_page(
+        &self,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<(ItemId, String, String, String, u64)>, u64)> {
+        const FROM: &str =
+            "FROM items WHERE kind = 'media' AND connector = 'media' AND deleted_at IS NULL";
+        let conn = self.conn();
+        let total: i64 = conn.query_row(&format!("SELECT COUNT(*) {FROM}"), [], |r| r.get(0))?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, coalesce(json_extract(data, '$.hash'), ''),
+                    coalesce(json_extract(data, '$.filename'), ''),
+                    coalesce(json_extract(data, '$.mime'), ''),
+                    coalesce(json_array_length(data, '$.variants'), 0)
+             {FROM} ORDER BY lower(json_extract(data, '$.filename')), id LIMIT ?1 OFFSET ?2"
+        ))?;
+        let rows = stmt.query_map(
+            params![
+                i64::try_from(limit).unwrap_or(i64::MAX),
+                i64::try_from(offset).unwrap_or(i64::MAX)
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, i64>(4)?,
+                ))
+            },
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, hash, name, mime, n) = row?;
+            out.push((id.parse()?, hash, name, mime, u64::try_from(n).unwrap_or(0)));
+        }
+        Ok((out, u64::try_from(total).unwrap_or(0)))
+    }
+
+    /// One page of `connector`'s live routes by URL that match `filter`: the stored route
+    /// and whether its redirect is a chain; then how many match, and how many there are.
+    #[allow(clippy::type_complexity)]
+    pub fn route_page(
+        &self,
+        connector: &str,
+        filter: RouteFilter,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<(ItemId, Route, bool)>, u64, u64)> {
+        // The target's id, whichever kind it is ("none" is a bare string, so NULL).
+        const TID: &str = "coalesce(json_extract(r.data, '$.target.document'),
+            json_extract(r.data, '$.target.media'), json_extract(r.data, '$.target.redirect'))";
+        const STATUS: &str = "json_extract(r.data, '$.http_status')";
+        let chain = "EXISTS (SELECT 1 FROM issues i WHERE i.kind = 'redirect-chain'
+            AND i.deleted_at IS NULL AND i.item_id = json_extract(r.data, '$.target.redirect'))";
+        let cond = match filter {
+            RouteFilter::All => "1".to_string(),
+            RouteFilter::Unresolved => format!(
+                "(({TID} IS NULL AND ({STATUS} IS NULL OR {STATUS} BETWEEN 200 AND 299))
+                  OR ({TID} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM items t
+                      WHERE t.id = {TID} AND t.deleted_at IS NULL)))"
+            ),
+            RouteFilter::Chains => chain.to_string(),
+            RouteFilter::NotFound => format!("{STATUS} = 404"),
+        };
+        let base =
+            "FROM items r WHERE r.kind = 'route' AND r.connector = ?1 AND r.deleted_at IS NULL";
+        let conn = self.conn();
+        let count = |extra: &str| -> Result<u64> {
+            let n: i64 = conn.query_row(
+                &format!("SELECT COUNT(*) {base} AND {extra}"),
+                [connector],
+                |r| r.get(0),
+            )?;
+            Ok(u64::try_from(n).unwrap_or(0))
+        };
+        let (matching, total) = (count(&cond)?, count("1")?);
+        let mut stmt = conn.prepare(&format!(
+            "SELECT r.id, r.data, {chain} {base} AND {cond}
+             ORDER BY lower(coalesce(json_extract(r.data, '$.url'), r.url, '')), r.id LIMIT ?2 OFFSET ?3"
+        ))?;
+        let rows = stmt.query_map(
+            params![
+                connector,
+                i64::try_from(limit).unwrap_or(i64::MAX),
+                i64::try_from(offset).unwrap_or(i64::MAX)
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, bool>(2)?,
+                ))
+            },
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, data, chain) = row?;
+            out.push((id.parse()?, serde_json::from_str(&data)?, chain));
+        }
+        Ok((out, matching, total))
     }
 }

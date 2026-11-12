@@ -24,6 +24,8 @@ pub enum Section {
 pub enum View {
     Overview,
     Content,
+    Media,
+    Urls,
     Runs,
     /// A section that is not built yet; says so rather than showing an empty pane.
     NotBuilt(&'static str),
@@ -58,6 +60,8 @@ impl Section {
         match self {
             Section::Overview => View::Overview,
             Section::Content => View::Content,
+            Section::Media => View::Media,
+            Section::Urls => View::Urls,
             Section::Runs => View::Runs,
             s => View::NotBuilt(s.label()),
         }
@@ -97,11 +101,13 @@ mod tests {
         sel = Section::Mapping;
         assert_eq!(sel.view(), View::NotBuilt("Mapping"));
         assert_eq!(Section::Content.view(), View::Content);
-        // Every section maps to some view, and only Overview, Content and Runs are built.
+        // Every section maps to some view, and only Overview, Content, Media, URLs and Runs are built.
         let built = Section::ALL
             .iter()
             .filter(|s| !matches!(s.view(), View::NotBuilt(_)))
             .count();
-        assert_eq!(built, 3);
+        assert_eq!(built, 5);
+        assert_eq!(Section::Media.view(), View::Media);
+        assert_eq!(Section::Urls.view(), View::Urls);
     }
 }

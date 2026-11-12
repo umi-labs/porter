@@ -14,17 +14,20 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{ActiveTheme, Disableable, Root, h_flex, v_flex};
 use porter_engine::events::Event;
 use porter_engine::report::Coverage;
-use porter_engine::session::{RunPlan, Session, StageOpts};
+use porter_engine::session::{MediaRow, RouteFilter, RunPlan, Session, StageOpts};
 use porter_engine::stage::SchemaMode;
 use porter_model::{ItemId, Stage};
 
 use crate::bridge::{Bridge, DataResult, UiEvent, coalesce};
 use crate::sidebar::{self, Section, View};
+use crate::thumbs::{Cache, Thumb};
 use crate::views;
 use crate::vm::apply::{ApplySheet, age};
 use crate::vm::content::{Content, NodeKey, Query};
+use crate::vm::media::{self, Media};
 use crate::vm::pipeline::{CLOSE_WAIT, CloseStep, KindCount, Pipeline, name};
 use crate::vm::runs::Runs;
+use crate::vm::urls::{self, Urls};
 
 /// How often the window drains engine events: at most 20 redraws a second.
 const POLL: Duration = Duration::from_millis(50);
@@ -35,6 +38,9 @@ pub struct ProjectWindow {
     pub(crate) pipeline: Pipeline,
     pub(crate) runs: Runs,
     pub(crate) content: Content,
+    pub(crate) media: Media,
+    pub(crate) urls: Urls,
+    thumbs: Arc<Cache>,
     pub(crate) coverage: Option<Result<Option<Coverage>, String>>,
     pub(crate) kinds: Option<Result<Vec<KindCount>, String>>,
     /// The apply confirmation sheet, while open.
@@ -62,6 +68,9 @@ impl ProjectWindow {
             pipeline: Pipeline::default(),
             runs: Runs::default(),
             content: Content::default(),
+            media: Media::default(),
+            urls: Urls::default(),
+            thumbs: Arc::default(),
             coverage: None,
             kinds: None,
             apply: None,
@@ -83,9 +92,20 @@ impl ProjectWindow {
 
     pub fn select(&mut self, s: Section, cx: &mut Context<Self>) {
         self.section = s;
-        if s == Section::Content {
-            let q = self.content.open();
-            self.ask(q);
+        match s {
+            Section::Content => {
+                let q = self.content.open();
+                self.ask(q);
+            }
+            Section::Media => {
+                let q = self.media.open();
+                self.ask_media(q);
+            }
+            Section::Urls => {
+                let q = self.urls.open();
+                self.ask_urls(q);
+            }
+            _ => {}
         }
         cx.notify();
     }
@@ -95,6 +115,60 @@ impl ProjectWindow {
         self.bridge.refresh();
         let q = self.content.invalidate();
         self.ask(q);
+        let q = self.media.invalidate();
+        self.ask_media(q);
+        let q = self.urls.invalidate();
+        self.ask_urls(q);
+    }
+
+    fn ask_media(&self, qs: Vec<media::Query>) {
+        for q in qs {
+            self.bridge.media(self.media.generation, q);
+        }
+    }
+
+    fn ask_urls(&self, qs: Vec<urls::Query>) {
+        for q in qs {
+            self.bridge.urls(self.urls.generation, q);
+        }
+    }
+
+    pub(crate) fn media_select(&mut self, id: ItemId, cx: &mut Context<Self>) {
+        let q = self.media.select(id);
+        self.ask_media(q);
+        cx.notify();
+    }
+
+    /// Called while the grid draws: reads the next page when the last rows are in view.
+    /// Changes only what the footer says, so it needs no redraw of its own.
+    pub(crate) fn media_pump(&mut self, row: usize, cols: usize) {
+        if self.media.near_end(row, cols) {
+            let q = self.media.more();
+            self.ask_media(q);
+        }
+    }
+
+    /// The thumbnail for `row` if it is ready; otherwise starts decoding it.
+    pub(crate) fn thumb(&self, row: &MediaRow) -> Option<Thumb> {
+        let t = self.thumbs.get(&row.hash);
+        if t.is_none() {
+            self.bridge.thumb(&self.thumbs, row);
+        }
+        t
+    }
+
+    pub(crate) fn urls_filter(&mut self, f: RouteFilter, cx: &mut Context<Self>) {
+        let q = self.urls.set_filter(f);
+        self.ask_urls(q);
+        cx.notify();
+    }
+
+    /// Called while the table draws, like `media_pump`.
+    pub(crate) fn urls_pump(&mut self, last_visible: usize) {
+        if last_visible + 20 >= self.urls.len() {
+            let q = self.urls.more();
+            self.ask_urls(q);
+        }
     }
 
     /// Sends the content section's reads to the bridge.
@@ -165,6 +239,13 @@ impl ProjectWindow {
                 let q = self.content.land(generation, reply);
                 self.ask(q);
             }
+            DataResult::Media { generation, reply } => {
+                let q = self.media.land(generation, reply);
+                self.ask_media(q);
+            }
+            DataResult::Urls { generation, reply } => self.urls.land(generation, reply),
+            // Redraw only: `handle`'s caller notifies after every drain.
+            DataResult::ThumbReady => {}
             DataResult::Preview {
                 confirm: false,
                 url,
@@ -526,6 +607,8 @@ impl Render for ProjectWindow {
             View::NotBuilt(name) => not_built(name, cx).into_any_element(),
             View::Overview => views::overview::render(self, cx).into_any_element(),
             View::Content => views::content::render(self, cx).into_any_element(),
+            View::Media => views::media::render(self, cx).into_any_element(),
+            View::Urls => views::urls::render(self, cx).into_any_element(),
             View::Runs => views::runs::render(self, cx).into_any_element(),
         };
         let sheet = self

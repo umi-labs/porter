@@ -7,16 +7,20 @@ use std::sync::{Arc, OnceLock};
 
 use porter_engine::events::Event;
 use porter_engine::report::{Coverage, read_coverage};
-use porter_engine::session::{IssueQuery, Overview, Page, RunOutcome, RunPlan, STAGES, Session};
-use porter_model::{ItemKind, Resolution, SourceRef};
+use porter_engine::session::{
+    IssueQuery, MediaRow, Overview, Page, RunOutcome, RunPlan, STAGES, Session,
+};
+use porter_model::{ItemId, ItemKind, Resolution, SourceRef};
 use tokio::runtime::Runtime;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio_util::sync::CancellationToken;
 
+use crate::thumbs::{self, Cache};
 use crate::vm::apply::{PreviewInfo, preview_info};
 use crate::vm::content::{NodeKey, Query, Reply};
 use crate::vm::pipeline::{KindCount, issues_by_kind};
 use crate::vm::runs::History;
+use crate::vm::{media, urls};
 
 pub enum UiEvent {
     Engine(Event),
@@ -48,6 +52,16 @@ pub enum DataResult {
         generation: u64,
         reply: Reply,
     },
+    Media {
+        generation: u64,
+        reply: media::Reply,
+    },
+    Urls {
+        generation: u64,
+        reply: urls::Reply,
+    },
+    /// A thumbnail landed in the cache: redraw.
+    ThumbReady,
 }
 
 /// The app's one tokio runtime (multi-thread), created on first use.
@@ -249,29 +263,107 @@ impl Bridge {
                     }
                 }
                 Query::Doc(id) => Reply::Doc(id, session.item(id).await.map(Box::new).map_err(err)),
-                Query::Labels(ids) => {
-                    let project = session.project().clone();
-                    Reply::Labels(
-                        blocking(move || {
-                            ids.into_iter()
-                                .map(|id| {
-                                    let found = project.store().item_source(id)?;
-                                    Ok((
-                                        id,
-                                        found.map(|(kind, src, data)| label(kind, &src, &data)),
-                                    ))
-                                })
-                                .collect::<anyhow::Result<Vec<_>>>()
-                                .map_err(err)
-                        })
-                        .await
-                        .and_then(|r| r),
-                    )
-                }
+                Query::Labels(ids) => Reply::Labels(read_labels(&session, ids).await),
             };
             let _ = tx.send(UiEvent::Data(DataResult::Content { generation, reply }));
         });
     }
+}
+
+impl Bridge {
+    /// Runs one media-section read; the reply comes back as `DataResult::Media`.
+    pub fn media(&self, generation: u64, q: media::Query) {
+        let (session, tx) = (self.session.clone(), self.tx.clone());
+        runtime().spawn(async move {
+            let reply = match q {
+                media::Query::Page(page) => media::Reply::Page {
+                    offset: page.offset,
+                    result: session.media(page).await.map_err(|e| format!("{e:#}")),
+                },
+                media::Query::Detail(id) => media::Reply::Detail(
+                    id,
+                    session
+                        .item(id)
+                        .await
+                        .map(Box::new)
+                        .map_err(|e| format!("{e:#}")),
+                ),
+                media::Query::Labels(ids) => media::Reply::Labels(read_labels(&session, ids).await),
+            };
+            let _ = tx.send(UiEvent::Data(DataResult::Media { generation, reply }));
+        });
+    }
+
+    /// Runs one URL-table read; the reply comes back as `DataResult::Urls`.
+    pub fn urls(&self, generation: u64, q: urls::Query) {
+        let (session, tx) = (self.session.clone(), self.tx.clone());
+        runtime().spawn(async move {
+            let result = session
+                .routes(q.filter, q.page)
+                .await
+                .map_err(|e| format!("{e:#}"));
+            let reply = urls::Reply {
+                offset: q.page.offset,
+                result,
+            };
+            let _ = tx.send(UiEvent::Data(DataResult::Urls { generation, reply }));
+        });
+    }
+
+    /// Decodes `row`'s thumbnail into `cache` unless it is there or on its way.
+    pub fn thumb(&self, cache: &Arc<Cache>, row: &MediaRow) {
+        if !cache.begin(&row.hash) {
+            return;
+        }
+        // At most a few decodes at once, so a fast scroll queues instead of starting
+        // hundreds of threads and holding hundreds of decoded frames.
+        // ponytail: scrolled-off requests still decode; a cancel flag per request if it shows.
+        static DECODING: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+        let (session, tx, cache, row) = (
+            self.session.clone(),
+            self.tx.clone(),
+            cache.clone(),
+            row.clone(),
+        );
+        runtime().spawn(async move {
+            let _permit = DECODING.acquire().await;
+            let (c, r) = (cache.clone(), row.clone());
+            let done = blocking(move || {
+                let t = match session.project().store().media_path(r.id) {
+                    Ok(path) => thumbs::decode(&path, &r.mime, &r.filename),
+                    Err(e) => thumbs::Thumb::Placeholder(format!("can't preview ({e:#})")),
+                };
+                c.put(&r.hash, t);
+            })
+            .await;
+            if let Err(e) = done {
+                cache.put(
+                    &row.hash,
+                    thumbs::Thumb::Placeholder(format!("can't preview ({e})")),
+                );
+            }
+            let _ = tx.send(UiEvent::Data(DataResult::ThumbReady));
+        });
+    }
+}
+
+/// Titles of documents and filenames of media for `ids`; None where there is no live item.
+async fn read_labels(
+    session: &Arc<Session>,
+    ids: Vec<ItemId>,
+) -> Result<Vec<(ItemId, Option<String>)>, String> {
+    let project = session.project().clone();
+    blocking(move || {
+        ids.into_iter()
+            .map(|id| {
+                let found = project.store().item_source(id)?;
+                Ok((id, found.map(|(kind, src, data)| label(kind, &src, &data))))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()
+            .map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .and_then(|r| r)
 }
 
 /// A media item's filename, else a document's title, else its source id.
