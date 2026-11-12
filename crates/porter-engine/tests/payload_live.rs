@@ -15,7 +15,7 @@ const PNG: &[u8] = &[
 fn client() -> Option<PayloadClient> {
     let url = std::env::var("PORTER_PAYLOAD_TEST_URL").ok()?;
     let key = std::env::var("PORTER_PAYLOAD_API_KEY").ok()?;
-    Some(PayloadClient::new(&url, &key, "users"))
+    Some(PayloadClient::new(&url, &key, "users").unwrap())
 }
 
 #[tokio::test]
@@ -27,9 +27,11 @@ async fn live_upload_and_upsert() {
     let dir = tempfile::tempdir().unwrap();
     let f = dir.path().join("pixel.png");
     std::fs::write(&f, PNG).unwrap();
-    let media = c
-        .upload(
+    let (media, _) = c
+        .upload_keyed(
             "media",
+            "legacyId",
+            &json!("live-pixel"),
             &f,
             "pixel.png",
             "image/png",

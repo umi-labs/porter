@@ -22,7 +22,7 @@ async fn auth_header_format() {
         .expect(1)
         .mount(&s)
         .await;
-    let c = PayloadClient::new(&s.uri(), "k3y", "editors");
+    let c = PayloadClient::new(&s.uri(), "k3y", "editors").unwrap();
     assert_eq!(c.count("pages").await.unwrap(), 7);
 }
 
@@ -49,7 +49,7 @@ async fn upsert_creates_then_updates() {
         .expect(1)
         .mount(&s)
         .await;
-    let c = PayloadClient::new(&s.uri(), "k", "users");
+    let c = PayloadClient::new(&s.uri(), "k", "users").unwrap();
     let (doc, created) = c
         .upsert(
             "pages",
@@ -105,7 +105,7 @@ async fn upsert_refuses_duplicate_keys() {
         )
         .mount(&s)
         .await;
-    let c = PayloadClient::new(&s.uri(), "k", "users");
+    let c = PayloadClient::new(&s.uri(), "k", "users").unwrap();
     let e = c
         .upsert("pages", "slug", &json!("a b&c"), &json!({}), false)
         .await
@@ -138,7 +138,7 @@ async fn draft_flag_and_status() {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"doc": {"id": 1}})))
         .mount(&s)
         .await;
-    let c = PayloadClient::new(&s.uri(), "k", "users");
+    let c = PayloadClient::new(&s.uri(), "k", "users").unwrap();
     c.create("posts", &json!({"title": "P"}), false)
         .await
         .unwrap();
@@ -170,7 +170,7 @@ async fn nulls_stripped() {
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({"doc": {"id": 1}})))
         .mount(&s)
         .await;
-    let c = PayloadClient::new(&s.uri(), "k", "users");
+    let c = PayloadClient::new(&s.uri(), "k", "users").unwrap();
     c.create(
         "pages",
         &json!({"title": "T", "layout": null, "seo": {"image": null, "title": "S"}, "tags": [null, "a"]}),
@@ -201,7 +201,7 @@ async fn validation_errors_name_fields_not_key() {
         }]})))
         .mount(&s)
         .await;
-    let c = PayloadClient::new(&s.uri(), "sekrit-key", "users");
+    let c = PayloadClient::new(&s.uri(), "sekrit-key", "users").unwrap();
     let e = c
         .create("pages", &json!({}), false)
         .await
@@ -227,7 +227,7 @@ async fn redirects_are_not_followed() {
         )
         .mount(&s)
         .await;
-    let c = PayloadClient::new(&s.uri(), "k", "users");
+    let c = PayloadClient::new(&s.uri(), "k", "users").unwrap();
     let e = c.count("pages").await.unwrap_err().to_string();
     assert!(e.contains("redirect"), "{e}");
     assert!(e.contains("/api/pages"), "{e}");
@@ -244,18 +244,34 @@ async fn upload_sends_file_and_payload_parts() {
     let dir = tempfile::tempdir().unwrap();
     let f = dir.path().join("a.png");
     std::fs::write(&f, b"PNGDATA").unwrap();
-    let c = PayloadClient::new(&s.uri(), "k", "users");
-    let doc = c
-        .upload("media", &f, "pic.png", "image/png", &json!({"alt": "A"}))
+    let c = PayloadClient::new(&s.uri(), "k", "users").unwrap();
+    Mock::given(method("GET"))
+        .and(path("/api/media"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"docs": [], "totalDocs": 0})))
+        .mount(&s)
+        .await;
+    let (doc, created) = c
+        .upload_keyed(
+            "media",
+            "legacyId",
+            &json!("m1"),
+            &f,
+            "pic.png",
+            "image/png",
+            &json!({"alt": "A"}),
+        )
         .await
         .unwrap();
+    assert!(created);
     assert_eq!(doc["id"], 3);
-    let r = &s.received_requests().await.unwrap()[0];
+    let reqs = s.received_requests().await.unwrap();
+    let r = reqs.iter().find(|r| r.method.as_str() == "POST").unwrap();
     let raw = String::from_utf8_lossy(&r.body);
     assert!(raw.contains("name=\"file\"; filename=\"pic.png\""), "{raw}");
     assert!(raw.contains("PNGDATA"));
     assert!(raw.contains("name=\"_payload\""));
-    assert!(raw.contains(r#"{"alt":"A"}"#), "{raw}");
+    assert!(raw.contains(r#""alt":"A""#), "{raw}");
+    assert!(raw.contains(r#""legacyId":"m1""#), "{raw}");
 }
 
 #[tokio::test]
@@ -270,10 +286,173 @@ async fn update_global_posts_to_globals() {
         .expect(1)
         .mount(&s)
         .await;
-    let c = PayloadClient::new(&s.uri(), "k", "users");
+    let c = PayloadClient::new(&s.uri(), "k", "users").unwrap();
     let r = c
         .update_global("header", &json!({"nav": []}))
         .await
         .unwrap();
     assert_eq!(r, json!({"nav": []}));
+}
+
+fn empty() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({"docs": [], "totalDocs": 0}))
+}
+
+#[tokio::test]
+async fn create_5xx_after_commit_does_not_duplicate() {
+    let s = MockServer::start().await;
+    // Lookup before the POST finds nothing; lookup after the 503 finds the committed doc.
+    Mock::given(method("GET"))
+        .and(path("/api/pages"))
+        .respond_with(empty())
+        .up_to_n_times(1)
+        .mount(&s)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/pages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"docs": [{"id": 5, "legacyId": "k"}], "totalDocs": 1})),
+        )
+        .mount(&s)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/pages"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&s)
+        .await;
+    let c = PayloadClient::new(&s.uri(), "k", "users").unwrap();
+    let (doc, created) = c
+        .upsert(
+            "pages",
+            "legacyId",
+            &json!("k"),
+            &json!({"title": "T"}),
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(created);
+    assert_eq!(doc["id"], 5);
+}
+
+#[tokio::test]
+async fn create_5xx_before_commit_retries() {
+    let s = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/pages"))
+        .respond_with(empty())
+        .mount(&s)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/pages"))
+        .respond_with(ResponseTemplate::new(503))
+        .up_to_n_times(1)
+        .mount(&s)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/pages"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({"doc": {"id": 6}})))
+        .mount(&s)
+        .await;
+    let c = PayloadClient::new(&s.uri(), "k", "users").unwrap();
+    let (doc, created) = c
+        .upsert(
+            "pages",
+            "legacyId",
+            &json!("k"),
+            &json!({"title": "T"}),
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(created);
+    assert_eq!(doc["id"], 6);
+    let posts = s
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "POST")
+        .count();
+    assert_eq!(posts, 2);
+}
+
+#[tokio::test]
+async fn create_4xx_is_not_retried() {
+    let s = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/pages"))
+        .respond_with(empty())
+        .mount(&s)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/pages"))
+        .respond_with(
+            ResponseTemplate::new(400).set_body_json(json!({"errors": [{"message": "bad"}]})),
+        )
+        .expect(1)
+        .mount(&s)
+        .await;
+    let c = PayloadClient::new(&s.uri(), "k", "users").unwrap();
+    let e = c
+        .upsert("pages", "legacyId", &json!("k"), &json!({}), false)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("bad"), "{e}");
+}
+
+#[tokio::test]
+async fn upload_5xx_after_commit_does_not_duplicate() {
+    let s = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/media"))
+        .respond_with(empty())
+        .up_to_n_times(1)
+        .mount(&s)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/media"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"docs": [{"id": 8, "legacyId": "m"}], "totalDocs": 1})),
+        )
+        .mount(&s)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/media"))
+        .respond_with(ResponseTemplate::new(502))
+        .expect(1)
+        .mount(&s)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("a.png");
+    std::fs::write(&f, b"PNGDATA").unwrap();
+    let c = PayloadClient::new(&s.uri(), "k", "users").unwrap();
+    let (doc, created) = c
+        .upload_keyed(
+            "media",
+            "legacyId",
+            &json!("m"),
+            &f,
+            "a.png",
+            "image/png",
+            &json!({}),
+        )
+        .await
+        .unwrap();
+    assert!(created);
+    assert_eq!(doc["id"], 8);
+}
+
+#[test]
+fn invalid_api_key_errors() {
+    let e = PayloadClient::new("http://x.test", "bad\nkey", "users")
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(e.contains("API key"), "{e}");
+    assert!(!e.contains("bad"), "never echoes the key: {e}");
 }

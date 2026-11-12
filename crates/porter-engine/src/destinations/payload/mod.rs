@@ -29,11 +29,7 @@ impl PayloadDestination {
             Ok(k) if !k.is_empty() => k,
             _ => bail!("environment variable {var} is not set (destination.api_key_env)"),
         };
-        Ok(PayloadClient::new(
-            &self.cfg.url,
-            &key,
-            &self.cfg.auth_collection,
-        ))
+        PayloadClient::new(&self.cfg.url, &key, &self.cfg.auth_collection)
     }
 }
 

@@ -13,8 +13,20 @@ pub fn client(user_agent: &str) -> Client {
         .unwrap_or_default()
 }
 
-fn retryable(s: StatusCode) -> bool {
+pub fn retryable(s: StatusCode) -> bool {
     s == StatusCode::TOO_MANY_REQUESTS || s.is_server_error()
+}
+
+/// How long to wait after failed attempt `attempt` (1-based): the response's
+/// `Retry-After` seconds if any, else 500 ms exponential backoff; capped at 30 s.
+pub fn retry_wait(attempt: u32, res: Option<&Response>) -> Duration {
+    let after = res
+        .and_then(|r| r.headers().get(reqwest::header::RETRY_AFTER))
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(Duration::from_secs);
+    let backoff = BASE * 2u32.saturating_pow(attempt.saturating_sub(1));
+    after.unwrap_or(backoff).min(CAP)
 }
 
 /// Sends `req`, retrying 429/5xx and transport errors up to `max` attempts in all
@@ -36,17 +48,11 @@ pub async fn send_with_retry(req: RequestBuilder, max: u32) -> Result<Response> 
             return Ok(result?);
         };
         let wait = match &result {
-            Ok(r) if retryable(r.status()) => r
-                .headers()
-                .get(reqwest::header::RETRY_AFTER)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.trim().parse::<u64>().ok())
-                .map(Duration::from_secs),
+            Ok(r) if retryable(r.status()) => retry_wait(attempt, Some(r)),
             Ok(_) => return result.map_err(Into::into),
-            Err(_) => None,
+            Err(_) => retry_wait(attempt, None),
         };
-        let backoff = BASE * 2u32.saturating_pow(attempt - 1);
-        tokio::time::sleep(wait.unwrap_or(backoff).min(CAP)).await;
+        tokio::time::sleep(wait).await;
         req = Some(next);
     }
     Err(anyhow!("send_with_retry: no attempts made"))

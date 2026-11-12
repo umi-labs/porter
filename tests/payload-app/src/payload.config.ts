@@ -11,7 +11,7 @@ import { buildConfig } from 'payload'
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(dirname, '..')
 
-const legacyId = { name: 'legacyId', type: 'text', index: true } as const
+const legacyId = { name: 'legacyId', type: 'text', unique: true } as const
 const slug = { name: 'slug', type: 'text', index: true } as const
 
 export default buildConfig({
