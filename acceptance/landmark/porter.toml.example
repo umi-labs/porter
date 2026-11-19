@@ -1,0 +1,557 @@
+# Landmark acceptance: porter's mapping onto the Landmark app's collections, globals and blocks.
+# acceptance/run.sh copies this to acceptance/landmark/project/porter.toml, replacing @LANDMARK_DIR@
+# and @SNAPSHOT_DIR@. Config only: slugs, field names and redirect paths, no content.
+# Source of truth for the type mapping: the Landmark importer's TYPES table (import-content.ts).
+
+[project]
+name = "landmark"
+
+[source]
+adapter = "wordpress"
+
+[[connectors]]
+kind = "wp-db"
+dump = "@LANDMARK_DIR@/wp-source/prodlandmark.sql.gz"
+wp_root = "@LANDMARK_DIR@/wp-source/wp"
+# The uploads were copied next to the WordPress tree, not inside it.
+uploads_dir = "@LANDMARK_DIR@/wp-source/uploads"
+
+# @CRAWL@ (run.sh drops this block with --local-only)
+[[connectors]]
+kind = "crawl"
+url = "file://@SNAPSHOT_DIR@"
+
+[destination]
+adapter = "payload"
+# Landmark's app on a fresh, throwaway database (see README.md); never its real one.
+url = "http://localhost:3000"
+api_key_env = "PORTER_PAYLOAD_API_KEY"
+auth_collection = "users"
+config_dir = "@LANDMARK_DIR@/src"
+
+[verify]
+site_url = "http://localhost:3000"
+
+[mapping]
+locales = { mode = "skip" }
+taxonomies = { category = "categories", post_tag = "tags" }
+forms = { collection = "forms", submissions = "form-submissions" }
+media = { collection = "media", folders = true }
+# Each item's earlier URL, kept in an ACF field
+redirects = { collection = "redirects", from_fields = ["acf.old_site_url"] }
+settings = { global = "settings", front_page = "homePage" }
+
+[mapping.menus]
+global = "navigation"
+fields = { main-menu = "mainMenu", header-left-menu = "headerLeftMenu", footer-menu = "footerMenu", members-navigation = "membersNavigation", employee-benefits = "employeeBenefits" }
+
+[[mapping.blocks]]
+match = { kind = "rich-text" }
+to = "content"
+fields = { text = "richText" }
+
+[[mapping.blocks]]
+match = { kind = "image" }
+to = "mediaBlock"
+fields = { media = "media" }
+
+[[mapping.blocks]]
+match = { kind = "video" }
+to = "video"
+fields = { url = "url" }
+
+[[mapping.blocks]]
+match = { kind = "form-ref" }
+to = "formBlock"
+fields = { form = "form" }
+
+[[mapping.blocks]]
+match = { kind = "raw" }
+to = "code"
+fields = { html = "code" }
+
+[[mapping.blocks]]
+match = { kind = "divider" }
+to = "divider"
+
+# Not mapped: Divi galleries hold their images as child blocks, and the gallery block wants
+# them as `images` array rows; a block-children-to-array mapping doesn't exist yet, so the
+# few galleries are reported as unsupported blocks.
+
+[[mapping.blocks]]
+match = { kind = "accordion" }
+to = "accordion"
+
+[[mapping.blocks]]
+match = { kind = "tabs" }
+to = "tabs"
+
+[[mapping.blocks]]
+match = { kind = "slider" }
+to = "slider"
+
+
+[mapping.types.page]
+to = "pages"
+path = "{parent.path}/{slug}/"
+key_field = "legacyId"
+key_type = "number"
+status = { private = "draft", draft = "skip", scheduled = "skip" }
+[mapping.types.page.fields]
+"acf.booking_widget" = { drop = true, reason = "not used on the new site" }
+"acf.member_offer" = { drop = true, reason = "not used on the new site" }
+"acf.members_offers" = { drop = true, reason = "not used on the new site" }
+"acf.old_site_url" = { drop = true, reason = "becomes a redirect (mapping.redirects.from_fields)" }
+"acf.slides" = { drop = true, reason = "not used on the new site" }
+"seo.title" = { to = "meta.title" }
+"seo.description" = { to = "meta.description" }
+"seo.og_image" = { to = "meta.image" }
+"seo.noindex" = { to = "meta.noindex" }
+"content" = { to = "layout" }
+"featured_image" = { to = "featuredImage" }
+"created" = { to = "publishedAt" }
+
+[mapping.types.post]
+to = "pages"
+path = "/{slug}/"
+key_field = "legacyId"
+key_type = "number"
+status = { private = "draft", draft = "skip", scheduled = "skip" }
+[mapping.types.post.fields]
+"acf.slides" = { drop = true, reason = "not used on the new site" }
+"terms.category" = { drop = true, reason = "pages have no categories" }
+"seo.title" = { to = "meta.title" }
+"seo.description" = { to = "meta.description" }
+"seo.og_image" = { to = "meta.image" }
+"seo.noindex" = { to = "meta.noindex" }
+"content" = { to = "layout" }
+"created" = { to = "publishedAt" }
+
+[mapping.types.rooms]
+to = "rooms"
+path = "/rooms/{slug}/"
+key_field = "legacyId"
+key_type = "number"
+status = { private = "draft", draft = "skip", scheduled = "skip" }
+[mapping.types.rooms.fields]
+"acf.old_site_url" = { drop = true, reason = "becomes a redirect (mapping.redirects.from_fields)" }
+"content" = { drop = true, reason = "the collection keeps its text in its own fields" }
+"seo.title" = { to = "meta.title" }
+"seo.description" = { to = "meta.description" }
+"seo.og_image" = { to = "meta.image" }
+"seo.noindex" = { to = "meta.noindex" }
+"acf.booking_email" = { to = "bookingEmail" }
+"acf.booking_telephone" = { to = "bookingTelephone", transform = { op = "trim" } }
+"acf.booking_url" = { to = "bookingUrl" }
+"acf.covid_precautions" = { to = "covidPrecautions" }
+"acf.display_where" = { to = "displayWhere" }
+"acf.exclusive_features" = { to = "exclusiveFeatures" }
+"acf.floor_plan" = { to = "floorPlan" }
+"acf.full_description" = { to = "fullDescription" }
+"acf.guest_suitability" = { to = "guestSuitability" }
+"acf.guest_suitability_text" = { to = "guestSuitabilityText" }
+"acf.hotel_amenities" = { to = "hotelAmenities" }
+"acf.product_gallery_images" = { to = "productGalleryImages" }
+"acf.room_areas" = { to = "roomAreas" }
+"acf.room_downgrade" = { to = "roomDowngrade" }
+"acf.room_schema_markup" = { to = "roomSchemaMarkup" }
+"acf.room_size" = { to = "roomSize" }
+"acf.room_type" = { to = "roomType" }
+"acf.room_upgrade" = { to = "roomUpgrade" }
+"acf.seo_content" = { to = "seoContent" }
+"acf.slides" = { to = "slides" }
+"acf.standard_features" = { to = "standardFeatures" }
+"acf.suite_or_room" = { to = "suiteOrRoom" }
+"acf.teaser_description" = { to = "teaserDescription" }
+"acf.vimeo_code" = { to = "vimeoCode" }
+"acf.virtual_tour" = { to = "virtualTour" }
+"featured_image" = { to = "featuredImage" }
+
+[mapping.types.events]
+to = "meeting-rooms"
+path = "/events/{slug}/"
+key_field = "legacyId"
+key_type = "number"
+status = { private = "draft", draft = "skip", scheduled = "skip" }
+[mapping.types.events.fields]
+"acf.old_site_url" = { drop = true, reason = "becomes a redirect (mapping.redirects.from_fields)" }
+"content" = { drop = true, reason = "the collection keeps its text in its own fields" }
+"seo.title" = { to = "meta.title" }
+"seo.description" = { to = "meta.description" }
+"seo.og_image" = { to = "meta.image" }
+"seo.noindex" = { to = "meta.noindex" }
+"acf.additional_fields" = { to = "additionalFields" }
+"acf.attendees_comforts" = { to = "attendeesComforts" }
+"acf.book_now_link" = { to = "bookNowLink" }
+"acf.booker_benefits" = { to = "bookerBenefits" }
+"acf.booking_email" = { to = "bookingEmail" }
+"acf.booking_telephone" = { to = "bookingTelephone", transform = { op = "trim" } }
+"acf.breakout_rooms" = { to = "breakoutRooms" }
+"acf.display_where" = { to = "displayWhere" }
+"acf.events_support_for_meeting_room" = { to = "eventsSupportForMeetingRoom" }
+"acf.floor_plan" = { to = "floorPlan" }
+"acf.full_description" = { to = "fullDescription" }
+"acf.maximum_number_of_attendees_seated" = { to = "maximumNumberOfAttendeesSeated" }
+"acf.maximum_number_of_attendees_standing" = { to = "maximumNumberOfAttendeesStanding" }
+"acf.meeting_request_form" = { to = "meetingRequestForm" }
+"acf.minimum_number_of_attendees_seated" = { to = "minimumNumberOfAttendeesSeated" }
+"acf.minimum_number_of_attendees_standing" = { to = "minimumNumberOfAttendeesStanding" }
+"acf.product_gallery_images" = { to = "productGalleryImages" }
+"acf.room_configuration_available" = { to = "roomConfigurationAvailable" }
+"acf.room_name" = { to = "roomName" }
+"acf.seo_content" = { to = "seoContent" }
+"acf.show_additional_fields" = { to = "showAdditionalFields" }
+"acf.slides" = { to = "slides" }
+"acf.standard_features" = { to = "standardFeatures" }
+"acf.suitability" = { to = "suitability" }
+"acf.suitability_text" = { to = "suitabilityText" }
+"acf.teaser_description" = { to = "teaserDescription" }
+"acf.technical__media_available" = { to = "technicalMediaAvailable" }
+"acf.to_see_the_specifications_for_the_suites" = { to = "toSeeTheSpecificationsForTheSuites" }
+"acf.url_to_pdf_layout_file" = { to = "urlToPdfLayoutFile" }
+"acf.vimeo_code" = { to = "vimeoCode" }
+"acf.virtual_tour" = { to = "virtualTour" }
+"featured_image" = { to = "featuredImage" }
+
+[mapping.types.promotions]
+to = "promotions"
+path = "/promotions/{slug}/"
+key_field = "legacyId"
+key_type = "number"
+status = { private = "draft", draft = "skip", scheduled = "skip" }
+[mapping.types.promotions.fields]
+"content" = { drop = true, reason = "the collection keeps its text in its own fields" }
+"seo.title" = { to = "meta.title" }
+"seo.description" = { to = "meta.description" }
+"seo.og_image" = { to = "meta.image" }
+"seo.noindex" = { to = "meta.noindex" }
+"acf.associated_product_pages" = { to = "associatedProductPages" }
+"acf.booking_form_email" = { to = "bookingFormEmail" }
+"acf.booking_url" = { to = "bookingUrl" }
+"acf.display_end_date" = { to = "displayEndDate" }
+"acf.display_start_date" = { to = "displayStartDate" }
+"acf.expiry_date" = { to = "expiryDate" }
+"acf.full_description" = { to = "fullDescription" }
+"acf.gallery_image" = { to = "galleryImage" }
+"acf.gallery_image_description" = { to = "galleryImageDescription" }
+"acf.price" = { to = "price" }
+"acf.promotion_main_description" = { to = "promotionMainDescription" }
+"acf.promotion_redemption" = { to = "promotionRedemption" }
+"acf.promotion_widget_description" = { to = "promotionWidgetDescription" }
+"acf.renew_annually" = { to = "renewAnnually" }
+"acf.second_button" = { to = "secondButton" }
+"acf.seo_content" = { to = "seoContent" }
+"acf.show_in_packages" = { to = "showInPackages" }
+"acf.slides" = { to = "slides" }
+"acf.social_media_description" = { to = "socialMediaDescription" }
+"acf.social_media_image" = { to = "socialMediaImage" }
+"acf.start_date" = { to = "startDate" }
+"acf.teaser_description" = { to = "teaserDescription" }
+"acf.utm_code" = { to = "utmCode" }
+"acf.why_buy" = { to = "whyBuy" }
+"acf.widget_image" = { to = "widgetImage" }
+"featured_image" = { to = "featuredImage" }
+"terms.post_tag" = { to = "tags" }
+
+[mapping.types.bars]
+to = "bars"
+key_field = "legacyId"
+key_type = "number"
+status = { private = "draft", draft = "skip", scheduled = "skip" }
+[mapping.types.bars.fields]
+"acf.old_site_url" = { drop = true, reason = "becomes a redirect (mapping.redirects.from_fields)" }
+"content" = { drop = true, reason = "the collection keeps its text in its own fields" }
+"seo.title" = { to = "meta.title" }
+"seo.description" = { to = "meta.description" }
+"seo.og_image" = { to = "meta.image" }
+"seo.noindex" = { to = "meta.noindex" }
+"acf.accessibility" = { to = "accessibility" }
+"acf.awards" = { to = "awards" }
+"acf.booking_email" = { to = "bookingEmail" }
+"acf.booking_telephone" = { to = "bookingTelephone", transform = { op = "trim" } }
+"acf.booking_widget" = { to = "bookingWidget" }
+"acf.diner_experience" = { to = "dinerExperience" }
+"acf.display_where" = { to = "displayWhere" }
+"acf.full_description" = { to = "fullDescription" }
+"acf.group_sizes" = { to = "groupSizes" }
+"acf.historic_facts" = { to = "historicFacts" }
+"acf.menu_types" = { to = "menuTypes" }
+"acf.newsletter_address_book_id" = { to = "newsletterAddressBookId" }
+"acf.opening__closing_time" = { to = "openingClosingTime" }
+"acf.product_gallery_images" = { to = "productGalleryImages" }
+"acf.seo_content" = { to = "seoContent" }
+"acf.slides" = { to = "slides" }
+"acf.special_services" = { to = "specialServices" }
+"acf.teaser_description" = { to = "teaserDescription" }
+"acf.two_key_features" = { to = "twoKeyFeatures" }
+"featured_image" = { to = "featuredImage" }
+
+[mapping.types.guides]
+to = "guides"
+path = "/guides/{slug}/"
+key_field = "legacyId"
+key_type = "number"
+status = { private = "draft", draft = "skip", scheduled = "skip" }
+[mapping.types.guides.fields]
+"acf.bind_to_package" = { drop = true, reason = "no destination field" }
+"content" = { drop = true, reason = "the collection keeps its text in its own fields" }
+"seo.title" = { to = "meta.title" }
+"seo.description" = { to = "meta.description" }
+"seo.og_image" = { to = "meta.image" }
+"seo.noindex" = { to = "meta.noindex" }
+"acf.Map_Guide" = { to = "mapGuide" }
+"acf.categorie_guide" = { to = "categorieGuide" }
+"acf.date_guide" = { to = "dateGuide" }
+"acf.description" = { to = "description" }
+"acf.end_time_guide" = { to = "endTimeGuide" }
+"acf.main_image_guide" = { to = "mainImageGuide" }
+"acf.price_guide" = { to = "priceGuide" }
+"acf.second_image_guide" = { to = "secondImageGuide" }
+"acf.seo_content" = { to = "seoContent" }
+"acf.start_time_guide" = { to = "startTimeGuide" }
+"acf.ticket_book_url" = { to = "ticketBookUrl" }
+"acf.title_guide" = { to = "titleGuide" }
+"acf.title_of_booking_button" = { to = "titleOfBookingButton" }
+
+[mapping.types.blog]
+to = "posts"
+path = "/blog/{slug}/"
+key_field = "legacyId"
+key_type = "number"
+status = { private = "draft", draft = "skip", scheduled = "skip" }
+[mapping.types.blog.fields]
+"seo.title" = { to = "meta.title" }
+"seo.description" = { to = "meta.description" }
+"seo.og_image" = { to = "meta.image" }
+"seo.noindex" = { to = "meta.noindex" }
+"acf.image" = { to = "image" }
+"acf.title_etc" = { to = "titleEtc" }
+"acf.written_by" = { to = "writtenBy" }
+"content" = { to = "content" }
+"excerpt" = { to = "excerpt" }
+"featured_image" = { to = "featuredImage" }
+"terms.post_tag" = { to = "tags" }
+"created" = { to = "publishedAt" }
+
+[mapping.types.neighbour]
+to = "neighbours"
+path = "/neighbours/{slug}/"
+key_field = "legacyId"
+key_type = "number"
+status = { private = "draft", draft = "skip", scheduled = "skip" }
+[mapping.types.neighbour.fields]
+"content" = { drop = true, reason = "the collection keeps its text in its own fields" }
+"terms.category" = { to = "categories" }
+
+[mapping.types.slides]
+to = "slides"
+key_field = "legacyId"
+key_type = "number"
+status = { private = "draft", draft = "skip", scheduled = "skip" }
+[mapping.types.slides.fields]
+"content" = { drop = true, reason = "the collection keeps its text in its own fields" }
+"featured_image" = { to = "featuredImage" }
+"terms.post_tag" = { to = "tags" }
+
+[mapping.types.popups]
+to = "popups"
+key_field = "legacyId"
+key_type = "number"
+status = { private = "draft", draft = "skip", scheduled = "skip" }
+[mapping.types.popups.fields]
+"content" = { drop = true, reason = "the collection keeps its text in its own fields" }
+"acf.behaviour" = { to = "behaviour" }
+"acf.delay" = { to = "delay" }
+"acf.frequency" = { to = "frequency" }
+"acf.page" = { to = "page" }
+"acf.popup_description" = { to = "popupDescription" }
+"acf.popup_size" = { to = "popupSize" }
+"acf.rererrer_page" = { to = "rererrerPage" }
+"acf.show_on_mobile" = { to = "showOnMobile", transform = { op = "lookup", table = { "0" = "Hide on mobile", "1" = "Show on mobile" } } }
+"acf.timing" = { to = "timing" }
+"featured_image" = { to = "featuredImage" }
+
+[mapping.types.notifications]
+to = "notifications"
+key_field = "legacyId"
+key_type = "number"
+status = { private = "draft", draft = "skip", scheduled = "skip" }
+[mapping.types.notifications.fields]
+"content" = { drop = true, reason = "rich text does not fit the plain-text destination field" }
+"acf.Additional_headers" = { to = "additionalHeaders" }
+"acf.Email_Subject" = { to = "emailSubject" }
+"acf.Email_address" = { to = "emailAddress" }
+
+[mapping.types.um_directory]
+drop_reason = "plugin data, not content (not used on the new site)"
+
+[mapping.types.um_form]
+drop_reason = "plugin data, not content (not used on the new site)"
+
+[mapping.types.wpdiscuz_form]
+drop_reason = "plugin settings, not content"
+
+[mapping.types.frm_form_actions]
+drop_reason = "plugin settings, not content"
+
+[mapping.types.frm_styles]
+drop_reason = "plugin settings, not content"
+
+[mapping.types.wpforms]
+drop_reason = "plugin settings, not content"
+
+[mapping.types.pys_event]
+drop_reason = "plugin settings, not content"
+
+[mapping.types.bnfw_notification]
+drop_reason = "plugin settings, not content"
+
+[mapping.types.mgmlp_media_folder]
+drop_reason = "plugin data: media folders come from the upload directories"
+
+[mapping.types.inc_popup]
+drop_reason = "plugin data, superseded by the popups type"
+
+[mapping.types.popup]
+drop_reason = "plugin data, superseded by the popups type"
+
+[mapping.types.popup_theme]
+drop_reason = "plugin settings, not content"
+
+[mapping.types.wdi_instagram]
+drop_reason = "plugin settings, not content"
+
+[mapping.types.acf]
+drop_reason = "plugin settings, not content"
+
+[mapping.types.news]
+drop_reason = "not used on the new site"
+
+[mapping.types.digital_menu]
+drop_reason = "not used on the new site"
+
+# Hand-written rules, transcribed from the importer (import-redirects.ts).
+[[redirects]]
+from = "/friends-of-the-landmark-london/"
+to = "/promotions/leaders-club/"
+
+[[redirects]]
+from = "/login/"
+to = "/promotions/leaders-club/"
+
+[[redirects]]
+from = "/register/"
+to = "/promotions/leaders-club/"
+
+[[redirects]]
+from = "/account/"
+to = "/promotions/leaders-club/"
+
+[[redirects]]
+from = "/register-page/"
+to = "/promotions/leaders-club/"
+
+[[redirects]]
+from = "/profile-page/"
+to = "/promotions/leaders-club/"
+
+[[redirects]]
+from = "/preferences/"
+to = "/promotions/leaders-club/"
+
+[[redirects]]
+from = "/password-reset/"
+to = "/promotions/leaders-club/"
+
+[[redirects]]
+from = "/members-area/"
+to = "/promotions/leaders-club/"
+
+[[redirects]]
+from = "/payment-page/"
+to = "/payments/"
+
+[[redirects]]
+from = "/payment-accommodation/"
+to = "/payments/"
+
+[[redirects]]
+from = "/payment-events/"
+to = "/payments/"
+
+[[redirects]]
+from = "/payment-event-auth/"
+to = "/payments/"
+
+[[redirects]]
+from = "/payment-group-guarantee/"
+to = "/payments/"
+
+[[redirects]]
+from = "/payment-bars/"
+to = "/payments/"
+
+[[redirects]]
+from = "/payment-spa-health/"
+to = "/payments/"
+
+[[redirects]]
+from = "/payment-success/"
+to = "/payments/"
+
+[[redirects]]
+from = "/payment-failure/"
+to = "/payments/"
+
+[[redirects]]
+from = "/group-rooms-payment/"
+to = "/payments/"
+
+[[redirects]]
+from = "/home/"
+to = "/"
+
+[[redirects]]
+from = "/feed/thepromotions/"
+to = "/promotions/"
+
+[[redirects]]
+from = "/sitemap_index.xml"
+to = "/sitemap.xml"
+
+[[redirects]]
+from = "/post-sitemap.xml"
+to = "/sitemap.xml"
+
+[[redirects]]
+from = "/page-sitemap.xml"
+to = "/sitemap.xml"
+
+[[redirects]]
+from = "/notifications-sitemap.xml"
+to = "/sitemap.xml"
+
+[[redirects]]
+from = "/rooms-sitemap.xml"
+to = "/sitemap.xml"
+
+[[redirects]]
+from = "/promotions-sitemap.xml"
+to = "/sitemap.xml"
+
+[[redirects]]
+from = "/events-sitemap.xml"
+to = "/sitemap.xml"
+
+[[redirects]]
+from = "/guides-sitemap.xml"
+to = "/sitemap.xml"
+
+[[redirects]]
+from = "/neighbour-sitemap.xml"
+to = "/sitemap.xml"
+
+[[redirects]]
+from = "/spa-loyalty-program/"
+to = "/spa-at-the-landmark-london/"
+

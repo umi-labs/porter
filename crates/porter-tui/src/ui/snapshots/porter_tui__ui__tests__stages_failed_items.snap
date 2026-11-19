@@ -1,0 +1,12 @@
+---
+source: crates/porter-tui/src/ui/mod.rs
+expression: stages_panel(&app)
+---
+"┌Stages──────────────────────────────────┐"
+"│> · analyse    not run                  │"
+"│  ✗ extract    errors                   │"
+"│  · normalise  not run                  │"
+"│  · schema     not run                  │"
+"│  · load       not run                  │"
+"│  · verify     not run                  │"
+"└────────────────────────────────────────┘"

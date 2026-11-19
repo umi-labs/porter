@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Porter URLs</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#8C98FF}a:hover{color:#B3BBFF}
+</style>
+</helmet>
+<div style="min-height:860px;background:{{t.bg}};color:{{t.text}};font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;font-size:13px;line-height:1.4;display:flex;flex-direction:column">
+
+<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid {{t.border}};background:{{t.surface}}">
+<div style="display:flex;gap:8px"><span style="width:12px;height:12px;border-radius:50%;background:{{t.borderStrong}}"></span><span style="width:12px;height:12px;border-radius:50%;background:{{t.borderStrong}}"></span><span style="width:12px;height:12px;border-radius:50%;background:{{t.borderStrong}}"></span></div>
+<span style="font-size:14px;font-weight:600;padding-left:12px">Seaview Hotels</span>
+<span style="display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:4px;background:{{t.panel}};font-size:12px;color:{{t.muted}}">WordPress 6.4 <span aria-hidden="true">→</span> <span style="color:{{t.text}}">Payload 3</span></span>
+<span style="flex:1"></span>
+<button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid {{t.borderStrong}};background:{{t.bg}};color:{{t.text}};font:inherit;font-size:12px;font-weight:500">Run all</button>
+<button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid {{t.accent}};background:{{t.accent}};color:{{t.onAccent}};font:inherit;font-size:12px;font-weight:600">Load (dry run)</button>
+<button disabled style="height:28px;padding:0 10px;border-radius:6px;border:1px dashed {{t.borderStrong}};background:transparent;color:{{t.muted}};font:inherit;font-size:12px">Apply load…</button>
+</div>
+
+<div style="display:flex;flex-wrap:wrap;flex:1">
+<nav aria-label="Project" style="flex:1 1 168px;max-width:176px;padding:10px 8px;border-right:1px solid {{t.border}};background:{{t.surface}};display:flex;flex-direction:column;gap:2px">
+<a href="Desktop-Overview.dc.html" style="height:30px;display:flex;align-items:center;padding:0 8px;border-radius:6px;color:{{t.muted}};text-decoration:none">Overview</a>
+<a href="#" style="height:30px;display:flex;align-items:center;padding:0 8px;border-radius:6px;color:{{t.muted}};text-decoration:none">Content</a>
+<a href="#" style="height:30px;display:flex;align-items:center;padding:0 8px;border-radius:6px;color:{{t.muted}};text-decoration:none">Media</a>
+<a href="#" aria-current="page" style="height:30px;display:flex;align-items:center;padding:0 8px;border-radius:6px;background:{{t.hover}};color:{{t.text}};font-weight:600;text-decoration:none">URLs</a>
+<a href="#" style="height:30px;display:flex;align-items:center;padding:0 8px;border-radius:6px;color:{{t.muted}};text-decoration:none">Issues</a>
+<a href="Desktop-Mapping.dc.html" style="height:30px;display:flex;align-items:center;padding:0 8px;border-radius:6px;color:{{t.muted}};text-decoration:none">Mapping</a>
+<a href="#" style="height:30px;display:flex;align-items:center;padding:0 8px;border-radius:6px;color:{{t.muted}};text-decoration:none">Destination</a>
+<a href="#" style="height:30px;display:flex;align-items:center;padding:0 8px;border-radius:6px;color:{{t.muted}};text-decoration:none">Runs</a>
+</nav>
+
+<main style="flex:999 1 640px;min-width:0;padding:14px 20px;display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+<h1 style="margin:0;font-size:15px;font-weight:600">URLs</h1>
+<span style="font-size:12px;color:{{t.muted}};font-variant-numeric:tabular-nums">1,612 old URLs</span>
+<span style="flex:1"></span>
+<label style="display:flex;align-items:center;gap:6px;height:28px;padding:0 8px;border:1px solid {{t.borderStrong}};border-radius:6px;background:{{t.panel}};width:260px">
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{t.muted}}" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+<input aria-label="Filter URLs" placeholder="Filter by path, e.g. /rooms/" style="border:0;outline:0;background:transparent;font:inherit;font-size:12px;color:{{t.text}};flex:1;min-width:0">
+</label>
+</div>
+
+<div style="display:flex;gap:6px;flex-wrap:wrap">
+<sc-for list="{{chips}}" as="c" hint-placeholder-count="5">
+<button aria-pressed="{{c.on}}" style="height:26px;display:inline-flex;align-items:center;gap:6px;padding:0 10px;border-radius:999px;border:1px solid {{c.bd}};background:{{c.bg}};color:{{c.fg}};font:inherit;font-size:12px;font-weight:500">{{c.label}}<span style="font-variant-numeric:tabular-nums;color:{{c.countFg}};font-weight:700">{{c.count}}</span></button>
+</sc-for>
+</div>
+
+<div role="note" style="display:flex;gap:10px;align-items:center;padding:8px 12px;border-radius:6px;border:1px dashed {{t.dryBorder}};background:{{t.dryHatch}};font-size:12px;color:{{t.dryFg}}">
+<span style="width:13px;height:13px;flex:none;border-radius:50%;border:1.5px dashed {{t.dryFg}};box-sizing:border-box"></span>
+<span style="flex:1"><b>Live check not run.</b> Verify was skipped because the last load was a dry run. “Resolves to” comes from porter’s route table, not from the new site.</span>
+</div>
+
+<div style="border:1px solid {{t.border}};border-radius:8px;overflow:hidden;display:flex">
+<div style="flex:1;min-width:0;overflow-x:auto">
+<div style="min-width:980px">
+<div style="display:grid;grid-template-columns:minmax(0,2.2fr) 64px minmax(0,1.8fr) minmax(0,1.6fr) 168px;gap:12px;padding:7px 12px;background:{{t.panel}};font-size:11px;font-weight:600;color:{{t.muted}}">
+<span>Old URL</span><span>Source</span><span>Resolves to</span><span>New URL</span><span>Result</span>
+</div>
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="16">
+<div style="display:grid;grid-template-columns:minmax(0,2.2fr) 64px minmax(0,1.8fr) minmax(0,1.6fr) 168px;gap:12px;padding:0 12px;height:28px;align-items:center;border-top:1px solid {{t.border}};font-size:12px;background:{{r.bg}};box-shadow:inset 3px 0 0 {{r.bar}}">
+<div style="display:flex;min-width:0;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px" title="{{r.old}}">
+<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:0 1 auto">{{r.oh}}</span><span style="white-space:nowrap;flex:none">{{r.ot}}</span>
+</div>
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;color:{{r.codeFg}}">{{r.code}}</span>
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;color:{{r.resFg}};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{r.res}}</span>
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;color:{{r.newFg}};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{r.nu}}</span>
+<span style="display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 7px 0 5px;border-radius:4px;border:1px {{r.c.bs}} {{r.c.bd}};background:{{r.c.bg}};color:{{r.c.fg}};font-size:11px;font-weight:500;white-space:nowrap;justify-self:start"><span style="width:12px;height:12px;box-sizing:border-box;border-radius:{{r.c.gr}};border:1.5px {{r.c.gbs}} {{r.c.gbd}};background:{{r.c.gbg}};color:{{r.c.gfg}};display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:800;line-height:1">{{r.c.g}}</span>{{r.c.label}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+<div aria-hidden="true" style="width:10px;flex:none;border-left:1px solid {{t.border}};background:{{t.surface}};position:relative">
+<div style="position:absolute;left:2px;right:2px;top:8px;height:28px;border-radius:3px;background:{{t.borderStrong}}"></div>
+</div>
+</div>
+<div style="display:flex;gap:16px;font-size:11px;color:{{t.muted}};flex-wrap:wrap">
+<span style="font-variant-numeric:tabular-nums">Rows 1–16 of 1,612 · virtualised, 28px rows</span>
+<span>↵ open document</span><span>⌘C copy old URL</span><span>R mark redirect handled</span>
+<span style="margin-left:auto">Sorted: problems first</span>
+</div>
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":true},"$preview":{"width":1280,"height":860}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const dark = this.props.dark ?? true;
+    const L = {bg:'#FFFFFF',surface:'#F7F7F8',panel:'#EFEFF2',hover:'#E9E9EE',border:'#E3E3E8',borderStrong:'#CFCFD6',text:'#18181B',muted:'#565662',faint:'#6E6E7A',accent:'#3E4FD6',accentBg:'#ECEEFC',onAccent:'#FFFFFF',warnFg:'#9A5800',warnBg:'#FFF3DC',warnRow:'#FFF8EA',errFg:'#C42B2B',errBg:'#FDECEC',errRow:'#FDF0F0',errOn:'#FFFFFF',dryFg:'#3B4A6B',dryBorder:'#8391B0',dryHatch:'repeating-linear-gradient(135deg,#EEF1F7 0 6px,#E2E7F0 6px 8px)'};
+    const D = {bg:'#111113',surface:'#17171A',panel:'#1E1E22',hover:'#26262B',border:'#2A2A30',borderStrong:'#3A3A42',text:'#EDEDF0',muted:'#A3A3AE',faint:'#8C8C98',accent:'#8C98FF',accentBg:'#1E2142',onAccent:'#0E1030',warnFg:'#F5B83D',warnBg:'#2B210C',warnRow:'#1D180D',errFg:'#FF7A7A',errBg:'#301515',errRow:'#211313',errOn:'#2A0F0F',dryFg:'#AEBBDA',dryBorder:'#56648A',dryHatch:'repeating-linear-gradient(135deg,#1A1F2B 0 6px,#222939 6px 8px)'};
+    const t = dark ? D : L;
+    const C = {
+      model:{label:'In route table',fg:t.dryFg,bg:'transparent',bd:t.dryBorder,bs:'dashed',g:'',gfg:t.dryFg,gbg:'transparent',gbd:t.dryFg,gbs:'dashed',gr:'50%'},
+      hop:{label:'1 redirect hop',fg:t.dryFg,bg:'transparent',bd:t.dryBorder,bs:'dashed',g:'',gfg:t.dryFg,gbg:'transparent',gbd:t.dryFg,gbs:'dashed',gr:'50%'},
+      chain:{label:'redirect-chain · 3 hops',fg:t.warnFg,bg:t.warnBg,bd:t.warnBg,bs:'solid',g:'!',gfg:t.warnFg,gbg:'transparent',gbd:t.warnFg,gbs:'solid',gr:'2px'},
+      loop:{label:'redirect-loop',fg:t.errFg,bg:t.errBg,bd:t.errFg,bs:'solid',g:'!',gfg:t.errOn,gbg:t.errFg,gbd:t.errFg,gbs:'solid',gr:'50%'},
+      unres:{label:'Unresolved',fg:t.errFg,bg:t.errBg,bd:t.errFg,bs:'solid',g:'!',gfg:t.errOn,gbg:t.errFg,gbd:t.errFg,gbs:'solid',gr:'50%'},
+      nf:{label:'404 in source',fg:t.muted,bg:'transparent',bd:t.border,bs:'solid',g:'–',gfg:t.muted,gbg:'transparent',gbd:t.muted,gbs:'solid',gr:'50%'}
+    };
+    const raw = [
+      ['/rooms/garden-room-with-private-terrace-and-hot-tub-sleeps-four-adults-and-two-children/','200','— no document claims this route','—','unres'],
+      ['/?p=4812','301','/offers/winter-escape-2024/','—','unres'],
+      ['/offers/spring-break/','301','/offers/spring/ → /offers/ → /offers/2026/','/offers/2026','chain'],
+      ['/spa/treatments/hot-stones/','301','/spa/treatments/hot-stones-2/ → /spa/treatments/hot-stones/','—','loop'],
+      ['/blog/2019/06/14/a-weekend-on-the-north-cornish-coast-what-to-pack-where-to-eat-and-how-to-get-there/','200','post 3381','/news/2019/a-weekend-on-the-north-cornish-coast','model'],
+      ['/rooms/the-harbour-suite/','200','room 112','/rooms/the-harbour-suite','model'],
+      ['/rooms/garden-room/','200','room 118','/rooms/garden-room','model'],
+      ['/dining/','200','page 22','/dining','model'],
+      ['/dining/the-galley-bar/','301','/dining/galley/','/dining/galley','hop'],
+      ['/weddings/','200','page 41','/weddings','model'],
+      ['/weddings/brochure-download/','404','—','—','nf'],
+      ['/news/','200','page 9 (archive)','/news','model'],
+      ['/offers/','200','page 30 (archive)','/offers','model'],
+      ['/wp-content/uploads/2023/04/seaview-brochure-2023-final-v3-PRINT.pdf','200','media 2210','/media/seaview-brochure-2023-final-v3-print.pdf','model'],
+      ['/contact-us/','301','/contact/','/contact','hop'],
+      ['/careers/','200','page 77','/careers','model']
+    ];
+    const rows = raw.map(([old,code,res,nu,k]) => {
+      const cut = Math.max(0, old.length - 22);
+      const bad = k==='unres'||k==='loop';
+      return {old,code,res,nu,c:C[k],
+        oh: old.slice(0,cut), ot: old.slice(cut),
+        codeFg: code==='404' ? t.muted : t.text,
+        resFg: res.startsWith('—') ? (bad ? t.errFg : t.muted) : t.text,
+        newFg: nu==='—' ? t.muted : t.text,
+        bg: bad ? t.errRow : (k==='chain' ? t.warnRow : 'transparent'),
+        bar: bad ? t.errFg : (k==='chain' ? t.warnFg : 'transparent')};
+    });
+    const chips = [['All','1,612',1,''],['Unresolved','41',0,'err'],['Redirect chains','3',0,'warn'],['Loops','1',0,'err'],['Not found in source','18',0,'']].map(([label,count,on,k]) => ({label,count,on:!!on,
+      bg: on ? t.accentBg : 'transparent', bd: on ? t.accent : t.borderStrong, fg: on ? t.text : t.text,
+      countFg: k==='err' ? t.errFg : (k==='warn' ? t.warnFg : t.muted)}));
+    return { t, rows, chips };
+  }
+}
+</script>
+</body>
+</html>

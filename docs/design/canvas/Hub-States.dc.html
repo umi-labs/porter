@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hub edge states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+a{color:#3E4FD6}a:hover{color:#2A37A8}
+</style>
+</helmet>
+<div style="min-height:1560px;background:#F7F7F8;color:#18181B;font-family:Inter,system-ui,sans-serif;font-size:14px;line-height:1.5;padding:32px;box-sizing:border-box">
+<div style="max-width:1376px;margin:0 auto;display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+<h1 style="margin:0;font-size:22px;font-weight:600">Hub: sign-in, empty, loading, error and long-content states</h1>
+<span style="color:#565662">Client-facing copy is plain English; developer copy keeps porter’s terms.</span>
+</div>
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px">
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:12px;font-weight:600;color:#565662">SIGN-IN</span>
+<div style="height:260px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box">
+<span style="font-size:18px;font-weight:600">Sign in to Porter</span>
+<button style="height:44px;border-radius:8px;border:1px solid #CFCFD6;background:#FFFFFF;font:inherit;font-weight:600">Continue with Google <span style="font-weight:400;color:#565662">· Umi staff</span></button>
+<div style="display:flex;align-items:center;gap:8px;color:#565662;font-size:12px"><span style="flex:1;height:1px;background:#E3E3E8"></span>or, if you were invited<span style="flex:1;height:1px;background:#E3E3E8"></span></div>
+<label style="display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600">Email<input placeholder="you@company.com" style="height:44px;padding:0 12px;border:1px solid #CFCFD6;border-radius:8px;font:inherit;font-weight:400"></label>
+<div style="display:flex;align-items:center;gap:10px"><button style="height:40px;padding:0 14px;border-radius:8px;border:1px solid #18181B;background:#18181B;color:#FFFFFF;font:inherit;font-weight:600">Email me a link</button><a href="#" style="font-size:13px">Use a password instead</a></div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:12px;font-weight:600;color:#565662">SIGN-IN · MAGIC LINK SENT / EXPIRED</span>
+<div style="height:260px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:12px;box-sizing:border-box">
+<span style="font-size:18px;font-weight:600">Check your email</span>
+<span style="color:#3F3F46">We sent a sign-in link to <b style="font-weight:600">maria@seaviewhotels.co.uk</b>. It works once, for 15 minutes.</span>
+<div style="border-top:1px solid #EFEFF2;padding-top:12px;display:flex;flex-direction:column;gap:6px">
+<span style="font-weight:600;color:#C42B2B">That link has expired</span>
+<span style="color:#3F3F46">Links last 15 minutes and work once. We can send a fresh one.</span>
+<button style="align-self:flex-start;height:40px;padding:0 14px;border-radius:8px;border:1px solid #CFCFD6;background:#FFFFFF;font:inherit;font-weight:600">Send a new link</button>
+</div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:12px;font-weight:600;color:#565662">DEVICE APPROVAL · WRONG ROLE</span>
+<div style="height:260px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box">
+<span style="font-size:18px;font-weight:600">You can’t approve this</span>
+<span style="color:#3F3F46">porter CLI sign-in is for Umi staff. You’re signed in as a client (maria@seaviewhotels.co.uk), so nothing has been approved.</span>
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:13px;color:#565662">code ABCD-EFGH · not approved</span>
+<a href="#" style="margin-top:auto;font-size:14px">Sign in with a different account</a>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:12px;font-weight:600;color:#565662">PROJECTS · EMPTY</span>
+<div style="height:260px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;padding:20px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;box-sizing:border-box">
+<span style="font-size:17px;font-weight:600">No projects yet</span>
+<span style="color:#3F3F46;max-width:300px">Projects appear here when someone pushes one from porter on their computer.</span>
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:13px;padding:6px 10px;border-radius:6px;background:#F7F7F8">porter login, then push from the project</span>
+<span style="font-size:13px;color:#565662">Clients see “Nothing has been shared with you yet.”</span>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:12px;font-weight:600;color:#565662">PROJECTS · LIST WITH LONG NAMES</span>
+<div style="height:260px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-sizing:border-box">
+<a href="#" style="display:flex;gap:10px;align-items:center;padding:12px 16px;border-bottom:1px solid #EFEFF2;color:#18181B;text-decoration:none;min-height:44px"><span style="flex:1;min-width:0;display:flex;flex-direction:column"><span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Seaview Hotels</span><span style="font-size:12px;color:#565662">v3 · 2h ago</span></span><span style="font-size:12px;font-weight:600;color:#C42B2B;background:#FDECEC;padding:2px 8px;border-radius:5px">52 errors</span></a>
+<a href="#" style="display:flex;gap:10px;align-items:center;padding:12px 16px;border-bottom:1px solid #EFEFF2;color:#18181B;text-decoration:none;min-height:44px"><span style="flex:1;min-width:0;display:flex;flex-direction:column"><span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">The Magical Christmas Adventure — 4 Kingdoms booking site and the legacy Lapland microsite</span><span style="font-size:12px;color:#565662">v12 · 3 days ago</span></span><span style="font-size:12px;font-weight:600;color:#7339BD;background:#F2EBFC;padding:2px 8px;border-radius:5px;white-space:nowrap">Interrupted</span></a>
+<a href="#" style="display:flex;gap:10px;align-items:center;padding:12px 16px;border-bottom:1px solid #EFEFF2;color:#18181B;text-decoration:none;min-height:44px"><span style="flex:1;min-width:0;display:flex;flex-direction:column"><span style="font-weight:600">Turquoise Holidays</span><span style="font-size:12px;color:#565662">v5 · yesterday</span></span><span style="font-size:12px;font-weight:600;color:#3B4A6B;border:1px dashed #8391B0;background:repeating-linear-gradient(135deg,#EEF1F7 0 6px,#E2E7F0 6px 8px);padding:1px 8px;border-radius:5px;white-space:nowrap">Dry run only</span></a>
+<a href="#" style="display:flex;gap:10px;align-items:center;padding:12px 16px;color:#18181B;text-decoration:none;min-height:44px"><span style="flex:1;min-width:0;display:flex;flex-direction:column"><span style="font-weight:600">Harbour Spa</span><span style="font-size:12px;color:#565662">v7 · Sep 18</span></span><span style="font-size:12px;font-weight:600;color:#17803D;background:#E6F5EB;padding:2px 8px;border-radius:5px;white-space:nowrap">Loaded · verified</span></a>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:12px;font-weight:600;color:#565662">PROJECTS · LOADING</span>
+<div style="height:260px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:14px;box-sizing:border-box">
+<div style="display:flex;gap:10px;align-items:center"><div style="flex:1;display:flex;flex-direction:column;gap:6px"><div style="width:50%;height:12px;border-radius:4px;background:#EFEFF2"></div><div style="width:25%;height:10px;border-radius:4px;background:#F3F3F5"></div></div><div style="width:64px;height:20px;border-radius:5px;background:#F3F3F5"></div></div>
+<div style="display:flex;gap:10px;align-items:center"><div style="flex:1;display:flex;flex-direction:column;gap:6px"><div style="width:65%;height:12px;border-radius:4px;background:#EFEFF2"></div><div style="width:25%;height:10px;border-radius:4px;background:#F3F3F5"></div></div><div style="width:64px;height:20px;border-radius:5px;background:#F3F3F5"></div></div>
+<div style="display:flex;gap:10px;align-items:center"><div style="flex:1;display:flex;flex-direction:column;gap:6px"><div style="width:40%;height:12px;border-radius:4px;background:#EFEFF2"></div><div style="width:25%;height:10px;border-radius:4px;background:#F3F3F5"></div></div><div style="width:64px;height:20px;border-radius:5px;background:#F3F3F5"></div></div>
+<span style="font-size:13px;color:#565662;margin-top:auto">Server-rendered, so this only shows on slow streaming. Status pills stay blank, never guessed.</span>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:12px;font-weight:600;color:#565662">OVERVIEW · LATEST PUSH INCOMPLETE</span>
+<div style="height:260px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box">
+<div style="padding:12px;border-radius:8px;background:#FFF3DC;color:#5C3600;font-size:14px"><b>Showing v2 from 4 days ago.</b> v3 was started by Isaac 2h ago but never finished uploading, so it isn’t shown.</div>
+<span style="color:#3F3F46">Everything on this page is v2. The version badge stays amber until a complete push replaces it.</span>
+<a href="#" style="margin-top:auto">See push history</a>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:12px;font-weight:600;color:#565662">OVERVIEW · CLIENT, NOTHING SHARED YET</span>
+<div style="height:260px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;padding:20px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;box-sizing:border-box">
+<span style="font-size:17px;font-weight:600">Nothing to show yet</span>
+<span style="color:#3F3F46;max-width:320px">Your Umi team hasn’t shared results for Seaview Hotels. You can already send us your site files.</span>
+<a href="Hub-Uploads.dc.html" style="height:44px;display:flex;align-items:center;padding:0 16px;border-radius:8px;background:#3E4FD6;color:#FFFFFF;text-decoration:none;font-weight:600">Go to Uploads</a>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:12px;font-weight:600;color:#565662">ISSUES · PAGED 100 PER PAGE + EMPTY FILTER</span>
+<div style="height:260px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-sizing:border-box">
+<div style="display:flex;gap:6px;padding:10px 14px;border-bottom:1px solid #EFEFF2;flex-wrap:wrap"><span style="font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid #3E4FD6;background:#ECEEFC">severity: error</span><span style="font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid #3E4FD6;background:#ECEEFC">kind: redirect-loop</span></div>
+<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;text-align:center;padding:12px">
+<span style="font-weight:600">No open errors of this kind in v3</span>
+<span style="font-size:13px;color:#565662">1 is handled manually. <a href="#">Include resolved</a></span>
+</div>
+<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid #EFEFF2;font-size:13px">
+<span style="flex:1;color:#565662;font-variant-numeric:tabular-nums">Unfiltered: 101–200 of 1,034</span>
+<a href="#" style="height:36px;display:flex;align-items:center;padding:0 12px;border:1px solid #CFCFD6;border-radius:8px;color:#18181B;text-decoration:none">Previous</a>
+<a href="#" style="height:36px;display:flex;align-items:center;padding:0 12px;border:1px solid #CFCFD6;border-radius:8px;color:#18181B;text-decoration:none">Next</a>
+</div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:12px;font-weight:600;color:#565662">REPORT VIEWER · SANDBOXED + MISSING</span>
+<div style="height:260px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-sizing:border-box">
+<div style="display:flex;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid #EFEFF2;font-size:13px"><span style="font-weight:600;flex:1">analysis.html · v3</span><span style="color:#565662">Sandboxed: no scripts, no network</span><a href="#">Download</a></div>
+<div style="flex:1;margin:10px;border:1px dashed #CFCFD6;border-radius:8px;display:flex;flex-direction:column;gap:6px;padding:12px;background:#FAFAFB">
+<div style="width:40%;height:12px;border-radius:4px;background:#E3E3E8"></div><div style="width:80%;height:8px;border-radius:4px;background:#EFEFF2"></div><div style="width:70%;height:8px;border-radius:4px;background:#EFEFF2"></div>
+</div>
+<div style="padding:10px 14px;border-top:1px solid #EFEFF2;font-size:13px;color:#8E1F1F;background:#FDECEC">verify.html isn’t in v3: verify hasn’t run. We don’t show the v2 copy in its place.</div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:12px;font-weight:600;color:#565662">UPLOADS · CONNECTION LOST</span>
+<div style="height:260px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box">
+<span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">seaview-db-2026-11-10.sql.gz</span>
+<div style="height:6px;border-radius:3px;background:#EFEFF2;overflow:hidden"><div style="width:43%;height:100%;background:#565662"></div></div>
+<span style="font-size:13px;color:#565662;font-variant-numeric:tabular-nums">6.1 of 14.2 GB · paused</span>
+<div style="padding:10px 12px;border-radius:8px;background:#F2EBFC;color:#4A2380">You’re offline. We’ll carry on automatically when you’re back. If you close this tab, reopen Uploads and pick the same file: we only send what’s missing.</div>
+<button style="align-self:flex-start;height:40px;padding:0 14px;border-radius:8px;border:1px solid #CFCFD6;background:#FFFFFF;font:inherit;font-weight:600">Try now</button>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:12px;font-weight:600;color:#565662">UPLOADS · EMPTY (CLIENT)</span>
+<div style="height:260px;background:#FFFFFF;border:2px dashed #CFCFD6;border-radius:12px;padding:20px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center;box-sizing:border-box">
+<span style="font-size:17px;font-weight:600">Nothing uploaded yet</span>
+<span style="color:#3F3F46;max-width:320px">Your Umi contact will tell you what to send. Usually a database export and a zip of your images.</span>
+<button style="height:44px;padding:0 16px;border-radius:8px;border:1px solid #3E4FD6;background:#3E4FD6;color:#FFFFFF;font:inherit;font-weight:600">Choose files</button>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:12px;font-weight:600;color:#565662">SHARE LINKS · TOKEN ALREADY HIDDEN</span>
+<div style="height:260px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box">
+<span style="font-weight:600">For Seaview marketing team</span>
+<div style="height:44px;display:flex;align-items:center;padding:0 12px;border-radius:8px;background:#F7F7F8;border:1px solid #E3E3E8;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:13px;color:#565662">…/s/sl_7Hq2 ···· hidden</div>
+<span style="color:#3F3F46">This link can’t be shown again. If it’s lost, revoke it and create a new one; the old link stops working immediately.</span>
+<div style="display:flex;gap:8px;margin-top:auto"><button style="height:40px;padding:0 14px;border-radius:8px;border:1px solid #E3B0B0;background:#FFFFFF;color:#C42B2B;font:inherit;font-weight:600">Revoke</button><button style="height:40px;padding:0 14px;border-radius:8px;border:1px solid #CFCFD6;background:#FFFFFF;font:inherit;font-weight:600">Revoke and replace</button></div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:12px;font-weight:600;color:#565662">PUBLIC /s/[token] · EXPIRED OR REVOKED</span>
+<div style="height:260px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-sizing:border-box">
+<div style="padding:10px 16px;background:#18181B;color:#FFFFFF;font-size:13px;font-weight:600">Shared view · read-only</div>
+<div style="flex:1;padding:20px;display:flex;flex-direction:column;gap:8px;justify-content:center">
+<span style="font-size:17px;font-weight:600">This link has expired</span>
+<span style="color:#3F3F46">It stopped working on 2 Nov 2026. Ask the person who sent it for a new one.</span>
+<span style="font-size:13px;color:#565662">Revoked links say “This link was turned off” and show no project name.</span>
+</div>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px">
+<span style="font-size:12px;font-weight:600;color:#565662">RUN LOG · CONNECTING / STREAM DROPPED</span>
+<div style="height:260px;background:#111113;border:1px solid #2A2A30;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box;color:#D4D4DA;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12.5px">
+<span style="color:#8C8C98">  1  10:41:02  INFO  porter 2.0.0-beta.4 · v3</span>
+<span style="color:#8C8C98">  2  10:41:02  INFO  stage analyse: start</span>
+<div style="margin-top:auto;padding:10px 12px;border-radius:8px;background:#231B33;color:#C3A3FF;font-family:Inter,system-ui,sans-serif;font-size:13px">Lost the live log at line 2. Reconnecting… The run itself is still going on the server; this only affects what you see.</div>
+<span style="font-family:Inter,system-ui,sans-serif;font-size:13px;color:#A3A3AE">First load shows “Connecting to log…” with no lines and no status guess.</span>
+</div>
+</div>
+
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1560}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+{"v":3,"createdOnFiles":{"v":1,"at":"2026-11-12T10:00:00Z"},"title":"Porter — hub and desktop app","launch":{"view":"canvas"},"pages":[],
+"boards":{
+"Main.dc.html":{"x":0,"y":0,"w":1440,"h":2280,"title":"Foundations: tokens and state system","expand":"fill"},
+"Desktop-Launcher.dc.html":{"x":0,"y":2740,"w":1280,"h":800,"title":"Desktop · Launcher","expand":"fill"},
+"Desktop-Overview.dc.html":{"x":1360,"y":2740,"w":1280,"h":900,"title":"Desktop · Overview","expand":"fill"},
+"Desktop-Mapping.dc.html":{"x":2720,"y":2740,"w":1280,"h":940,"title":"Desktop · Mapping editor","expand":"fill"},
+"Desktop-URLs.dc.html":{"x":4080,"y":2740,"w":1280,"h":860,"title":"Desktop · URLs","expand":"fill"},
+"Desktop-Apply.dc.html":{"x":5440,"y":2740,"w":1280,"h":820,"title":"Desktop · Apply confirm sheet","expand":"fill","is_interactive":true},
+"Desktop-States.dc.html":{"x":6800,"y":2740,"w":1440,"h":1560,"title":"Desktop · empty, loading, error, long","expand":"fill"},
+"Hub-Overview.dc.html":{"x":0,"y":4760,"w":1280,"h":1120,"title":"Hub · Project overview","expand":"fill"},
+"Hub-Uploads.dc.html":{"x":1360,"y":4760,"w":1280,"h":1060,"title":"Hub · Uploads","expand":"fill"},
+"Hub-Share.dc.html":{"x":2720,"y":4760,"w":1280,"h":1080,"title":"Hub · Share links","expand":"fill","is_interactive":true},
+"Hub-Device.dc.html":{"x":4080,"y":4760,"w":1280,"h":760,"title":"Hub · Device approval","expand":"fill","is_interactive":true},
+"Hub-RunLog.dc.html":{"x":5440,"y":4760,"w":1280,"h":960,"title":"Hub · Run log","expand":"fill"},
+"Hub-States.dc.html":{"x":6800,"y":4760,"w":1440,"h":1560,"title":"Hub · empty, loading, error, long","expand":"fill"}
+},
+"order":["Main.dc.html","Desktop-Launcher.dc.html","Desktop-Overview.dc.html","Desktop-Mapping.dc.html","Desktop-URLs.dc.html","Desktop-Apply.dc.html","Desktop-States.dc.html","Hub-Overview.dc.html","Hub-Uploads.dc.html","Hub-Share.dc.html","Hub-Device.dc.html","Hub-RunLog.dc.html","Hub-States.dc.html"],
+"notes":{
+"desktopTitle":{"x":0,"y":2460,"text":"Desktop app (GPUI) — dense, calm, keyboard-first","kind":"title1","maxW":8240},
+"hubTitle":{"x":0,"y":4480,"text":"Hub (web) — same language, a little friendlier","kind":"title1","maxW":8240},
+"themeNote":{"x":1520,"y":0,"w":420,"text":"Every desktop board has a Dark toggle in Tweaks. Overview, URLs and Apply open in dark; Launcher and Mapping open in light.\n\nHub Overview has a Role tweak (developer / client) to show what clients can and can't see. Run log has an Outcome tweak (running, success, issues, failed, interrupted). Apply sheet and Device approval are clickable in Play.","fill":"gray","size":"m"}
+},
+"designSystems":[]}

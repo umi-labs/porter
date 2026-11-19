@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Porter project overview</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#8C98FF}a:hover{color:#B3BBFF}
+</style>
+</helmet>
+<div style="min-height:900px;background:{{t.bg}};color:{{t.text}};font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;font-size:13px;line-height:1.4;display:flex;flex-direction:column">
+
+<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid {{t.border}};background:{{t.surface}}">
+<div style="display:flex;gap:8px;align-items:center">
+<span style="width:12px;height:12px;border-radius:50%;background:{{t.borderStrong}}"></span>
+<span style="width:12px;height:12px;border-radius:50%;background:{{t.borderStrong}}"></span>
+<span style="width:12px;height:12px;border-radius:50%;background:{{t.borderStrong}}"></span>
+</div>
+<div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1 1 360px;padding-left:12px">
+<span style="font-size:14px;font-weight:600;white-space:nowrap">Seaview Hotels</span>
+<span style="display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:4px;background:{{t.panel}};font-size:12px;color:{{t.muted}};white-space:nowrap;min-width:0">WordPress 6.4<span aria-hidden="true">→</span><span style="color:{{t.text}}">Payload 3</span><span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis">cms.seaviewhotels.co.uk</span></span>
+</div>
+<div style="display:flex;gap:6px;flex-wrap:wrap">
+<button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid {{t.borderStrong}};background:{{t.bg}};color:{{t.text}};font:inherit;font-size:12px;font-weight:500;display:flex;align-items:center;gap:6px">Run all<span style="font-size:11px;color:{{t.muted}}">⌘R</span></button>
+<button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid {{t.accent}};background:{{t.accent}};color:{{t.onAccent}};font:inherit;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px">Load (dry run)<span style="font-size:11px;opacity:0.8">⌘L</span></button>
+<a href="Desktop-Apply.dc.html" title="Needs a fresh dry run and the destination host typed to confirm" style="height:28px;padding:0 10px;border-radius:6px;border:1px dashed {{t.borderStrong}};background:transparent;color:{{t.muted}};font-size:12px;font-weight:500;display:flex;align-items:center;gap:6px;text-decoration:none">
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>Apply load…</a>
+</div>
+</div>
+
+<div style="display:flex;flex-wrap:wrap;flex:1">
+<nav aria-label="Project" style="flex:1 1 200px;max-width:208px;padding:10px 8px;border-right:1px solid {{t.border}};background:{{t.surface}};display:flex;flex-direction:column;gap:2px">
+<sc-for list="{{nav}}" as="n" hint-placeholder-count="8">
+<a href="{{n.href}}" style="height:30px;display:flex;align-items:center;gap:8px;padding:0 8px;border-radius:6px;background:{{n.bg}};color:{{n.fg}};text-decoration:none;font-size:13px;font-weight:{{n.w}}">
+<span style="flex:1">{{n.label}}</span>
+<span style="font-size:11px;color:{{n.countFg}};font-weight:{{n.countW}};font-variant-numeric:tabular-nums">{{n.count}}</span>
+</a>
+</sc-for>
+<div style="margin-top:auto;padding:8px;font-size:11px;color:{{t.muted}};display:flex;flex-direction:column;gap:4px">
+<span>Pushed to hub as v3 · 2h ago</span>
+<span>⌘1–8 switch view</span>
+</div>
+</nav>
+
+<main style="flex:999 1 560px;min-width:0;padding:20px 24px;display:flex;flex-direction:column;gap:20px">
+
+<div role="status" style="display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border-radius:8px;border:1px solid {{t.errFg}};background:{{t.errBg}}">
+<span style="width:18px;height:18px;flex:none;border-radius:50%;background:{{t.errFg}};color:{{t.errOn}};display:flex;align-items:center;justify-content:center;font-weight:800;font-size:11px">!</span>
+<div style="flex:1;display:flex;flex-direction:column;gap:2px">
+<span style="font-weight:600;color:{{t.errFg}}">Not ready to apply. Nothing has been written to cms.seaviewhotels.co.uk.</span>
+<span style="color:{{t.text}}">52 open errors, extract is re-running, and the last dry run is stale. Apply stays locked until all three clear.</span>
+</div>
+<a href="#issues" style="flex:none;font-size:12px;font-weight:500">Show errors</a>
+</div>
+
+<section style="display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;align-items:baseline;gap:12px">
+<h2 style="margin:0;font-size:15px;font-weight:600">Pipeline</h2>
+<span style="font-size:12px;color:{{t.muted}}">Stages re-run independently. A changed upstream stage marks the ones after it stale.</span>
+</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:8px">
+<sc-for list="{{stages}}" as="s" hint-placeholder-count="6">
+<div style="border:1px {{s.cardBs}} {{s.cardBd}};border-radius:8px;background:{{s.cardBg}};padding:12px;display:flex;flex-direction:column;gap:10px;min-width:0">
+<div style="display:flex;align-items:center;gap:6px">
+<span style="font-size:11px;color:{{t.muted}};font-variant-numeric:tabular-nums">{{s.n}}</span>
+<span style="font-weight:600;flex:1">{{s.name}}</span>
+<sc-if value="{{s.stale}}" hint-placeholder-val="{{false}}">
+<span style="font-size:11px;color:{{t.muted}};display:inline-flex;gap:3px;align-items:center" title="{{s.staleWhy}}">↻ stale</span>
+</sc-if>
+</div>
+<div style="opacity:{{s.op}}">
+<span style="display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px 0 5px;border-radius:4px;border:1px {{s.c.bs}} {{s.c.bd}};background:{{s.c.bg}};color:{{s.c.fg}};font-size:12px;font-weight:500;white-space:nowrap;max-width:100%;box-sizing:border-box"><span style="width:13px;height:13px;flex:none;box-sizing:border-box;border-radius:{{s.c.gr}};border:1.5px {{s.c.gbs}} {{s.c.gbd}};background:{{s.c.gbg}};color:{{s.c.gfg}};display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;line-height:1">{{s.c.g}}</span><span style="overflow:hidden;text-overflow:ellipsis">{{s.c.label}}</span></span>
+</div>
+<sc-if value="{{s.running}}" hint-placeholder-val="{{false}}">
+<div style="height:4px;border-radius:2px;background:{{t.panel}};overflow:hidden"><div style="width:62%;height:100%;background:{{t.accent}}"></div></div>
+</sc-if>
+<div style="display:flex;flex-direction:column;gap:2px;font-size:12px;opacity:{{s.op}}">
+<span style="font-variant-numeric:tabular-nums">{{s.counts}}</span>
+<span style="color:{{t.muted}}">{{s.sub}}</span>
+</div>
+<div style="display:flex;align-items:center;gap:6px;margin-top:auto">
+<span style="font-size:11px;color:{{t.muted}};flex:1">{{s.when}}</span>
+<button style="height:24px;padding:0 8px;border-radius:5px;border:1px solid {{t.borderStrong}};background:{{t.bg}};color:{{t.text}};font:inherit;font-size:12px">{{s.action}}</button>
+</div>
+</div>
+</sc-for>
+</div>
+</section>
+
+<div style="display:flex;flex-wrap:wrap;gap:20px">
+<section style="flex:1 1 420px;min-width:0;display:flex;flex-direction:column;gap:10px">
+<h2 style="margin:0;font-size:15px;font-weight:600">Coverage by connector</h2>
+<div style="border:1px solid {{t.border}};border-radius:8px;overflow:hidden">
+<div style="display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1.3fr) minmax(0,1.6fr);gap:12px;padding:7px 12px;background:{{t.panel}};font-size:11px;font-weight:600;color:{{t.muted}}">
+<span>Connector</span><span>Contributed</span><span>Gaps</span>
+</div>
+<sc-for list="{{coverage}}" as="c" hint-placeholder-count="5">
+<div style="display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1.3fr) minmax(0,1.6fr);gap:12px;padding:9px 12px;border-top:1px solid {{t.border}};align-items:center;font-size:12px">
+<div style="display:flex;flex-direction:column;min-width:0">
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-weight:600">{{c.kind}}</span>
+<span style="color:{{t.muted}};font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{c.src}}</span>
+</div>
+<div style="display:flex;flex-direction:column;gap:4px">
+<span style="font-variant-numeric:tabular-nums">{{c.got}}</span>
+<div style="height:6px;border-radius:3px;background:{{c.missBg}};overflow:hidden;display:flex"><div style="width:{{c.pct}}%;background:{{t.text}};opacity:0.75"></div></div>
+</div>
+<span style="color:{{c.gapFg}}">{{c.gap}}</span>
+</div>
+</sc-for>
+</div>
+<span style="font-size:11px;color:{{t.muted}}">Bars show what was found, not what was written. The red remainder is what this connector could not see.</span>
+</section>
+
+<section id="issues" style="flex:1 1 380px;min-width:0;display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;align-items:baseline;gap:8px">
+<h2 style="margin:0;font-size:15px;font-weight:600;flex:1">Open issues</h2>
+<a href="#issues" style="font-size:12px">Open Issues view</a>
+</div>
+<div style="border:1px solid {{t.border}};border-radius:8px;overflow:hidden">
+<div style="display:grid;grid-template-columns:minmax(0,1fr) 56px 64px 44px;gap:8px;padding:7px 12px;background:{{t.panel}};font-size:11px;font-weight:600;color:{{t.muted}}">
+<span>Kind</span><span style="text-align:right">Error</span><span style="text-align:right">Warning</span><span style="text-align:right">Info</span>
+</div>
+<sc-for list="{{issues}}" as="i" hint-placeholder-count="9">
+<div style="display:grid;grid-template-columns:minmax(0,1fr) 56px 64px 44px;gap:8px;padding:6px 12px;border-top:1px solid {{t.border}};font-size:12px;align-items:center;font-variant-numeric:tabular-nums">
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace">{{i.kind}}</span>
+<span style="text-align:right;color:{{i.eFg}};font-weight:{{i.eW}}">{{i.e}}</span>
+<span style="text-align:right;color:{{i.wFg}};font-weight:{{i.wW}}">{{i.w}}</span>
+<span style="text-align:right;color:{{t.muted}}">{{i.i}}</span>
+</div>
+</sc-for>
+<div style="display:grid;grid-template-columns:minmax(0,1fr) 56px 64px 44px;gap:8px;padding:8px 12px;border-top:1px solid {{t.borderStrong}};font-size:12px;font-weight:600;font-variant-numeric:tabular-nums">
+<span>Total open</span><span style="text-align:right;color:{{t.errFg}}">52</span><span style="text-align:right;color:{{t.warnFg}}">50</span><span style="text-align:right;color:{{t.muted}}">1</span>
+</div>
+</div>
+</section>
+</div>
+
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":true},"$preview":{"width":1280,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const dark = this.props.dark ?? true;
+    const L = {bg:'#FFFFFF',surface:'#F7F7F8',panel:'#EFEFF2',hover:'#E9E9EE',sel:'#ECEEFC',border:'#E3E3E8',borderStrong:'#CFCFD6',text:'#18181B',muted:'#565662',faint:'#6E6E7A',accent:'#3E4FD6',accentBg:'#ECEEFC',onAccent:'#FFFFFF',okFg:'#17803D',okBg:'#E6F5EB',okOn:'#FFFFFF',warnFg:'#9A5800',warnBg:'#FFF3DC',errFg:'#C42B2B',errBg:'#FDECEC',errOn:'#FFFFFF',errSolid:'#C42B2B',intFg:'#7339BD',intBg:'#F2EBFC',dryFg:'#3B4A6B',dryBorder:'#8391B0',dryHatch:'repeating-linear-gradient(135deg,#EEF1F7 0 6px,#E2E7F0 6px 8px)',staleBg:'#F1F1F4'};
+    const D = {bg:'#111113',surface:'#17171A',panel:'#1E1E22',hover:'#26262B',sel:'#1E2142',border:'#2A2A30',borderStrong:'#3A3A42',text:'#EDEDF0',muted:'#A3A3AE',faint:'#8C8C98',accent:'#8C98FF',accentBg:'#1E2142',onAccent:'#0E1030',okFg:'#4ADE80',okBg:'#0F2A19',okOn:'#0B1F12',warnFg:'#F5B83D',warnBg:'#2B210C',errFg:'#FF7A7A',errBg:'#301515',errOn:'#2A0F0F',errSolid:'#B42A2A',intFg:'#C3A3FF',intBg:'#231B33',dryFg:'#AEBBDA',dryBorder:'#56648A',dryHatch:'repeating-linear-gradient(135deg,#1A1F2B 0 6px,#222939 6px 8px)',staleBg:'#1C1C20'};
+    const t = dark ? D : L;
+    const C = {
+      clean:{label:'Clean · written',fg:t.okFg,bg:t.okBg,bd:t.okBg,bs:'solid',g:'✓',gfg:t.okOn,gbg:t.okFg,gbd:t.okFg,gbs:'solid',gr:'50%'},
+      running:{label:'Running · 62%',fg:t.accent,bg:t.accentBg,bd:t.accentBg,bs:'solid',g:'',gfg:t.accent,gbg:'transparent',gbd:t.accent,gbs:'dotted',gr:'50%'},
+      errors:{label:'12 errors',fg:t.errFg,bg:t.errBg,bd:t.errFg,bs:'solid',g:'!',gfg:t.errOn,gbg:t.errFg,gbd:t.errFg,gbs:'solid',gr:'50%'},
+      warnings:{label:'Done · 2 warnings',fg:t.warnFg,bg:t.warnBg,bd:t.warnBg,bs:'solid',g:'!',gfg:t.warnFg,gbg:'transparent',gbd:t.warnFg,gbs:'solid',gr:'3px'},
+      dry:{label:'Dry run · nothing written',fg:t.dryFg,bg:t.dryHatch,bd:t.dryBorder,bs:'dashed',g:'',gfg:t.dryFg,gbg:'transparent',gbd:t.dryFg,gbs:'dashed',gr:'50%'},
+      skipped:{label:'Skipped',fg:t.faint,bg:'transparent',bd:t.border,bs:'solid',g:'–',gfg:t.faint,gbg:'transparent',gbd:t.faint,gbs:'solid',gr:'50%'}
+    };
+    const mk = (n,name,k,counts,sub,when,action,o={}) => ({n,name,c:C[k],counts,sub,when,action,
+      stale:!!o.stale,staleWhy:o.why||'',running:k==='running',op:o.stale?0.62:1,
+      cardBg:k==='running'?t.sel:t.surface,cardBd:k==='running'?t.accent:t.border,cardBs:'solid'});
+    const stages = [
+      mk('1','Analyse','clean','1,964 items · 4 connectors','Inventory and reports/analysis.html','2h ago','Run'),
+      mk('2','Extract','running','1,218 / 1,964 fetched','--refresh · media 403 / 2,131','Started 41s ago','Cancel'),
+      mk('3','Normalise','errors','1,948 done · 12 failed · 4 partial','Results from before the refresh','1h ago','Run',{stale:true,why:'Extract is re-running'}),
+      mk('4','Schema','warnings','13 collections checked','2 schema-mismatch','58m ago','Run',{stale:true,why:'Normalise is stale'}),
+      mk('5','Load','dry','Would create 1,931 · skip 33','0 written to destination','14m ago','Dry run',{stale:true,why:'Upstream changed after this dry run'}),
+      mk('6','Verify','skipped','Nothing to verify','Skipped: last load was a dry run','—','Run')
+    ];
+    const nav = [['Overview','',1,'Desktop-Overview.dc.html'],['Content','1,964',0,'#'],['Media','2,131',0,'#'],['URLs','1,612',0,'Desktop-URLs.dc.html'],['Issues','52',0,'#issues'],['Mapping','3 invalid',0,'Desktop-Mapping.dc.html'],['Destination','2',0,'#'],['Runs','1 running',0,'#']].map(([label,count,on,href]) => ({label,count,href,
+      bg:on?t.hover:'transparent',fg:on?t.text:t.muted,w:on?600:500,
+      countFg: label==='Issues'?t.errFg:(label==='Mapping'?t.warnFg:(label==='Runs'?t.accent:t.muted)), countW: (label==='Issues'||label==='Mapping')?700:400}));
+    const coverage = [
+      ['wp-db','export/seaview.sql.gz','1,812 docs · 2,131 media refs',100,'None',0],
+      ['wp-rest','www.seaviewhotels.co.uk','1,650 docs',91,'162 ACF fields not exposed over REST',1],
+      ['crawl','www.seaviewhotels.co.uk','1,590 of 1,612 URLs rendered',99,'22 pages timed out (retry in Runs)',1],
+      ['wxr','export/seaview.xml','412 posts · 86 pages',100,'Posts and pages only, by design',0],
+      ['(none)','Gravity Forms','0 entries',0,'access-gap: no connector can read form entries',1]
+    ].map(([kind,src,got,pct,gap,bad]) => ({kind,src,got,pct,gap,gapFg:bad?t.errFg:t.muted,missBg:pct===100?t.panel:t.errFg}));
+    const issues = [
+      ['missing-media',27,0,0],['unresolved-link',9,14,0],['unsupported-block',6,0,0],['converter-missing',4,0,0],['unresolved-relation',4,0,0],['parent-missing',2,0,0],['unmapped-field',0,31,0],['redirect-chain',0,3,0],['schema-mismatch',0,2,0],['access-gap',0,0,1]
+    ].map(([kind,e,w,i]) => ({kind,e:e||'·',w:w||'·',i:i||'·',eFg:e?t.errFg:t.faint,wFg:w?t.warnFg:t.faint,eW:e?600:400,wW:w?600:400}));
+    return { t, stages, nav, coverage, issues };
+  }
+}
+</script>
+</body>
+</html>

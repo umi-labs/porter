@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hub uploads</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+a{color:#3E4FD6}a:hover{color:#2A37A8}
+</style>
+</helmet>
+<div style="min-height:1060px;background:#F7F7F8;color:#18181B;font-family:Inter,system-ui,sans-serif;font-size:15px;line-height:1.55">
+
+<header style="background:#FFFFFF;border-bottom:1px solid #E3E3E8">
+<div style="max-width:1000px;margin:0 auto;padding:0 24px;display:flex;align-items:center;gap:16px;min-height:56px;flex-wrap:wrap">
+<span style="display:flex;align-items:center;gap:8px;font-weight:600"><span style="width:26px;height:26px;border-radius:7px;background:#18181B;display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h11l-3-3M20 17H9l3 3"></path></svg></span>Porter</span>
+<span style="color:#CFCFD6" aria-hidden="true">/</span>
+<span style="font-size:14px;font-weight:600">Seaview Hotels</span>
+<span style="flex:1"></span>
+<span style="font-size:13px;color:#565662">Maria Rowe · client</span>
+<span style="width:32px;height:32px;border-radius:50%;background:#ECEEFC;color:#3E4FD6;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">MR</span>
+</div>
+<nav aria-label="Project" style="max-width:1000px;margin:0 auto;padding:0 24px;display:flex;gap:4px">
+<a href="Hub-Overview.dc.html" style="padding:10px 12px;font-size:14px;font-weight:500;color:#565662;text-decoration:none">Overview</a>
+<a href="#" style="padding:10px 12px;font-size:14px;font-weight:500;color:#565662;text-decoration:none">Reports</a>
+<a href="#" aria-current="page" style="padding:10px 12px;font-size:14px;font-weight:600;color:#18181B;text-decoration:none;border-bottom:2px solid #18181B">Uploads</a>
+</nav>
+</header>
+
+<main style="max-width:1000px;margin:0 auto;padding:28px 24px 64px;display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;flex-direction:column;gap:4px">
+<h1 style="margin:0;font-size:28px;line-height:1.2;font-weight:600;letter-spacing:-0.01em">Uploads</h1>
+<span style="color:#3F3F46;max-width:640px">Send us your site’s files. Up to 20 GB each. If your connection drops, come back to this page and it carries on from where it stopped.</span>
+</div>
+
+<label style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:28px 20px;border:2px dashed #CFCFD6;border-radius:12px;background:#FFFFFF;text-align:center;cursor:pointer">
+<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#3E4FD6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"></path><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"></path></svg>
+<span style="font-size:16px;font-weight:600">Drop files here, or <span style="color:#3E4FD6;text-decoration:underline">choose files</span></span>
+<span style="font-size:14px;color:#565662">Database dump (.sql, .sql.gz) · WordPress export (.xml) · Media archive (.zip, .tar.gz)</span>
+<input type="file" multiple style="position:absolute;width:1px;height:1px;opacity:0">
+</label>
+
+<section style="display:flex;flex-direction:column;gap:12px">
+<h2 style="margin:0;font-size:16px;font-weight:600">Your files</h2>
+<sc-for list="{{files}}" as="f" hint-placeholder-count="5">
+<article style="background:#FFFFFF;border:1px solid {{f.bd}};border-radius:10px;padding:16px 18px;display:flex;flex-direction:column;gap:12px">
+<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
+<span style="width:36px;height:36px;flex:none;border-radius:8px;background:#EFEFF2;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#565662">{{f.ext}}</span>
+<div style="flex:1 1 280px;min-width:0;display:flex;flex-direction:column">
+<span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{f.name}}</span>
+<span style="font-size:13px;color:#565662">{{f.meta}}</span>
+</div>
+<span style="display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px 0 7px;border-radius:6px;border:1px {{f.c.bs}} {{f.c.bd}};background:{{f.c.bg}};color:{{f.c.fg}};font-size:13px;font-weight:600;white-space:nowrap"><span style="width:14px;height:14px;box-sizing:border-box;border-radius:{{f.c.gr}};border:1.5px {{f.c.gbs}} {{f.c.gbd}};background:{{f.c.gbg}};color:{{f.c.gfg}};display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;line-height:1">{{f.c.g}}</span>{{f.c.label}}</span>
+</div>
+
+<sc-if value="{{f.hasSteps}}" hint-placeholder-val="{{true}}">
+<ol style="list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px">
+<sc-for list="{{f.steps}}" as="s" hint-placeholder-count="4">
+<li style="display:flex;flex-direction:column;gap:6px">
+<div style="height:6px;border-radius:3px;background:#EFEFF2;overflow:hidden"><div style="width:{{s.pct}}%;height:100%;background:{{s.bar}}"></div></div>
+<span style="font-size:13px;color:{{s.fg}};font-weight:{{s.w}}">{{s.label}}</span>
+</li>
+</sc-for>
+</ol>
+</sc-if>
+
+<sc-if value="{{f.hasNote}}" hint-placeholder-val="{{false}}">
+<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:8px;background:{{f.noteBg}};font-size:14px;color:{{f.noteFg}}">
+<span style="flex:1">{{f.note}}</span>
+</div>
+</sc-if>
+
+<sc-if value="{{f.hasActions}}" hint-placeholder-val="{{false}}">
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+<sc-for list="{{f.actions}}" as="a" hint-placeholder-count="2">
+<button style="height:40px;padding:0 14px;border-radius:8px;border:1px solid {{a.bd}};background:{{a.bg}};color:{{a.fg}};font:inherit;font-size:14px;font-weight:600">{{a.label}}</button>
+</sc-for>
+</div>
+</sc-if>
+</article>
+</sc-for>
+</section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1060}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const C = {
+      up:{label:'Uploading · 63%',fg:'#3E4FD6',bg:'#ECEEFC',bd:'#ECEEFC',bs:'solid',g:'',gfg:'#3E4FD6',gbg:'transparent',gbd:'#3E4FD6',gbs:'dotted',gr:'50%'},
+      hash:{label:'Checking file · 40%',fg:'#3E4FD6',bg:'#ECEEFC',bd:'#ECEEFC',bs:'solid',g:'',gfg:'#3E4FD6',gbg:'transparent',gbd:'#3E4FD6',gbs:'dotted',gr:'50%'},
+      fail:{label:'Failed verification',fg:'#FFFFFF',bg:'#C42B2B',bd:'#C42B2B',bs:'solid',g:'✕',gfg:'#C42B2B',gbg:'#FFFFFF',gbd:'#FFFFFF',gbs:'solid',gr:'50%'},
+      ready:{label:'Ready',fg:'#17803D',bg:'#E6F5EB',bd:'#E6F5EB',bs:'solid',g:'✓',gfg:'#FFFFFF',gbg:'#17803D',gbd:'#17803D',gbs:'solid',gr:'50%'},
+      rej:{label:'Not uploaded',fg:'#C42B2B',bg:'#FDECEC',bd:'#C42B2B',bs:'solid',g:'!',gfg:'#FFFFFF',gbg:'#C42B2B',gbd:'#C42B2B',gbs:'solid',gr:'50%'}
+    };
+    const step = (label, st, pct) => ({label, pct: pct ?? (st==='done'||st==='fail' ? 100 : 0),
+      bar: st==='fail' ? '#C42B2B' : (st==='done' ? '#3F3F46' : '#3E4FD6'),
+      fg: st==='fail' ? '#C42B2B' : (st==='pending' ? '#565662' : '#18181B'), w: st==='active'||st==='fail' ? 600 : 400});
+    const btn = (label, kind) => ({label, bg: kind==='primary' ? '#3E4FD6' : '#FFFFFF', fg: kind==='primary' ? '#FFFFFF' : '#18181B', bd: kind==='primary' ? '#3E4FD6' : '#CFCFD6'});
+    const files = [
+      {name:'seaview-db-2026-11-10.sql.gz',ext:'SQL',meta:'14.2 GB · database dump · started 9 min ago',c:C.up,bd:'#E3E3E8',
+        hasSteps:true,steps:[step('Checked ✓','done'),step('Uploading · 8.9 of 14.2 GB','active',63),step('Verifying','pending'),step('Ready','pending')],
+        hasNote:true,note:'Your connection dropped at 6.1 GB. We picked up from there 4 minutes ago, nothing was sent twice. About 2 minutes left at 38 MB/s.',noteBg:'#F7F7F8',noteFg:'#3F3F46',
+        hasActions:true,actions:[btn('Pause'),btn('Cancel upload')]},
+      {name:'wp-content-uploads.zip',ext:'ZIP',meta:'6.8 GB · media archive · finished uploading 20 min ago',c:C.fail,bd:'#F3BDBD',
+        hasSteps:true,steps:[step('Checked ✓','done'),step('Uploaded ✓','done'),step('Verifying failed','fail'),step('Ready','pending')],
+        hasNote:true,note:'The file we received doesn’t match the one on your computer, so we can’t use it. This usually means the file changed while it was uploading. We’ve deleted the damaged copy. Please upload it again.',noteBg:'#FDECEC',noteFg:'#8E1F1F',
+        hasActions:true,actions:[btn('Upload again','primary'),btn('Remove')]},
+      {name:'uploads-2019-2021.zip',ext:'ZIP',meta:'3.1 GB · media archive · just added',c:C.hash,bd:'#E3E3E8',
+        hasSteps:true,steps:[step('Checking file','active',40),step('Upload','pending'),step('Verifying','pending'),step('Ready','pending')],
+        hasNote:true,note:'We fingerprint the file on your computer first, so we can prove the copy we receive is identical.',noteBg:'#F7F7F8',noteFg:'#3F3F46',hasActions:false,actions:[]},
+      {name:'seaview-export.xml',ext:'XML',meta:'48 MB · WordPress export · uploaded by Maria Rowe yesterday',c:C.ready,bd:'#E3E3E8',
+        hasSteps:false,steps:[],hasNote:true,note:'Verified and stored. Your Umi team can use it now.',noteBg:'#F7F7F8',noteFg:'#3F3F46',hasActions:false,actions:[]},
+      {name:'seaview-media-full-backup-2026.tar',ext:'TAR',meta:'23.4 GB · media archive',c:C.rej,bd:'#F3BDBD',
+        hasSteps:false,steps:[],hasNote:true,note:'This file is over the 20 GB limit, so nothing was uploaded. Split it into two archives, or ask your Umi contact for another way to send it.',noteBg:'#FDECEC',noteFg:'#8E1F1F',hasActions:true,actions:[btn('Choose other files')]}
+    ];
+    return { files };
+  }
+}
+</script>
+</body>
+</html>

@@ -2,51 +2,113 @@ name: CI
 
 on:
   workflow_dispatch:
-  # push:
-  #   branches: [ main, prod ]
-  # pull_request:
-  #   branches: [ main, prod ]
+  push:
+    branches: [main, prod]
+  pull_request:
+    branches: [main, prod]
 
 jobs:
   build-test-lint:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      # Default members only: porter-desktop (GPUI) builds in the desktop-macos job.
+      - run: cargo build --locked
+      - run: cargo test --locked
+      - run: cargo clippy --all-targets
 
-      - name: Install cargo-udeps and cargo-insta-dup
+  desktop-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-desktop-${{ hashFiles('**/Cargo.lock') }}
+      - run: cargo build -p porter-desktop --locked
+      - run: cargo test -p porter-desktop --locked
+      - run: cargo clippy -p porter-desktop --all-targets
+
+  # Windows is a release target: unix-only code must stay behind #[cfg(unix)].
+  windows-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - run: cargo check -p porter-cli --target x86_64-pc-windows-msvc --locked
+
+  fresh-resolve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo update && cargo build
+
+  payload-golden:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: tests/payload-app/pnpm-lock.yaml
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-payload-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install Payload test app
+        working-directory: tests/payload-app
+        run: pnpm install --frozen-lockfile
+      - name: Start Payload test app
+        working-directory: tests/payload-app
         run: |
-          cargo install cargo-udeps --locked || true
-          cargo install cargo-deny --locked || true
-
-      - name: Build
-        run: cargo build --all --locked --verbose
-
-      - name: Test
-        run: cargo test --all --locked --verbose
-
-      - name: Clippy (deny warnings)
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Dead dependencies (udeps)
-        run: cargo udeps --all-targets || true
-
-      - name: Duplication scan (basic)
+          nohup pnpm dev > payload-dev.log 2>&1 &
+          for i in $(seq 1 120); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3999/api/users || true)
+            if [ "$code" = "403" ] || [ "$code" = "200" ]; then exit 0; fi
+            sleep 2
+          done
+          cat payload-dev.log
+          exit 1
+      - name: Seed API-key user
+        working-directory: tests/payload-app
         run: |
-          # naive duplication check: find identical long lines across src
-          if grep -R "match endpoint {" -n src | wc -l | grep -qE '^[2-9]'; then
-            echo "Potential duplicated endpoint dispatch blocks detected"; exit 1; fi
+          key=$(pnpm -s seed-user)
+          echo "::add-mask::$key"
+          echo "PORTER_PAYLOAD_API_KEY=$key" >> "$GITHUB_ENV"
+      - name: Gated live tests
+        env:
+          PORTER_PAYLOAD_TEST_URL: http://localhost:3999
+        run: cargo test -p porter-engine --test payload_live --locked
+      - name: Payload log on failure
+        if: failure()
+        run: cat tests/payload-app/payload-dev.log

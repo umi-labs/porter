@@ -1,52 +1,74 @@
-[package]
-name = "porter"
-version = "1.0.46"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# porter-desktop pulls in GPUI; build it explicitly with `cargo build -p porter-desktop`.
+default-members = [
+    "crates/porter-model",
+    "crates/porter-engine",
+    "crates/porter-cli",
+    "crates/porter-tui",
+]
+
+[workspace.package]
+version = "2.0.0"
 edition = "2024"
 repository = "https://github.com/umi-labs/porter"
-description = "Porter is a high-performance, Rust-based CLI tool for migrating structured content between different systems. It supports complex nested data structures, parallel processing, and provides an intuitive interactive interface for data transformation."
 license = "MIT"
 authors = ["Isaac <isaac@umidigital.co.uk>"]
 homepage = "https://github.com/umi-labs/porter"
 
-[dependencies]
-anyhow = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-json5 = "0.4"
-serde_yaml = "0.9"
-clap = { version = "4", features = ["derive"] }
-toml = "0.8"
-thiserror = "1"
-dialoguer = { version = "0.11", features = ["fuzzy-select"] }
-colored = "2"
-regex = "1"
-log = "0.4"
-env_logger = "0.11"
-indexmap = "2"
-rayon = "1.10"
-glob = "0.3"
-walkdir = "2.5"
-libloading = "0.8"
-swc_core = { version = "0.90", features = [
-    "ecma_parser",
-    "ecma_ast", 
-    "ecma_visit",
-    "common",
-] }
-swc_ecma_parser = "0.143"
-swc_common = { version = "0.33", features = ["tty-emitter"] }
-swc_ecma_visit = "0.98"
-dashmap = "5.5"
-chrono = { version = "0.4", features = ["serde"] }
-num_cpus = "1.16"
-futures = "0.3"
-reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+[workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
-
-[dev-dependencies]
-tempfile = "3.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+anyhow = "1"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+indexmap = { version = "2", features = ["serde"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
+toml = "1"
+toml_edit = "0.25"
+unicode-normalization = "0.1"
+url = "2"
+percent-encoding = "2"
+tempfile = "3"
+sha2 = "0.10"
+async-trait = "0.1"
+tokio-util = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
+wiremock = "0.6"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+assert_cmd = "2"
+predicates = "3"
+maud = "0.27"
+scraper = "0.23"
+ego-tree = "0.10"
+quick-xml = "0.37"
+globset = "0.4"
+regex = "1"
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+swc_ecma_parser = "47"
+swc_ecma_ast = "30"
+swc_common = "27"
+swc_atoms = "10"
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
+futures = "0.3"
+insta = "1"
+porter-model = { path = "crates/porter-model" }
 
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# Keep target/ small: dependencies without debug info, our crates with line tables only
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[profile.dev.package."*"]
+debug = false

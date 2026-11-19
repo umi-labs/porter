@@ -4,3 +4,31 @@
 /test-data/hotels.json
 /test-data/pages.json
 /seed/
+
+# Can hold WordPress credentials
+/porter.config.*
+/.porter.*
+
+# Payload test app
+/tests/payload-app/node_modules
+/tests/payload-app/.next
+/tests/payload-app/*.db
+/tests/payload-app/*.db-*
+/tests/payload-app/media
+/tests/payload-app/next-env.d.ts
+/tests/payload-app/payload-dev.log
+/acceptance/*/project/
+/acceptance/*/snapshot/
+
+# IDE
+/.idea/
+
+# hub
+/hub/node_modules
+/hub/**/node_modules
+/hub/.env
+/hub/**/.next
+/hub/**/.next-*
+
+# insta pending snapshots
+*.snap.new

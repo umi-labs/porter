@@ -1,0 +1,16 @@
+{
+  "name": "@porter-hub/storage",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1167.0",
+    "@aws-sdk/s3-request-presigner": "^3.1167.0",
+    "@porter-hub/db": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "tar-stream": "^3.2.2"
+  },
+  "devDependencies": {
+    "@types/tar-stream": "^3.1.5"
+  }
+}

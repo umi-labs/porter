@@ -1,0 +1,24 @@
+---
+source: crates/porter-tui/src/ui/mod.rs
+expression: out
+---
+"terminal too small (need 80×24)                             "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "

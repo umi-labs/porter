@@ -1,0 +1,292 @@
+{
+  "root": {
+    "children": [
+      {
+        "children": [
+          {
+            "detail": 0,
+            "format": 0,
+            "mode": "normal",
+            "style": "",
+            "text": "Heading",
+            "type": "text",
+            "version": 1
+          }
+        ],
+        "direction": "ltr",
+        "format": "",
+        "indent": 0,
+        "tag": "h2",
+        "type": "heading",
+        "version": 1
+      },
+      {
+        "children": [
+          {
+            "detail": 0,
+            "format": 127,
+            "mode": "normal",
+            "style": "",
+            "text": "all marks",
+            "type": "text",
+            "version": 1
+          },
+          {
+            "type": "linebreak",
+            "version": 1
+          },
+          {
+            "detail": 0,
+            "format": 64,
+            "mode": "normal",
+            "style": "",
+            "text": "sup",
+            "type": "text",
+            "version": 1
+          },
+          {
+            "children": [
+              {
+                "detail": 0,
+                "format": 0,
+                "mode": "normal",
+                "style": "",
+                "text": "ext",
+                "type": "text",
+                "version": 1
+              }
+            ],
+            "direction": "ltr",
+            "fields": {
+              "linkType": "custom",
+              "newTab": true,
+              "url": "https://x.example.test/a%20b"
+            },
+            "format": "",
+            "indent": 0,
+            "type": "link",
+            "version": 1
+          },
+          {
+            "children": [
+              {
+                "detail": 0,
+                "format": 0,
+                "mode": "normal",
+                "style": "",
+                "text": "int",
+                "type": "text",
+                "version": 1
+              }
+            ],
+            "direction": "ltr",
+            "fields": {
+              "doc": {
+                "relationTo": "posts",
+                "value": 8
+              },
+              "linkType": "internal",
+              "newTab": false
+            },
+            "format": "",
+            "indent": 0,
+            "type": "link",
+            "version": 1
+          }
+        ],
+        "direction": "ltr",
+        "format": "center",
+        "indent": 0,
+        "textFormat": 0,
+        "textStyle": "",
+        "type": "paragraph",
+        "version": 1
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "detail": 0,
+                "format": 0,
+                "mode": "normal",
+                "style": "",
+                "text": "one",
+                "type": "text",
+                "version": 1
+              }
+            ],
+            "direction": "ltr",
+            "format": "",
+            "indent": 0,
+            "type": "listitem",
+            "value": 1,
+            "version": 1
+          },
+          {
+            "children": [
+              {
+                "detail": 0,
+                "format": 0,
+                "mode": "normal",
+                "style": "",
+                "text": "two",
+                "type": "text",
+                "version": 1
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "detail": 0,
+                        "format": 0,
+                        "mode": "normal",
+                        "style": "",
+                        "text": "nested",
+                        "type": "text",
+                        "version": 1
+                      }
+                    ],
+                    "direction": "ltr",
+                    "format": "",
+                    "indent": 0,
+                    "type": "listitem",
+                    "value": 1,
+                    "version": 1
+                  }
+                ],
+                "direction": "ltr",
+                "format": "",
+                "indent": 0,
+                "listType": "bullet",
+                "start": 1,
+                "tag": "ul",
+                "type": "list",
+                "version": 1
+              }
+            ],
+            "direction": "ltr",
+            "format": "",
+            "indent": 0,
+            "type": "listitem",
+            "value": 2,
+            "version": 1
+          }
+        ],
+        "direction": "ltr",
+        "format": "",
+        "indent": 0,
+        "listType": "number",
+        "start": 3,
+        "tag": "ol",
+        "type": "list",
+        "version": 1
+      },
+      {
+        "children": [
+          {
+            "detail": 0,
+            "format": 0,
+            "mode": "normal",
+            "style": "",
+            "text": "q1",
+            "type": "text",
+            "version": 1
+          },
+          {
+            "type": "linebreak",
+            "version": 1
+          },
+          {
+            "detail": 0,
+            "format": 0,
+            "mode": "normal",
+            "style": "",
+            "text": "q2",
+            "type": "text",
+            "version": 1
+          }
+        ],
+        "direction": "ltr",
+        "format": "",
+        "indent": 0,
+        "type": "quote",
+        "version": 1
+      },
+      {
+        "type": "horizontalrule",
+        "version": 1
+      },
+      {
+        "fields": {},
+        "format": "left",
+        "relationTo": "media",
+        "type": "upload",
+        "value": 3,
+        "version": 1
+      },
+      {
+        "children": [
+          {
+            "detail": 0,
+            "format": 0,
+            "mode": "normal",
+            "style": "",
+            "text": "Caption",
+            "type": "text",
+            "version": 1
+          }
+        ],
+        "direction": "ltr",
+        "format": "",
+        "indent": 0,
+        "textFormat": 0,
+        "textStyle": "",
+        "type": "paragraph",
+        "version": 1
+      },
+      {
+        "fields": {
+          "blockType": "raw",
+          "html": "<pre><code class=\"language-rust\">a &lt; b</code></pre>"
+        },
+        "format": "",
+        "type": "block",
+        "version": 1
+      },
+      {
+        "fields": {
+          "blockType": "raw",
+          "html": "<table><tr><th><p>H</p></th></tr><tr><td><p><strong>c</strong></p></td></tr></table>"
+        },
+        "format": "",
+        "type": "block",
+        "version": 1
+      },
+      {
+        "fields": {
+          "blockType": "raw",
+          "html": "<figure class=\"embed\" data-provider=\"video\"><a href=\"https://video.example.test/v/1\">https://video.example.test/v/1</a></figure>"
+        },
+        "format": "",
+        "type": "block",
+        "version": 1
+      },
+      {
+        "fields": {
+          "blockType": "raw",
+          "html": "<div class=\"x\">raw</div>"
+        },
+        "format": "",
+        "type": "block",
+        "version": 1
+      }
+    ],
+    "direction": "ltr",
+    "format": "",
+    "indent": 0,
+    "type": "root",
+    "version": 1
+  }
+}

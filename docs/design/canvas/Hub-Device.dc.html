@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Approve porter CLI sign-in</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+a{color:#3E4FD6}a:hover{color:#2A37A8}
+</style>
+</helmet>
+<div style="min-height:760px;background:#F7F7F8;color:#18181B;font-family:Inter,system-ui,sans-serif;font-size:15px;line-height:1.55;display:flex;flex-direction:column;align-items:center;padding:56px 16px;box-sizing:border-box;gap:24px">
+<span style="display:flex;align-items:center;gap:8px;font-weight:600"><span style="width:26px;height:26px;border-radius:7px;background:#18181B;display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h11l-3-3M20 17H9l3 3"></path></svg></span>Porter</span>
+
+<sc-if value="{{pending}}" hint-placeholder-val="{{true}}">
+<main style="width:100%;max-width:480px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:14px;padding:28px;box-sizing:border-box;display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;flex-direction:column;gap:6px">
+<h1 style="margin:0;font-size:22px;line-height:1.25;font-weight:600">Approve sign-in for porter CLI</h1>
+<span style="color:#3F3F46">A terminal is asking to sign in as <b style="font-weight:600">isaac@umidigital.co.uk</b>. Only approve if the code below matches the one it’s showing.</span>
+</div>
+<div style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:20px;border-radius:10px;background:#F7F7F8;border:1px solid #E3E3E8">
+<span style="font-size:13px;color:#565662">Code</span>
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:34px;font-weight:600;letter-spacing:0.12em">ABCD-EFGH</span>
+</div>
+<dl style="margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 16px;font-size:14px">
+<dt style="color:#565662">Device</dt><dd style="margin:0">porter 2.0.0-beta.4 · macOS</dd>
+<dt style="color:#565662">Requested</dt><dd style="margin:0">32 seconds ago · expires in 9 min</dd>
+<dt style="color:#565662">From</dt><dd style="margin:0">Gloucester, UK (approximate)</dd>
+<dt style="color:#565662">Access</dt><dd style="margin:0">Push and run on projects you’re a developer or owner of</dd>
+</dl>
+<div style="display:flex;gap:10px;flex-wrap:wrap">
+<button onClick="{{approve}}" style="flex:1 1 160px;height:44px;border-radius:8px;border:1px solid #3E4FD6;background:#3E4FD6;color:#FFFFFF;font:inherit;font-weight:600">Approve</button>
+<button onClick="{{deny}}" style="flex:1 1 160px;height:44px;border-radius:8px;border:1px solid #CFCFD6;background:#FFFFFF;color:#18181B;font:inherit;font-weight:600">Deny</button>
+</div>
+<span style="font-size:13px;color:#565662">Didn’t start this? Deny it. Nobody gets access without this approval.</span>
+</main>
+</sc-if>
+
+<sc-if value="{{approved}}" hint-placeholder-val="{{false}}">
+<main style="width:100%;max-width:480px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:14px;padding:28px;box-sizing:border-box;display:flex;flex-direction:column;gap:12px;align-items:flex-start">
+<span style="width:32px;height:32px;border-radius:50%;background:#18181B;color:#FFFFFF;display:flex;align-items:center;justify-content:center;font-weight:700">✓</span>
+<h1 style="margin:0;font-size:22px;font-weight:600">porter CLI is signed in</h1>
+<span style="color:#3F3F46">You can close this tab and go back to your terminal. Revoke it any time under Account › Devices.</span>
+</main>
+</sc-if>
+
+<sc-if value="{{denied}}" hint-placeholder-val="{{false}}">
+<main style="width:100%;max-width:480px;background:#FFFFFF;border:1px solid #E3E3E8;border-radius:14px;padding:28px;box-sizing:border-box;display:flex;flex-direction:column;gap:12px;align-items:flex-start">
+<h1 style="margin:0;font-size:22px;font-weight:600">Sign-in denied</h1>
+<span style="color:#3F3F46">The terminal showing ABCD-EFGH won’t get access. If that was you, run <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:14px">porter login</span> again for a new code.</span>
+</main>
+</sc-if>
+
+<sc-if value="{{expired}}" hint-placeholder-val="{{false}}">
+<main style="width:100%;max-width:480px;background:#FFFFFF;border:1px solid #F3BDBD;border-radius:14px;padding:28px;box-sizing:border-box;display:flex;flex-direction:column;gap:12px;align-items:flex-start">
+<h1 style="margin:0;font-size:22px;font-weight:600">This code has expired</h1>
+<span style="color:#3F3F46">Codes last 10 minutes. Run <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:14px">porter login</span> again and open the new link.</span>
+</main>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"state":{"editor":"enum","options":["pending","approved","denied","expired"],"default":"pending"},"$preview":{"width":1280,"height":760}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { s: null }; }
+  renderVals() {
+    const s = this.state.s ?? (this.props.state ?? 'pending');
+    return { pending: s==='pending', approved: s==='approved', denied: s==='denied', expired: s==='expired',
+      approve: () => this.setState({ s: 'approved' }), deny: () => this.setState({ s: 'denied' }) };
+  }
+}
+</script>
+</body>
+</html>

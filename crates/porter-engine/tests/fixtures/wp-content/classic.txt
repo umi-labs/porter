@@ -1,0 +1,13 @@
+<h2>Opening hours</h2>
+We're open from 9--5, Monday to Friday.
+Closed on "bank holidays".
+
+<img class="alignright size-medium" src="https://example.test/files/2019/03/door.png" alt="The door" width="300" />
+
+<ul>
+<li>Coffee</li>
+<li>Tea</li>
+</ul>
+<table><tr><td>Mon</td><td>9-5</td></tr></table>
+
+[caption id="attachment_7" align="aligncenter" width="300"]<img src="https://example.test/files/2020/01/lamp.jpg" alt="Lamp" width="300" /> The reading lamp[/caption]

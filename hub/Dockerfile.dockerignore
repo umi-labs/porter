@@ -1,0 +1,12 @@
+# Context is the repo root; send only the Rust workspace and hub/.
+**
+!Cargo.toml
+!Cargo.lock
+!crates/
+!hub/
+hub/**/node_modules
+hub/**/.next
+hub/**/.next-*
+hub/**/*.tsbuildinfo
+hub/**/.env*
+!hub/.env.example

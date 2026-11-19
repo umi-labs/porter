@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Apply load confirm</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#8C98FF}a:hover{color:#B3BBFF}
+</style>
+</helmet>
+<div style="min-height:820px;position:relative;background:{{t.bg}};color:{{t.text}};font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;font-size:13px;line-height:1.4;overflow:hidden">
+
+<div aria-hidden="true" style="position:absolute;inset:0;display:flex;flex-direction:column;opacity:0.5">
+<div style="height:44px;border-bottom:1px solid {{t.border}};background:{{t.surface}}"></div>
+<div style="flex:1;display:flex">
+<div style="width:176px;border-right:1px solid {{t.border}};background:{{t.surface}}"></div>
+<div style="flex:1;padding:24px;display:flex;flex-direction:column;gap:16px">
+<div style="height:52px;border-radius:8px;background:{{t.panel}}"></div>
+<div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px"><div style="height:150px;border-radius:8px;background:{{t.panel}}"></div><div style="height:150px;border-radius:8px;background:{{t.panel}}"></div><div style="height:150px;border-radius:8px;background:{{t.panel}}"></div><div style="height:150px;border-radius:8px;background:{{t.panel}}"></div><div style="height:150px;border-radius:8px;background:{{t.panel}}"></div><div style="height:150px;border-radius:8px;background:{{t.panel}}"></div></div>
+<div style="height:260px;border-radius:8px;background:{{t.panel}}"></div>
+</div>
+</div>
+</div>
+<div aria-hidden="true" style="position:absolute;inset:0;background:rgba(0,0,0,0.45)"></div>
+
+<div role="dialog" aria-modal="true" aria-labelledby="apply-title" style="position:relative;max-width:620px;margin:44px auto 32px;background:{{t.surface}};border:1px solid {{t.borderStrong}};border-radius:14px;box-shadow:0 30px 80px rgba(0,0,0,0.5);overflow:hidden">
+
+<div style="padding:18px 20px 14px;border-bottom:1px solid {{t.border}};display:flex;flex-direction:column;gap:4px">
+<h1 id="apply-title" style="margin:0;font-size:16px;font-weight:600">Apply load to the destination</h1>
+<span style="color:{{t.muted}}">This writes to <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;color:{{t.text}}">cms.seaviewhotels.co.uk</span> (Payload 3). Re-running updates by source identity, but nothing here is undone automatically.</span>
+</div>
+
+<div style="padding:14px 20px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid {{t.border}}">
+<span style="font-size:11px;font-weight:600;color:{{t.muted}}">Gates</span>
+<sc-for list="{{gates}}" as="g" hint-placeholder-count="3">
+<div style="display:flex;gap:10px;align-items:flex-start">
+<span style="width:16px;height:16px;flex:none;margin-top:1px;box-sizing:border-box;border-radius:{{g.r}};border:1.5px solid {{g.fg}};background:{{g.gbg}};color:{{g.gfg}};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800">{{g.glyph}}</span>
+<div style="flex:1;display:flex;flex-direction:column">
+<span style="font-weight:600">{{g.title}}</span>
+<span style="color:{{t.muted}};font-size:12px">{{g.detail}}</span>
+</div>
+</div>
+</sc-for>
+<label style="display:flex;gap:8px;align-items:center;margin-left:26px;font-size:12px"><input type="checkbox" checked="{{ack}}" onChange="{{toggleAck}}" style="width:14px;height:14px;accent-color:{{t.accent}}">I’ve reviewed the 50 warnings</label>
+</div>
+
+<div style="padding:14px 20px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid {{t.border}}">
+<span style="font-size:11px;font-weight:600;color:{{t.muted}}">From the dry run 8 minutes ago · these are the writes Apply will make</span>
+<div style="border:1px solid {{t.border}};border-radius:8px;overflow:hidden;background:{{t.bg}}">
+<sc-for list="{{writes}}" as="w" hint-placeholder-count="6">
+<div style="display:grid;grid-template-columns:minmax(0,1fr) 80px 80px;gap:8px;padding:5px 12px;border-bottom:1px solid {{t.border}};font-size:12px;font-variant-numeric:tabular-nums">
+<span>{{w.what}}</span><span style="text-align:right">{{w.create}}</span><span style="text-align:right;color:{{t.muted}}">{{w.update}}</span>
+</div>
+</sc-for>
+<div style="display:grid;grid-template-columns:minmax(0,1fr) 80px 80px;gap:8px;padding:6px 12px;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums">
+<span>Total</span><span style="text-align:right">4,415 create</span><span style="text-align:right;color:{{t.muted}}">0 update</span>
+</div>
+</div>
+<div style="display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border-radius:6px;background:{{t.warnBg}};font-size:12px">
+<span style="width:13px;height:13px;flex:none;margin-top:1px;box-sizing:border-box;border-radius:2px;border:1.5px solid {{t.warnFg}};color:{{t.warnFg}};display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:800">!</span>
+<span><b style="color:{{t.warnFg}}">Not written:</b> 33 documents (dropped types, handled manually) and 27 media files that were never found. 41 rooms and pages will load with an empty image field. <a href="#">See the list</a></span>
+</div>
+</div>
+
+<div style="padding:14px 20px;display:flex;flex-direction:column;gap:8px">
+<label for="host" style="font-size:12px">Type <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-weight:600;user-select:none">cms.seaviewhotels.co.uk</span> to confirm</label>
+<input id="host" value="{{typed}}" onChange="{{onType}}" autocomplete="off" spellcheck="false" placeholder="cms.seaviewhotels.co.uk" style="height:32px;padding:0 10px;border-radius:6px;border:1px solid {{inputBd}};background:{{t.bg}};color:{{t.text}};font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:13px;outline:none">
+<span style="font-size:11px;color:{{hintFg}}">{{hint}}</span>
+</div>
+
+<div style="padding:12px 20px;border-top:1px solid {{t.border}};background:{{t.bg}};display:flex;gap:8px;align-items:center">
+<span style="font-size:11px;color:{{t.muted}};flex:1">⎋ Cancel is the default. Apply has no shortcut.</span>
+<button style="height:30px;padding:0 14px;border-radius:6px;border:1px solid {{t.accent}};background:{{t.bg}};color:{{t.text}};font:inherit;font-weight:500;box-shadow:0 0 0 2px {{t.accentBg}}">Cancel</button>
+<button disabled="{{locked}}" style="height:30px;padding:0 14px;border-radius:6px;border:1px solid {{applyBd}};background:{{applyBg}};color:{{applyFg}};font:inherit;font-weight:600;cursor:{{applyCursor}}">Apply 4,415 writes</button>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":true},"preview":{"editor":"enum","options":["empty","typo","matched"],"default":"empty"},"$preview":{"width":1280,"height":820}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { typed: null, ack: null }; }
+  renderVals() {
+    const dark = this.props.dark ?? true;
+    const L = {bg:'#FFFFFF',surface:'#F7F7F8',panel:'#EFEFF2',border:'#E3E3E8',borderStrong:'#CFCFD6',text:'#18181B',muted:'#565662',accent:'#3E4FD6',accentBg:'#ECEEFC',okFg:'#17803D',okOn:'#FFFFFF',warnFg:'#9A5800',warnBg:'#FFF3DC',errFg:'#C42B2B',errSolid:'#C42B2B'};
+    const D = {bg:'#111113',surface:'#17171A',panel:'#1E1E22',border:'#2A2A30',borderStrong:'#3A3A42',text:'#EDEDF0',muted:'#A3A3AE',accent:'#8C98FF',accentBg:'#1E2142',okFg:'#4ADE80',okOn:'#0B1F12',warnFg:'#F5B83D',warnBg:'#2B210C',errFg:'#FF7A7A',errSolid:'#B42A2A'};
+    const t = dark ? D : L;
+    const host = 'cms.seaviewhotels.co.uk';
+    const pv = this.props.preview ?? 'empty';
+    const typed = this.state.typed ?? (pv==='matched' ? host : (pv==='typo' ? 'cms.seaveiwhotels.co.uk' : ''));
+    const ack = this.state.ack ?? (pv==='matched');
+    const match = typed.trim() === host;
+    const locked = !(match && ack);
+    const gates = [
+      {glyph:'✓',r:'50%',fg:t.text,gbg:'transparent',gfg:t.text,title:'Dry run is fresh',detail:'Ran 8 min ago. Model, mapping and destination schema unchanged since (a91f3c).'},
+      {glyph:'✓',r:'50%',fg:t.text,gbg:'transparent',gfg:t.text,title:'No open errors',detail:'52 resolved: 40 fixed by re-run, 12 handled manually with notes.'},
+      {glyph:'!',r:'3px',fg:t.warnFg,gbg:'transparent',gfg:t.warnFg,title:'50 open warnings',detail:'31 unmapped-field, 14 unresolved-link, 3 redirect-chain, 2 schema-mismatch.'}
+    ];
+    const writes = [['Media files','2,104','0'],['Taxonomy terms','64','0'],['Documents (parents first)','1,931','0'],['Menus','4','0'],['Forms','0','0'],['Redirects','312','0']].map(([what,create,update]) => ({what,create,update}));
+    const typo = typed.length > 0 && !match;
+    return { t, gates, writes, typed, ack, locked,
+      onType: (e) => this.setState({ typed: e.target.value }),
+      toggleAck: () => this.setState({ ack: !ack }),
+      inputBd: typo ? t.errFg : (match ? t.text : t.borderStrong),
+      hint: match ? (ack ? 'Host matches. Apply is enabled.' : 'Host matches. Tick the warnings box to enable Apply.') : (typo ? 'Doesn’t match the destination host.' : 'Paste is disabled for this field.'),
+      hintFg: typo ? t.errFg : t.muted,
+      applyBg: locked ? 'transparent' : t.errSolid,
+      applyBd: locked ? t.borderStrong : t.errSolid,
+      applyFg: locked ? t.muted : '#FFFFFF',
+      applyCursor: locked ? 'not-allowed' : 'pointer' };
+  }
+}
+</script>
+</body>
+</html>

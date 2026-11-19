@@ -1,0 +1,29 @@
+@import "tailwindcss";
+@import "./theme.css";
+
+@layer base {
+  html {
+    color-scheme: light dark;
+  }
+  body {
+    @apply bg-surface text-ink font-sans text-body antialiased;
+    font-variant-numeric: tabular-nums;
+  }
+  a {
+    @apply text-accent underline-offset-2 hover:underline;
+  }
+  code {
+    @apply font-mono text-small;
+  }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+  select {
+    @apply min-h-11 rounded-md border border-border-strong bg-bg px-3 text-body text-ink;
+  }
+  input[type="checkbox"],
+  input[type="radio"] {
+    @apply size-4 accent-accent;
+  }
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+}

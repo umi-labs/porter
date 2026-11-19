@@ -1,0 +1,49 @@
+{
+  "contentPages": [
+    {
+      "id": 1000,
+      "key": "0b1c1d3a-0000-4000-8000-000000001000",
+      "name": "Hotels",
+      "contentTypeAlias": "listingPage",
+      "url": "/hotels/",
+      "published": true,
+      "createDate": "2024-01-10T09:00:00Z",
+      "updateDate": "2024-02-01T09:30:00Z",
+      "intro": "Our hotels"
+    },
+    {
+      "id": 1100,
+      "key": "0b1c1d3a-0000-4000-8000-000000001100",
+      "name": "Harbour Hotel",
+      "contentTypeAlias": "hotelPage",
+      "url": "/hotels/harbour/",
+      "urlSegment": "harbour",
+      "parentId": 1000,
+      "published": true,
+      "createDate": "2024-01-11T09:00:00Z",
+      "updateDate": "2024-02-02 10:15:00",
+      "stars": 4,
+      "petsAllowed": true,
+      "tags": ["sea", "quiet"],
+      "location": { "lat": 51.5, "lng": -0.12 },
+      "heroImage": { "mediaType": "Image", "name": "Harbour view", "url": "/media/harbour.jpg", "width": 1600, "height": 900 },
+      "body": "<p>Welcome to the <a href=\"/hotels/\">hotels</a> page.</p>",
+      "_variants": [
+        { "culture": "en", "name": "Harbour Hotel", "properties": { "tagline": "By the sea" } },
+        { "culture": "de", "name": "Hafenhotel", "url": "/de/hotels/hafen/", "properties": { "tagline": "Am Meer" } }
+      ]
+    },
+    {
+      "id": 1200,
+      "name": "Gallery",
+      "contentTypeAlias": "galleryPage",
+      "url": "/gallery/",
+      "published": false,
+      "photos": [
+        { "mediaType": "Image", "url": "/media/one.jpg" },
+        { "mediaType": "Image", "url": "/media/two.jpg" }
+      ]
+    },
+    "not a node"
+  ]
+}

@@ -1,0 +1,12 @@
+---
+source: crates/porter-tui/src/ui/mod.rs
+expression: out
+---
+"┌Stages──────────────────────────────────┐"
+"│> · analyse    not run                  │"
+"│  ‼ extract    could not run: no such fi│"
+"│  · normalise  not run                  │"
+"│  · schema     not run                  │"
+"│  · load       not run                  │"
+"│  · verify     not run                  │"
+"└────────────────────────────────────────┘"

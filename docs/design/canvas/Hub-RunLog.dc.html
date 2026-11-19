@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hub run log</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0}
+a{color:#3E4FD6}a:hover{color:#2A37A8}
+</style>
+</helmet>
+<div style="min-height:960px;background:#F7F7F8;color:#18181B;font-family:Inter,system-ui,sans-serif;font-size:15px;line-height:1.55">
+
+<header style="background:#FFFFFF;border-bottom:1px solid #E3E3E8">
+<div style="max-width:1200px;margin:0 auto;padding:0 24px;display:flex;align-items:center;gap:16px;min-height:56px;flex-wrap:wrap">
+<span style="display:flex;align-items:center;gap:8px;font-weight:600"><span style="width:26px;height:26px;border-radius:7px;background:#18181B;display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h11l-3-3M20 17H9l3 3"></path></svg></span>Porter</span>
+<span style="color:#CFCFD6" aria-hidden="true">/</span>
+<a href="Hub-Overview.dc.html" style="font-size:14px;font-weight:600;color:#18181B;text-decoration:none">Seaview Hotels</a>
+<span style="flex:1"></span>
+<span style="width:32px;height:32px;border-radius:50%;background:#ECEEFC;color:#3E4FD6;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">IS</span>
+</div>
+<nav aria-label="Project" style="max-width:1200px;margin:0 auto;padding:0 24px;display:flex;gap:4px;overflow-x:auto">
+<a href="Hub-Overview.dc.html" style="padding:10px 12px;font-size:14px;font-weight:500;color:#565662;text-decoration:none">Overview</a>
+<a href="#" style="padding:10px 12px;font-size:14px;font-weight:500;color:#565662;text-decoration:none">Issues</a>
+<a href="#" style="padding:10px 12px;font-size:14px;font-weight:500;color:#565662;text-decoration:none">URLs</a>
+<a href="#" style="padding:10px 12px;font-size:14px;font-weight:500;color:#565662;text-decoration:none">Reports</a>
+<a href="#" aria-current="page" style="padding:10px 12px;font-size:14px;font-weight:600;color:#18181B;text-decoration:none;border-bottom:2px solid #18181B">Runs</a>
+<a href="Hub-Uploads.dc.html" style="padding:10px 12px;font-size:14px;font-weight:500;color:#565662;text-decoration:none">Uploads</a>
+<a href="Hub-Share.dc.html" style="padding:10px 12px;font-size:14px;font-weight:500;color:#565662;text-decoration:none">Settings</a>
+</nav>
+</header>
+
+<main style="max-width:1200px;margin:0 auto;padding:24px 24px 64px;display:flex;flex-direction:column;gap:16px">
+<div style="display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap">
+<div style="flex:1 1 420px;display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+<h1 style="margin:0;font-size:24px;font-weight:600">Run #48</h1>
+<span style="display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px 0 7px;border-radius:6px;border:1px {{c.bs}} {{c.bd}};background:{{c.bg}};color:{{c.fg}};font-size:13px;font-weight:600"><span style="width:14px;height:14px;box-sizing:border-box;border-radius:{{c.gr}};border:1.5px {{c.gbs}} {{c.gbd}};background:{{c.gbg}};color:{{c.gfg}};display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;line-height:1">{{c.g}}</span>{{c.label}}</span>
+</div>
+<span style="font-size:14px;color:#565662"><span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;color:#18181B">porter run</span> (load as a dry run) · on v3 · started by Isaac 3 min ago on the hub runner</span>
+</div>
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{true}}">
+<button style="height:40px;padding:0 16px;border-radius:8px;border:1px solid #E3B0B0;background:#FFFFFF;color:#C42B2B;font:inherit;font-size:14px;font-weight:600">Cancel run</button>
+</sc-if>
+<sc-if value="{{isDone}}" hint-placeholder-val="{{false}}">
+<div style="display:flex;gap:8px"><button style="height:40px;padding:0 16px;border-radius:8px;border:1px solid #CFCFD6;background:#FFFFFF;font:inherit;font-size:14px;font-weight:600">Download log</button><button style="height:40px;padding:0 16px;border-radius:8px;border:1px solid #3E4FD6;background:#3E4FD6;color:#FFFFFF;font:inherit;font-size:14px;font-weight:600">{{again}}</button></div>
+</sc-if>
+</div>
+
+<sc-if value="{{isDone}}" hint-placeholder-val="{{false}}">
+<div role="status" style="display:flex;gap:14px;align-items:flex-start;padding:14px 16px;border-radius:10px;border:1px solid {{res.bd}};background:{{res.bg}}">
+<div style="display:flex;flex-direction:column;gap:2px;flex:1">
+<span style="font-weight:600">{{res.title}}</span>
+<span style="font-size:14px;color:#3F3F46">{{res.body}}</span>
+</div>
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:13px;color:#565662">exit {{res.code}}</span>
+</div>
+</sc-if>
+
+<div style="display:flex;gap:6px;flex-wrap:wrap">
+<sc-for list="{{stages}}" as="s" hint-placeholder-count="6">
+<span style="display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px 0 7px;border-radius:6px;border:1px {{s.c.bs}} {{s.c.bd}};background:{{s.c.bg}};color:{{s.c.fg}};font-size:13px;font-weight:500;white-space:nowrap"><span style="width:13px;height:13px;box-sizing:border-box;border-radius:{{s.c.gr}};border:1.5px {{s.c.gbs}} {{s.c.gbd}};background:{{s.c.gbg}};color:{{s.c.gfg}};display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;line-height:1">{{s.c.g}}</span>{{s.name}} · {{s.c.label}}</span>
+</sc-for>
+</div>
+
+<section aria-label="Log" style="background:#111113;border-radius:12px;overflow:hidden;border:1px solid #2A2A30">
+<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid #2A2A30;color:#A3A3AE;font-size:13px;flex-wrap:wrap">
+<span style="color:#EDEDF0;font-weight:600">Log</span>
+<span>{{lineCount}}</span>
+<span style="flex:1"></span>
+<label style="display:flex;align-items:center;gap:6px"><input type="checkbox" style="accent-color:#8C98FF">Warnings and errors only</label>
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{true}}"><span style="display:inline-flex;align-items:center;gap:6px;color:#8C98FF"><span style="width:7px;height:7px;border-radius:50%;background:#8C98FF"></span>Following new lines</span></sc-if>
+</div>
+<div style="padding:10px 0;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12.5px;line-height:1.7;color:#D4D4DA;overflow-x:auto;max-height:520px">
+<sc-for list="{{lines}}" as="l" hint-placeholder-count="18">
+<div style="display:flex;gap:14px;padding:0 14px;white-space:pre;background:{{l.bg}}">
+<span style="color:#6C6C78;width:36px;text-align:right;flex:none">{{l.n}}</span>
+<span style="color:#8C8C98;flex:none">{{l.ts}}</span>
+<span style="color:{{l.lvlFg}};flex:none;width:44px;font-weight:600">{{l.lvl}}</span>
+<span style="color:{{l.fg}}">{{l.msg}}</span>
+</div>
+</sc-for>
+</div>
+</section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"outcome":{"editor":"enum","options":["running","success","issues","failed","interrupted"],"default":"running"},"$preview":{"width":1280,"height":960}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const o = this.props.outcome ?? 'running';
+    const C = {
+      running:{label:'Running · extract 62%',fg:'#3E4FD6',bg:'#ECEEFC',bd:'#ECEEFC',bs:'solid',g:'',gfg:'#3E4FD6',gbg:'transparent',gbd:'#3E4FD6',gbs:'dotted',gr:'50%'},
+      clean:{label:'Clean',fg:'#17803D',bg:'#E6F5EB',bd:'#E6F5EB',bs:'solid',g:'✓',gfg:'#FFFFFF',gbg:'#17803D',gbd:'#17803D',gbs:'solid',gr:'50%'},
+      warn:{label:'Warnings',fg:'#9A5800',bg:'#FFF3DC',bd:'#FFF3DC',bs:'solid',g:'!',gfg:'#9A5800',gbg:'transparent',gbd:'#9A5800',gbs:'solid',gr:'3px'},
+      issues:{label:'Finished with issues',fg:'#C42B2B',bg:'#FDECEC',bd:'#C42B2B',bs:'solid',g:'!',gfg:'#FFFFFF',gbg:'#C42B2B',gbd:'#C42B2B',gbs:'solid',gr:'50%'},
+      errors:{label:'12 errors',fg:'#C42B2B',bg:'#FDECEC',bd:'#C42B2B',bs:'solid',g:'!',gfg:'#FFFFFF',gbg:'#C42B2B',gbd:'#C42B2B',gbs:'solid',gr:'50%'},
+      failed:{label:'Failed',fg:'#FFFFFF',bg:'#C42B2B',bd:'#C42B2B',bs:'solid',g:'✕',gfg:'#C42B2B',gbg:'#FFFFFF',gbd:'#FFFFFF',gbs:'solid',gr:'50%'},
+      interrupted:{label:'Interrupted',fg:'#7339BD',bg:'#F2EBFC',bd:'#F2EBFC',bs:'solid',g:'‖',gfg:'#7339BD',gbg:'transparent',gbd:'#7339BD',gbs:'solid',gr:'50%'},
+      dry:{label:'Dry run',fg:'#3B4A6B',bg:'repeating-linear-gradient(135deg,#EEF1F7 0 6px,#E2E7F0 6px 8px)',bd:'#8391B0',bs:'dashed',g:'',gfg:'#3B4A6B',gbg:'transparent',gbd:'#3B4A6B',gbs:'dashed',gr:'50%'},
+      skipped:{label:'Skipped',fg:'#565662',bg:'transparent',bd:'#E3E3E8',bs:'solid',g:'–',gfg:'#565662',gbg:'transparent',gbd:'#6E6E7A',gbs:'solid',gr:'50%'},
+      notrun:{label:'Waiting',fg:'#565662',bg:'transparent',bd:'#CFCFD6',bs:'dashed',g:'',gfg:'#565662',gbg:'transparent',gbd:'#6E6E7A',gbs:'solid',gr:'50%'}
+    };
+    const names = ['Analyse','Extract','Normalise','Schema','Load','Verify'];
+    const plan = {
+      running:['clean','running','notrun','notrun','notrun','notrun'],
+      success:['clean','clean','clean','clean','dry','skipped'],
+      issues:['clean','warn','errors','notrun','notrun','notrun'],
+      failed:['clean','failed','notrun','notrun','notrun','notrun'],
+      interrupted:['clean','interrupted','notrun','notrun','notrun','notrun']
+    }[o];
+    const stages = names.map((name,i) => ({name, c: C[plan[i]==='running' ? 'running' : plan[i]]}));
+    stages[1].c = plan[1]==='running' ? Object.assign({}, C.running, {label:'62%'}) : stages[1].c;
+    const head = {running:C.running,success:Object.assign({},C.dry,{label:'Finished · dry run'}),issues:C.issues,failed:C.failed,interrupted:C.interrupted}[o];
+    const R = {
+      success:{title:'Finished. Nothing was written: load ran as a dry run.',body:'0 error issues opened. Load would write 4,415. Verify was skipped because nothing was loaded.',code:'0',bg:'#FFFFFF',bd:'#CFCFD6'},
+      issues:{title:'Stopped after normalise: 12 error issues.',body:'Schema, load and verify didn’t run. Fix the errors or re-run with --continue from your terminal.',code:'2',bg:'#FDECEC',bd:'#F3BDBD'},
+      failed:{title:'Extract couldn’t run.',body:'wp-rest: 401 Unauthorized. The run secret PORTER_WP_PASSWORD is set but was rejected by the site. Replace it in Settings › Run secrets.',code:'1',bg:'#FDECEC',bd:'#F3BDBD'},
+      interrupted:{title:'Cancelled by Isaac at extract 62%.',body:'Resumable. Running again skips the 1,218 items already fetched.',code:'3',bg:'#F2EBFC',bd:'#DCC9F5'}
+    };
+    const base = [
+      ['10:41:02','info','porter 2.0.0-beta.4 · project seaview-hotels · v3'],
+      ['10:41:02','info','stage analyse: start · 4 connectors'],
+      ['10:41:19','info','analyse: 1,964 items · builders: acf, elementor · plugins: yoast, redirection'],
+      ['10:41:20','info','stage analyse: done · 0 issues'],
+      ['10:41:20','info','stage extract: start · --refresh'],
+      ['10:41:58','warn','extract: wp-rest: 162 ACF fields not exposed over REST; using wp-db for these'],
+      ['10:42:31','warn','extract: crawl: /weddings/brochure-download/ returned 404'],
+      ['10:43:07','warn','extract: media: wp-content/uploads/2021/03/spa-hero.jpg not found in dump or uploads'],
+      ['10:43:40','info','extract: 1,218 / 1,964 items · 403 / 2,131 media']
+    ];
+    const tails = {
+      running:[['10:43:52','info','extract: fetching /rooms/garden-room/ (rendered)']],
+      success:[['10:46:12','info','stage extract: done · 3 warnings'],['10:47:40','info','stage normalise: done · 0 errors'],['10:48:01','info','stage schema check: done · 13 collections match'],['10:48:44','info','stage load: dry run · would create 4,415 · nothing written'],['10:48:44','info','stage verify: skipped: dry run'],['10:48:44','info','exit 0']],
+      issues:[['10:46:12','info','stage extract: done · 3 warnings'],['10:47:02','error','normalise: unresolved-relation: room 118 → offer 4812 (not in model)'],['10:47:38','error','normalise: 12 items failed · 4 partial'],['10:47:38','info','stopping: normalise ended with error issues'],['10:47:38','info','exit 2']],
+      failed:[['10:41:21','error','extract: wp-rest: 401 Unauthorized from www.seaviewhotels.co.uk'],['10:41:21','info','exit 1']],
+      interrupted:[['10:43:52','info','cancel requested by isaac@umi · finishing current item'],['10:43:53','info','extract: interrupted at 1,218 / 1,964 · resumable'],['10:43:53','info','exit 3']]
+    };
+    const all = (o==='failed' ? base.slice(0,5) : base).concat(tails[o]);
+    const lines = all.map(([ts,lvl,msg],i) => ({n:i+1,ts,lvl:lvl.toUpperCase(),msg,
+      lvlFg: lvl==='error' ? '#FF7A7A' : (lvl==='warn' ? '#F5B83D' : '#8C8C98'),
+      fg: lvl==='error' ? '#FFB3B3' : '#D4D4DA',
+      bg: lvl==='error' ? '#2A1414' : 'transparent'}));
+    return { c: head, stages, lines, res: R[o] || R.success, isRunning: o==='running', isDone: o!=='running',
+      again: o==='interrupted' ? 'Resume' : 'Run again', lineCount: lines.length + ' lines · streaming over SSE' };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+[package]
+name = "porter-model"
+description = "Porter 2.0 model"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+indexmap.workspace = true

@@ -1,0 +1,18 @@
+{
+  "name": "@porter-hub/db",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "generate": "drizzle-kit generate",
+    "auth:generate": "auth generate --config auth.ts --output auth-schema.ts -y"
+  },
+  "dependencies": {
+    "better-auth": "1.7.21",
+    "drizzle-orm": "^0.45.4",
+    "postgres": "^4.1.1"
+  },
+  "devDependencies": {
+    "auth": "1.7.21"
+  }
+}

@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Porter mapping editor</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#3E4FD6}a:hover{color:#2A37A8}
+</style>
+</helmet>
+<div style="min-height:940px;background:{{t.bg}};color:{{t.text}};font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;font-size:13px;line-height:1.4;display:flex;flex-direction:column">
+
+<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid {{t.border}};background:{{t.surface}}">
+<div style="display:flex;gap:8px"><span style="width:12px;height:12px;border-radius:50%;background:{{t.borderStrong}}"></span><span style="width:12px;height:12px;border-radius:50%;background:{{t.borderStrong}}"></span><span style="width:12px;height:12px;border-radius:50%;background:{{t.borderStrong}}"></span></div>
+<span style="font-size:14px;font-weight:600;padding-left:12px">Seaview Hotels</span>
+<span style="display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:4px;background:{{t.panel}};font-size:12px;color:{{t.muted}}">WordPress 6.4 <span aria-hidden="true">→</span> <span style="color:{{t.text}}">Payload 3</span></span>
+<span style="flex:1"></span>
+<button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid {{t.borderStrong}};background:{{t.bg}};color:{{t.text}};font:inherit;font-size:12px;font-weight:500">Run all</button>
+<button style="height:28px;padding:0 10px;border-radius:6px;border:1px solid {{t.accent}};background:{{t.accent}};color:{{t.onAccent}};font:inherit;font-size:12px;font-weight:600">Load (dry run)</button>
+<button disabled style="height:28px;padding:0 10px;border-radius:6px;border:1px dashed {{t.borderStrong}};background:transparent;color:{{t.muted}};font:inherit;font-size:12px">Apply load…</button>
+</div>
+
+<div style="display:flex;flex-wrap:wrap;flex:1">
+<nav aria-label="Project" style="flex:1 1 168px;max-width:176px;padding:10px 8px;border-right:1px solid {{t.border}};background:{{t.surface}};display:flex;flex-direction:column;gap:2px">
+<a href="Desktop-Overview.dc.html" style="height:30px;display:flex;align-items:center;padding:0 8px;border-radius:6px;color:{{t.muted}};text-decoration:none">Overview</a>
+<a href="#" style="height:30px;display:flex;align-items:center;padding:0 8px;border-radius:6px;color:{{t.muted}};text-decoration:none">Content</a>
+<a href="#" style="height:30px;display:flex;align-items:center;padding:0 8px;border-radius:6px;color:{{t.muted}};text-decoration:none">Media</a>
+<a href="Desktop-URLs.dc.html" style="height:30px;display:flex;align-items:center;padding:0 8px;border-radius:6px;color:{{t.muted}};text-decoration:none">URLs</a>
+<a href="#" style="height:30px;display:flex;align-items:center;padding:0 8px;border-radius:6px;color:{{t.muted}};text-decoration:none">Issues</a>
+<a href="#" aria-current="page" style="height:30px;display:flex;align-items:center;gap:6px;padding:0 8px;border-radius:6px;background:{{t.hover}};color:{{t.text}};font-weight:600;text-decoration:none"><span style="flex:1">Mapping</span><span style="font-size:11px;color:{{t.errFg}};font-weight:700">5</span></a>
+<a href="#" style="height:30px;display:flex;align-items:center;padding:0 8px;border-radius:6px;color:{{t.muted}};text-decoration:none">Destination</a>
+<a href="#" style="height:30px;display:flex;align-items:center;padding:0 8px;border-radius:6px;color:{{t.muted}};text-decoration:none">Runs</a>
+</nav>
+
+<main style="flex:999 1 640px;min-width:0;display:flex;flex-direction:column">
+<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 20px;border-bottom:1px solid {{t.border}}">
+<h1 style="margin:0;font-size:15px;font-weight:600">Mapping</h1>
+<div role="tablist" style="display:flex;gap:2px;padding:2px;border-radius:6px;background:{{t.panel}}">
+<button role="tab" aria-selected="false" style="height:24px;padding:0 10px;border-radius:4px;border:0;background:transparent;color:{{t.muted}};font:inherit;font-size:12px;font-weight:500">Types 13</button>
+<button role="tab" aria-selected="true" style="height:24px;padding:0 10px;border-radius:4px;border:0;background:{{t.bg}};color:{{t.text}};font:inherit;font-size:12px;font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,0.12)">Fields</button>
+<button role="tab" aria-selected="false" style="height:24px;padding:0 10px;border-radius:4px;border:0;background:transparent;color:{{t.muted}};font:inherit;font-size:12px;font-weight:500">Blocks 24</button>
+</div>
+<span style="display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px 0 5px;border-radius:4px;border:1px solid {{t.errFg}};background:{{t.errBg}};color:{{t.errFg}};font-size:12px;font-weight:600"><span style="width:13px;height:13px;border-radius:50%;background:{{t.errFg}};color:{{t.errOn}};display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800">!</span>4 errors · 1 warning</span>
+<span style="flex:1"></span>
+<span style="font-size:12px;color:{{t.muted}}">Saved to porter.toml · load dry run is now stale</span>
+<button style="height:26px;padding:0 10px;border-radius:6px;border:1px solid {{t.borderStrong}};background:{{t.bg}};color:{{t.text}};font:inherit;font-size:12px">Next problem <span style="color:{{t.muted}}">F8</span></button>
+</div>
+
+<div style="display:flex;flex-wrap:wrap;flex:1;min-height:0">
+<div style="flex:1 1 250px;max-width:272px;border-right:1px solid {{t.border}};display:flex;flex-direction:column">
+<div style="padding:8px 12px;font-size:11px;font-weight:600;color:{{t.muted}};border-bottom:1px solid {{t.border}}">Source type → collection</div>
+<sc-for list="{{types}}" as="ty" hint-placeholder-count="8">
+<div style="padding:8px 12px;border-bottom:1px solid {{t.border}};background:{{ty.bg}};display:flex;flex-direction:column;gap:3px;box-shadow:inset 2px 0 0 {{ty.bar}}">
+<div style="display:flex;align-items:center;gap:6px;font-size:12px;min-width:0">
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-weight:600">{{ty.src}}</span>
+<span style="color:{{t.muted}}" aria-hidden="true">→</span>
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;color:{{ty.dstFg}};text-decoration:{{ty.deco}};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">{{ty.dst}}</span>
+<span style="font-size:11px;color:{{t.muted}};font-variant-numeric:tabular-nums">{{ty.count}}</span>
+</div>
+<span style="font-size:11px;color:{{ty.noteFg}};font-family:{{ty.noteFont}}">{{ty.note}}</span>
+</div>
+</sc-for>
+</div>
+
+<div style="flex:999 1 560px;min-width:0;padding:16px 20px;display:flex;flex-direction:column;gap:12px">
+<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+<h2 style="margin:0;font-size:14px;font-weight:600"><span style="font-family:ui-monospace,'SF Mono',Menlo,monospace">room</span> fields → <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace">rooms</span></h2>
+<span style="font-size:12px;color:{{t.muted}}">48 documents · samples from 5 · fill rate across all 48</span>
+</div>
+
+<div role="alert" style="display:flex;gap:10px;align-items:flex-start;padding:8px 12px;border-radius:6px;background:{{t.errBg}};border:1px solid {{t.errFg}};font-size:12px">
+<span style="width:14px;height:14px;flex:none;margin-top:1px;border-radius:50%;background:{{t.errFg}};color:{{t.errOn}};display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:800">!</span>
+<span style="flex:1"><b style="color:{{t.errFg}}">Required target has no source.</b> <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace">rooms.occupancy</span> is required in Payload and nothing maps to it, so all 48 rooms would fail to load.</span>
+<button style="flex:none;height:22px;padding:0 8px;border-radius:4px;border:1px solid {{t.errFg}};background:transparent;color:{{t.errFg}};font:inherit;font-size:11px;font-weight:600">Map a field</button>
+</div>
+
+<div style="overflow-x:auto;border:1px solid {{t.border}};border-radius:8px">
+<div style="min-width:900px">
+<div style="display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1.5fr) 92px minmax(0,1.3fr) minmax(0,1.2fr) 56px;gap:12px;padding:7px 12px;background:{{t.panel}};font-size:11px;font-weight:600;color:{{t.muted}}">
+<span>Source field</span><span>Sample values</span><span>Fill rate</span><span>Target field</span><span>Transforms</span><span style="text-align:center">Drop</span>
+</div>
+<sc-for list="{{fields}}" as="f" hint-placeholder-count="9">
+<div style="border-top:1px solid {{t.border}};background:{{f.rowBg}};box-shadow:inset 3px 0 0 {{f.bar}}">
+<div style="display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1.5fr) 92px minmax(0,1.3fr) minmax(0,1.2fr) 56px;gap:12px;padding:6px 12px;align-items:center;font-size:12px;min-height:28px">
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:{{f.deco}};color:{{f.srcFg}}">{{f.path}}</span>
+<span style="color:{{t.muted}};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px">{{f.samples}}</span>
+<div style="display:flex;align-items:center;gap:6px">
+<div style="flex:1;height:5px;border-radius:3px;background:{{t.panel}};overflow:hidden"><div style="width:{{f.fill}}%;height:100%;background:{{t.muted}}"></div></div>
+<span style="width:32px;text-align:right;font-size:11px;font-variant-numeric:tabular-nums;color:{{t.muted}}">{{f.fill}}%</span>
+</div>
+<button style="height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;border-radius:5px;border:1px solid {{f.tgtBd}};background:{{t.bg}};color:{{f.tgtFg}};font:inherit;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;min-width:0;text-align:left">
+<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{f.target}}</span>
+<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+<div style="display:flex;gap:4px;flex-wrap:wrap;min-width:0">
+<sc-for list="{{f.tx}}" as="x" hint-placeholder-count="1">
+<span style="height:20px;display:inline-flex;align-items:center;padding:0 6px;border-radius:4px;background:{{t.panel}};font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px">{{x}}</span>
+</sc-for>
+<span style="height:20px;display:inline-flex;align-items:center;padding:0 4px;color:{{t.muted}};font-size:12px">+</span>
+</div>
+<label style="display:flex;justify-content:center"><input type="checkbox" checked="{{f.dropped}}" aria-label="Drop {{f.path}}" style="width:14px;height:14px;accent-color:{{t.accent}}"></label>
+</div>
+<sc-if value="{{f.hasMsg}}" hint-placeholder-val="{{false}}">
+<div style="display:flex;gap:8px;align-items:flex-start;padding:0 12px 8px 12px;font-size:12px">
+<span style="flex:none;margin-top:2px;width:12px;height:12px;border-radius:{{f.msgR}};border:1.5px solid {{f.msgFg}};background:{{f.msgGlyphBg}};color:{{f.msgGlyphFg}};box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:800">{{f.msgGlyph}}</span>
+<span style="flex:1;color:{{f.msgText}}"><b style="color:{{f.msgFg}}">{{f.msgTitle}}</b> {{f.msg}}</span>
+<button style="flex:none;height:22px;padding:0 8px;border-radius:4px;border:1px solid {{t.borderStrong}};background:{{t.bg}};color:{{t.text}};font:inherit;font-size:11px">{{f.fix}}</button>
+</div>
+</sc-if>
+</div>
+</sc-for>
+</div>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;align-items:baseline;gap:8px"><h3 style="margin:0;font-size:13px;font-weight:600">Blocks used by room</h3><span style="font-size:12px;color:{{t.muted}}">3 of 24 builder modules · full list in the Blocks tab</span></div>
+<div style="border:1px solid {{t.border}};border-radius:8px;overflow:hidden">
+<sc-for list="{{blocks}}" as="b" hint-placeholder-count="3">
+<div style="display:grid;grid-template-columns:minmax(0,1.4fr) 20px minmax(0,1fr) minmax(0,1.6fr);gap:10px;padding:7px 12px;border-bottom:1px solid {{t.border}};font-size:12px;align-items:center;background:{{b.bg}}">
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{b.src}}</span>
+<span style="color:{{t.muted}}" aria-hidden="true">→</span>
+<span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;color:{{b.dstFg}}">{{b.dst}}</span>
+<span style="color:{{b.noteFg}}">{{b.note}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":false},"$preview":{"width":1280,"height":940}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const dark = this.props.dark ?? false;
+    const L = {bg:'#FFFFFF',surface:'#F7F7F8',panel:'#EFEFF2',hover:'#E9E9EE',sel:'#ECEEFC',border:'#E3E3E8',borderStrong:'#CFCFD6',text:'#18181B',muted:'#565662',faint:'#6E6E7A',accent:'#3E4FD6',onAccent:'#FFFFFF',warnFg:'#9A5800',warnBg:'#FFF8EA',errFg:'#C42B2B',errBg:'#FDF0F0',errOn:'#FFFFFF'};
+    const D = {bg:'#111113',surface:'#17171A',panel:'#1E1E22',hover:'#26262B',sel:'#1E2142',border:'#2A2A30',borderStrong:'#3A3A42',text:'#EDEDF0',muted:'#A3A3AE',faint:'#8C8C98',accent:'#8C98FF',onAccent:'#0E1030',warnFg:'#F5B83D',warnBg:'#241C0B',errFg:'#FF7A7A',errBg:'#2A1414',errOn:'#2A0F0F'};
+    const t = dark ? D : L;
+    const types = [
+      ['room','rooms','48','/rooms/{slug} · 4 problems','sel','err'],
+      ['post','posts','412','/news/{yyyy}/{slug}','',''],
+      ['page','pages','86','{parent_path}/{slug}','',''],
+      ['offer','offers','31','/offers/{slug}','',''],
+      ['attachment','media','2,131','Handled by media stage','',''],
+      ['tribe_events','dropped','19','Drop needs a reason','','errDrop'],
+      ['wpcf7_contact_form','dropped','6','Reason: forms rebuilt by hand in Payload','','drop'],
+      ['elementor_library','dropped','14','Reason: builder templates, not content','','drop']
+    ].map(([src,dst,count,note,sel,k]) => ({src,dst,count,note,
+      bg: sel ? t.sel : 'transparent',
+      bar: (k==='err'||k==='errDrop') ? t.errFg : 'transparent',
+      dstFg: dst==='dropped' ? t.muted : t.text,
+      deco: 'none',
+      noteFg: k==='errDrop' ? t.errFg : (k==='err' ? t.errFg : t.muted),
+      noteFont: note.startsWith('/')||note.startsWith('{') ? "ui-monospace,'SF Mono',Menlo,monospace" : 'inherit'}));
+    const F = (path,samples,fill,target,tx,o={}) => {
+      const lvl = o.lvl || '';
+      return {path,samples,fill,target,tx,dropped:!!o.drop,
+        deco: o.drop ? 'line-through' : 'none', srcFg: o.drop ? t.muted : t.text,
+        tgtFg: target.startsWith('(') ? t.muted : t.text,
+        tgtBd: lvl==='err' ? t.errFg : (lvl==='warn' ? t.warnFg : t.borderStrong),
+        rowBg: lvl==='err' ? t.errBg : (lvl==='warn' ? t.warnBg : 'transparent'),
+        bar: lvl==='err' ? t.errFg : (lvl==='warn' ? t.warnFg : 'transparent'),
+        hasMsg: !!o.msg, msg:o.msg||'', msgTitle:o.title||'', fix:o.fix||'',
+        msgFg: lvl==='err' ? t.errFg : (lvl==='warn' ? t.warnFg : t.muted),
+        msgText: lvl ? t.text : t.muted,
+        msgR: lvl==='warn' ? '2px' : '50%',
+        msgGlyph: lvl ? '!' : 'i',
+        msgGlyphBg: lvl==='err' ? t.errFg : 'transparent',
+        msgGlyphFg: lvl==='err' ? t.errOn : (lvl==='warn' ? t.warnFg : t.muted)};
+    };
+    const fields = [
+      F('post_title','"The Harbour Suite" · "Garden Room"',100,'title · text',['trim']),
+      F('post_name','"the-harbour-suite" · "garden-room"',100,'slug · text',[]),
+      F('post_content','<p>Our largest suite, with…',98,'body · richText',['html→lexical']),
+      F('acf.price_from','"£240" · "120" · "from £95pp"',94,'priceFrom · number',[],{lvl:'err',title:'Type mismatch.',msg:'3 of 45 values are not numbers ("£240", "from £95pp"). They would load as empty.',fix:'Add parse-price'}),
+      F('acf.gallery','[12 images] · [8 images]',88,'gallery · upload[]',['media-ref']),
+      F('acf.amenities','repeater · 6 rows · 4 rows',71,'amenities · array',['repeater→array']),
+      F('acf.booking_url','"https://book.seaview…/hs"',100,'(not mapped)',[],{lvl:'warn',title:'unmapped-field.',msg:'48 values have nowhere to go. Map it, or drop it with a reason so the loss is recorded.',fix:'Drop with reason'}),
+      F('acf.legacy_room_code','"HS-01" · "GR-04"',100,'(dropped)',[],{drop:true,msg:'Internal PMS code, not shown on the site.',title:'Dropped:',fix:'Edit reason'}),
+      F('_yoast_wpseo_metadesc','"Sea views from every…"',62,'meta.description',['truncate(160)'])
+    ];
+    const blocks = [
+      ['acf_flex:hero_banner','Hero','Mapped · 48 uses','',t.text,t.muted],
+      ['acf_flex:gallery_strip','Gallery','Mapped · 31 uses','',t.text,t.muted],
+      ['elementor:slides','(no converter)','converter-missing · 9 rooms would lose this section','err',t.muted,t.errFg]
+    ].map(([src,dst,note,k,dstFg,noteFg]) => ({src,dst,note,dstFg,noteFg,bg:k?t.errBg:'transparent'}));
+    return { t, types, fields, blocks };
+  }
+}
+</script>
+</body>
+</html>
