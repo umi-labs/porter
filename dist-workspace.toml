@@ -26,3 +26,10 @@ runner = "blacksmith-4vcpu-ubuntu-2404"
 
 [dist.github-custom-runners.aarch64-unknown-linux-gnu]
 runner = "blacksmith-4vcpu-ubuntu-2404-arm"
+
+# dist 0.29 defaults macOS builds to macos-13, which GitHub has retired (jobs queue forever).
+[dist.github-custom-runners.aarch64-apple-darwin]
+runner = "macos-14"
+
+[dist.github-custom-runners.x86_64-apple-darwin]
+runner = "macos-14"
