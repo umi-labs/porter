@@ -33,3 +33,17 @@ gpui-component = "=0.5.1"
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# `cargo build --release -p porter-desktop && cargo packager -p porter-desktop --release`
+# -> Porter.app and a .dmg in target/packager.
+[package.metadata.packager]
+product-name = "Porter"
+identifier = "uk.co.umidigital.porter"
+formats = ["app", "dmg"]
+binaries = [{ path = "porter-desktop", main = true }]
+out-dir = "../../target/packager"
+
+[package.metadata.packager.macos]
+minimum-system-version = "11.0"
+# Ad-hoc signed only ("-"): no Developer ID yet, so the app isn't notarised.
+signing-identity = "-"
