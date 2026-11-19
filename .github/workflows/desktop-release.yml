@@ -1,0 +1,110 @@
+# Builds Porter.app as a DMG per Mac architecture, attaches both to the GitHub release,
+# and updates the `porter-desktop` cask in umi-labs/homebrew-tap.
+# Runs after the dist Release workflow (which creates the GitHub release) succeeds on a tag,
+# or by hand for an existing tag.
+#
+# ponytail: ad-hoc signed, not notarised (no Apple Developer ID yet). The cask strips the
+# quarantine flag so Gatekeeper doesn't block it. Once there's a Developer ID: set
+# signing-identity in crates/porter-desktop/Cargo.toml, add the APPLE_* secrets cargo-packager
+# reads for notarisation, and drop the cask's postflight.
+name: Desktop release
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag, e.g. v2.0.0
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+
+jobs:
+  dmg:
+    # Release also runs (plan only) on pull requests, where head_branch is the PR's branch:
+    # only a tag push may check out code here with the write and tap tokens.
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: aarch64
+          - target: x86_64-apple-darwin
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      - run: rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: desktop-release-${{ matrix.target }}
+      - run: cargo install cargo-packager --version 0.11.8 --locked
+      - run: cargo build --release --locked -p porter-desktop --target ${{ matrix.target }}
+      - run: cargo packager -p porter-desktop --release --target ${{ matrix.target }}
+      - name: Attach the DMG to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=${TAG#v}
+          out="Porter_${version}_${{ matrix.arch }}.dmg"
+          mv target/packager/*.dmg "$out"
+          gh release upload "$TAG" "$out" --clobber
+
+  cask:
+    needs: dmg
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: umi-labs/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      - name: Write Casks/porter-desktop.rb
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=${TAG#v}
+          gh release download "$TAG" -R umi-labs/porter -p 'Porter_*.dmg'
+          arm=$(sha256sum "Porter_${version}_aarch64.dmg" | cut -d' ' -f1)
+          intel=$(sha256sum "Porter_${version}_x86_64.dmg" | cut -d' ' -f1)
+          rm Porter_*.dmg
+          mkdir -p Casks
+          cat > Casks/porter-desktop.rb <<EOF
+          cask "porter-desktop" do
+            arch arm: "aarch64", intel: "x86_64"
+
+            version "${version}"
+            sha256 arm:   "${arm}",
+                   intel: "${intel}"
+
+            url "https://github.com/umi-labs/porter/releases/download/v#{version}/Porter_#{version}_#{arch}.dmg"
+            name "Porter"
+            desc "Desktop app for Porter, Umi's site migration tool"
+            homepage "https://github.com/umi-labs/porter"
+
+            depends_on macos: ">= :big_sur"
+
+            app "Porter.app"
+
+            # Not notarised yet (no Apple Developer ID): clear quarantine so Gatekeeper allows it.
+            postflight do
+              system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{appdir}/Porter.app"]
+            end
+          end
+          EOF
+      - name: Commit and push
+        run: |
+          git config user.name "porter-release"
+          git config user.email "porter-release@users.noreply.github.com"
+          git add Casks/porter-desktop.rb
+          git diff --cached --quiet && exit 0
+          git commit -m "porter-desktop ${TAG#v}"
+          git push

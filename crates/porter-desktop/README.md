@@ -11,25 +11,31 @@ cargo run -p porter-desktop
 cargo test -p porter-desktop
 ```
 
-## Unsigned app bundle
+## Installing
 
 ```sh
-crates/porter-desktop/scripts/bundle.sh          # release build -> target/Porter.app
-PROFILE=debug crates/porter-desktop/scripts/bundle.sh   # faster, larger
-open target/Porter.app
+brew install --cask umi-labs/tap/porter-desktop
 ```
 
-The script builds `-p porter-desktop` and assembles `Contents/MacOS/porter-desktop` plus an
-`Info.plist` (bundle id `uk.co.umidigital.porter`, version from Cargo, minimum macOS 11.0).
-There is no icon yet. The bundle is **unsigned and not notarized**; for local use, clear the
-quarantine flag if it was copied from another machine or downloaded:
+Each `v*` release gets `Porter_<version>_aarch64.dmg` and `Porter_<version>_x86_64.dmg` from
+`.github/workflows/desktop-release.yml`, which also updates the cask in `umi-labs/homebrew-tap`.
+
+## Building the app locally
 
 ```sh
-xattr -dr com.apple.quarantine target/Porter.app
+cargo install cargo-packager --locked
+cargo build --release -p porter-desktop && cargo packager -p porter-desktop --release
+open target/packager/Porter.app        # the .dmg is next to it
 ```
 
-(`dist`, the release tool this repo uses for the CLI, only makes shell, PowerShell, npm,
-Homebrew and MSI installers; it has no macOS `.app` target, hence the script.)
+Config is `[package.metadata.packager]` in `Cargo.toml` (bundle id `uk.co.umidigital.porter`,
+minimum macOS 11.0). There is no icon yet. The app is **ad-hoc signed and not notarised**: Umi has
+no Apple Developer ID yet. The cask clears the quarantine flag on install; for a DMG downloaded by
+hand, clear it yourself:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Porter.app
+```
 
 Quitting with Cmd-Q while a stage runs cancels it first. GPUI gives quit handlers only 100 ms
 and cannot ask a question, so a writing load is cancelled without the confirmation the window's
@@ -115,4 +121,4 @@ OK). The build machine has no display, so **nothing below has been run**; every 
 | Window close during a run waits for it to stop (up to 10 s) | not yet run (needs a display) |
 | Opening the same project twice activates the existing window | not yet run (needs a display) |
 | Cmd-Q and window close during a run cancel it | not yet run (needs a display) |
-| `open target/Porter.app` launches (after the `xattr` step) | not yet run (needs a display) |
+| `open target/packager/Porter.app` launches (after the `xattr` step) | launches and quits cleanly (2026-11-19, cargo-packager build, arm64) |
