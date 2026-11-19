@@ -17,6 +17,8 @@ tap = "umi-labs/homebrew-tap"
 formula = "porter"
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
+# Build only the `porter` binary: --workspace would also compile GPUI (porter-desktop), which fails on Linux.
+precise-builds = true
 
 # Each target gets its own section with a runner key
 [dist.github-custom-runners.x86_64-unknown-linux-gnu]
