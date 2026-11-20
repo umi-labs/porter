@@ -103,6 +103,11 @@ pub enum Command {
     Export {
         file: PathBuf,
     },
+    /// Tidy-ups: merge look-alike types or blocks; list, suggest, enable, disable
+    Tidy {
+        #[command(subcommand)]
+        cmd: commands::tidy::TidyCmd,
+    },
     /// Sync with a Porter hub: login, link, push, pull, run, uploads
     Hub(commands::hub::HubArgs),
     /// Upgrade porter (Homebrew, or the GitHub release binary)
@@ -171,6 +176,7 @@ async fn dispatch(cli: Cli) -> Result<i32> {
         Command::Clean => clean::run(&dir, json),
         Command::Report => report::run(&dir, json),
         Command::Export { file } => export::run(&dir, json, &file),
+        Command::Tidy { cmd } => tidy::run(&dir, json, cmd),
         Command::Hub(args) => {
             let ctx = hub::Ctx {
                 dir,

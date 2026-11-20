@@ -526,3 +526,104 @@ fn into_needs_generate() {
         .assert()
         .code(2);
 }
+
+/// A Sanity project over the engine's fixture export, analysed and normalised.
+fn normalised_sanity() -> tempfile::TempDir {
+    let d = tempfile::tempdir().unwrap();
+    porter(d.path())
+        .args(["init", "kirker", "--adapter", "sanity"])
+        .write_stdin("")
+        .assert()
+        .success();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-engine/tests/fixtures/sanity");
+    let f = d.path().join("porter.toml");
+    let mut t = std::fs::read_to_string(&f).unwrap();
+    t.push_str(&format!(
+        "\n[[connectors]]\nkind = \"sanity-export\"\npath = \"{}\"\n",
+        fixture.display()
+    ));
+    std::fs::write(&f, t).unwrap();
+    for stage in ["analyse", "normalise"] {
+        porter(d.path())
+            .arg(stage)
+            .assert()
+            .code(predicate::in_iter([0, 2]));
+    }
+    d
+}
+
+fn tidy_list(d: &std::path::Path) -> Vec<serde_json::Value> {
+    let out = porter(d).args(["--json", "tidy", "list"]).output().unwrap();
+    assert!(out.status.success());
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+#[test]
+fn tidy_suggest_needs_normalised_documents() {
+    let d = tempfile::tempdir().unwrap();
+    init(d.path());
+    porter(d.path())
+        .args(["tidy", "suggest"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("run porter normalise first"));
+}
+
+#[test]
+fn tidy_enable_round_trip() {
+    let d = normalised_sanity();
+    // normalise already appended the suggestions (off); `suggest` has nothing new.
+    let rules = tidy_list(d.path());
+    let pages = rules.iter().find(|r| r["id"] == "pages").unwrap();
+    assert_eq!(
+        pages["label"],
+        "Merge City pages, Country pages and Region pages into Pages"
+    );
+    assert_eq!(pages["event"], "tidy");
+    assert_eq!(pages["v"], 1);
+    assert_eq!(pages["enabled"], false);
+    porter(d.path())
+        .args(["tidy", "enable", "pages"])
+        .assert()
+        .success();
+    let rules = tidy_list(d.path());
+    assert_eq!(
+        rules.iter().find(|r| r["id"] == "pages").unwrap()["enabled"],
+        true
+    );
+    porter(d.path())
+        .args(["tidy", "disable", "pages"])
+        .assert()
+        .success();
+    assert_eq!(
+        tidy_list(d.path())
+            .iter()
+            .find(|r| r["id"] == "pages")
+            .unwrap()["enabled"],
+        false
+    );
+    // Suggesting again adds nothing, and the file's comments survive all of it.
+    porter(d.path())
+        .args(["--json", "tidy", "suggest"])
+        .assert()
+        .success()
+        .stdout("");
+    let t = std::fs::read_to_string(d.path().join("porter.toml")).unwrap();
+    assert!(t.contains("# kind = \"sanity-api\""), "{t}");
+    assert!(t.contains("# Seeded by `porter analyse`"), "{t}");
+}
+
+#[test]
+fn tidy_enable_unknown_id_exits_1() {
+    let d = normalised_sanity();
+    porter(d.path())
+        .args(["tidy", "enable", "nope"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("known: ").and(predicate::str::contains("pages")));
+}

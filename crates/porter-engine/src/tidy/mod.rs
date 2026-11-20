@@ -6,6 +6,7 @@
 
 mod account;
 mod compile;
+pub mod suggest;
 
 pub use account::{Problem, RuleOutcome, account, check_before_load};
 pub use compile::{DISCRIMINATOR, effective_mapping};

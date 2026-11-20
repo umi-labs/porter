@@ -929,6 +929,72 @@ mod tidy {
     use porter_engine::tidy::{Problem, account, effective_mapping};
     use porter_model::{IssueKind, Severity};
 
+    /// Suggestions from the normalised fixture (analysis.json exists, so its singletons
+    /// rule, not a document count of one, keeps `regionPage` in).
+    mod suggest {
+        use super::*;
+        use porter_engine::tidy::TidyKind;
+        use porter_engine::tidy::suggest::append;
+
+        fn from_of(r: &porter_engine::tidy::TidyRule) -> Vec<String> {
+            match &r.kind {
+                TidyKind::MergeTypes { from, .. } | TidyKind::MergeBlocks { from, .. } => {
+                    let mut f = from.clone();
+                    f.sort();
+                    f
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn suggests_merging_the_three_page_types() {
+            let fx = normalised().await;
+            let rules = append(&fx.p).unwrap();
+            let r = rules
+                .iter()
+                .find(|r| matches!(r.kind, TidyKind::MergeTypes { .. }))
+                .unwrap();
+            assert_eq!(from_of(r), ["cityPage", "countryPage", "regionPage"]);
+            assert!(!r.enabled);
+            assert!(r.why.as_deref().unwrap().contains("share"), "{:?}", r.why);
+            let TidyKind::MergeTypes {
+                parent,
+                discriminator,
+                ..
+            } = &r.kind
+            else {
+                unreachable!()
+            };
+            assert_eq!(parent["cityPage"], "country");
+            assert_eq!(discriminator.as_ref().unwrap().field, "kind");
+            let on_disk = ProjectConfig::load(&fx.d.path().join("porter.toml")).unwrap();
+            assert_eq!(on_disk.tidy, rules);
+        }
+
+        #[tokio::test]
+        async fn suggests_merging_card_carousels() {
+            let fx = normalised().await;
+            let rules = append(&fx.p).unwrap();
+            let r = rules
+                .iter()
+                .find(|r| matches!(r.kind, TidyKind::MergeBlocks { .. }))
+                .unwrap();
+            assert_eq!(from_of(r), ["cardCarousel", "customCardCarousel"]);
+            assert_eq!(r.id, "card-carousels");
+            assert!(!r.enabled);
+        }
+
+        #[tokio::test]
+        async fn no_duplicate_suggestions_on_rerun() {
+            let fx = normalised().await;
+            let first = append(&fx.p).unwrap();
+            assert!(!first.is_empty());
+            let p = Arc::new(Project::open(fx.d.path()).unwrap());
+            assert!(append(&p).unwrap().is_empty());
+            assert_eq!(p.config().tidy.len(), first.len());
+        }
+    }
+
     const MERGE: &str = r#"
 [[tidy]]
 id = "destinations"

@@ -790,6 +790,23 @@ impl Env {
     }
 }
 
+impl Env {
+    /// After a successful normalise: appends disabled `[[tidy]]` suggestions to
+    /// porter.toml (none already there by `from` set), saying how many it added.
+    fn suggest_tidy(&self, out: &Mutex<RunOutcome>) {
+        match crate::tidy::suggest::append(&self.project) {
+            Ok(new) if new.is_empty() => {}
+            Ok(new) => lock_out(out).messages.push(format!(
+                "{} tidy-up suggestion(s) added to porter.toml, off; see `porter tidy list`",
+                new.len()
+            )),
+            Err(e) => lock_out(out)
+                .messages
+                .push(format!("warning: could not suggest tidy-ups: {e:#}")),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Step {
     Analyse,
@@ -1033,6 +1050,10 @@ async fn drive(env: Env, plan: RunPlan) -> RunOutcome {
             // Seed right after analyse, so the steps after it use (and record) the seed.
             if matches!(step, Step::Analyse) && matches!(code, 0 | 2) {
                 env.seed(out);
+            }
+            // Suggestions read the normalised documents, so they come after normalise.
+            if matches!(step, Step::Normalise) && matches!(code, 0 | 2) {
+                env.suggest_tidy(out);
             }
             code
         }
