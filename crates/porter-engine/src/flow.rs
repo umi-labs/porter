@@ -518,7 +518,7 @@ pub fn build(project: &Project, cfg: &ProjectConfig) -> Result<FlowGraph> {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-    for r in &cfg.tidy {
+    for r in cfg.tidy.iter().filter(|r| !r.dismissed) {
         let (from, into) = from_into(r);
         let id = format!("tidy:{}", r.id);
         let mut names: Vec<String> = from.to_vec();

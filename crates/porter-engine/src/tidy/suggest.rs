@@ -81,6 +81,7 @@ pub fn suggest_in(
             rules.push(TidyRule {
                 id,
                 enabled: false,
+                dismissed: false,
                 label: Some(format!(
                     "Merge {} into {}",
                     list(

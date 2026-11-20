@@ -17,6 +17,8 @@ pub enum TidyCmd {
     Enable { id: String },
     /// Turn a tidy-up off
     Disable { id: String },
+    /// Turn a suggestion down: off, kept in porter.toml so it isn't suggested again
+    Dismiss { id: String },
 }
 
 fn show(json: bool, action: &str, r: &TidyRule) {
@@ -28,12 +30,18 @@ fn show(json: bool, action: &str, r: &TidyRule) {
         };
         print_json(&serde_json::json!({
             "v": 1, "event": "tidy", "action": action, "id": r.id, "enabled": r.enabled,
-            "label": r.label, "why": r.why, "from": from, "into": into,
+            "dismissed": r.dismissed, "label": r.label, "why": r.why, "from": from, "into": into,
         }));
     } else {
         println!(
-            "{:<3} {:<20} {}{}",
-            if r.enabled { "on" } else { "off" },
+            "{:<9} {:<20} {}{}",
+            if r.dismissed {
+                "dismissed"
+            } else if r.enabled {
+                "on"
+            } else {
+                "off"
+            },
             r.id,
             r.label.as_deref().unwrap_or(""),
             r.why
@@ -58,21 +66,32 @@ pub fn run(dir: &Path, json: bool, cmd: TidyCmd) -> Result<i32> {
                 show(json, "suggested", r);
             }
         }
-        TidyCmd::Enable { id } => toggle(&file, json, &id, true)?,
-        TidyCmd::Disable { id } => toggle(&file, json, &id, false)?,
+        TidyCmd::Enable { id } => change(&file, json, &id, "enabled", |d| {
+            d.set_tidy_enabled(&id, true)
+        })?,
+        TidyCmd::Disable { id } => change(&file, json, &id, "disabled", |d| {
+            d.set_tidy_enabled(&id, false)
+        })?,
+        TidyCmd::Dismiss { id } => change(&file, json, &id, "dismissed", |d| d.dismiss_tidy(&id))?,
     }
     Ok(0)
 }
 
-fn toggle(file: &Path, json: bool, id: &str, on: bool) -> Result<()> {
+fn change(
+    file: &Path,
+    json: bool,
+    id: &str,
+    action: &str,
+    f: impl FnOnce(&mut MappingDoc) -> Result<()>,
+) -> Result<()> {
     let mut doc = MappingDoc::open(file)?;
-    doc.set_tidy_enabled(id, on)?;
+    f(&mut doc)?;
     let problems = doc.save();
     if !problems.is_empty() {
         anyhow::bail!("{}", problems.join("; "));
     }
     if let Some(r) = doc.config()?.tidy.iter().find(|r| r.id == id) {
-        show(json, if on { "enabled" } else { "disabled" }, r);
+        show(json, action, r);
     }
     Ok(())
 }

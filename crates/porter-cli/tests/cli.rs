@@ -666,6 +666,56 @@ fn tidy_enable_round_trip() {
     assert!(t.contains("# Seeded by `porter analyse`"), "{t}");
 }
 
+/// R26: a dismissed suggestion stays in porter.toml (so it isn't suggested again), off,
+/// and out of the flow.
+#[test]
+fn tidy_dismiss_keeps_the_rule_out_of_suggestions_and_flow() {
+    let d = normalised_sanity();
+    porter(d.path())
+        .args(["tidy", "enable", "pages"])
+        .assert()
+        .success();
+    porter(d.path())
+        .args(["tidy", "dismiss", "pages"])
+        .assert()
+        .success();
+    let rules = tidy_list(d.path());
+    let pages = rules.iter().find(|r| r["id"] == "pages").unwrap();
+    assert_eq!(
+        (&pages["enabled"], &pages["dismissed"]),
+        (&serde_json::json!(false), &serde_json::json!(true))
+    );
+    let t = std::fs::read_to_string(d.path().join("porter.toml")).unwrap();
+    assert!(t.contains("dismissed = true"), "{t}");
+    // Not suggested again, by `suggest` or the next normalise.
+    porter(d.path())
+        .args(["--json", "tidy", "suggest"])
+        .assert()
+        .success()
+        .stdout("");
+    porter(d.path())
+        .arg("normalise")
+        .assert()
+        .code(predicate::in_iter([0, 2]));
+    assert_eq!(
+        tidy_list(d.path())
+            .iter()
+            .filter(|r| r["from"] == pages["from"])
+            .count(),
+        1
+    );
+    let out = porter(d.path()).args(["--json", "flow"]).output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let nodes = v["graph"]["nodes"].as_array().unwrap();
+    assert!(nodes.iter().all(|n| n["id"] != "tidy:pages"), "{nodes:?}");
+    assert!(nodes.iter().any(|n| n["id"] == "tidy:card-carousels"));
+    porter(d.path())
+        .args(["tidy", "dismiss", "nope"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("known: "));
+}
+
 #[test]
 fn tidy_enable_unknown_id_exits_1() {
     let d = normalised_sanity();

@@ -21,6 +21,10 @@ pub struct TidyRule {
     /// Off by default: suggested rules are written disabled.
     #[serde(default)]
     pub enabled: bool,
+    /// Turned down (`porter tidy dismiss`): kept so it is never suggested again, off, and
+    /// left out of the flow.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dismissed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

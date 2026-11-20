@@ -105,7 +105,7 @@ pub enum Command {
     },
     /// How content flows: sources, tidy-ups and destinations, with the last load's counts
     Flow,
-    /// Tidy-ups: merge look-alike types or blocks; list, suggest, enable, disable
+    /// Tidy-ups: merge look-alike types or blocks; list, suggest, enable, disable, dismiss
     Tidy {
         #[command(subcommand)]
         cmd: commands::tidy::TidyCmd,

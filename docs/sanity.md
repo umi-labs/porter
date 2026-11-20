@@ -114,9 +114,12 @@ porter tidy list               # every rule, on or off
 porter tidy suggest            # look for more
 porter tidy enable <id>
 porter tidy disable <id>
+porter tidy dismiss <id>       # turn a suggestion down for good
 ```
 
 `porter normalise` suggests rules by comparing field names (at least 70% overlap). Suggestions are written to `porter.toml` **disabled**, each with a plain label and a reason. You turn one on; nobody writes them by hand. Comments in `porter.toml` survive the edit.
+
+To turn a suggestion down, dismiss it rather than deleting it: a deleted rule comes back at the next normalise. `porter tidy dismiss <id>` sets `dismissed = true` (and `enabled = false`). The rule stays in `porter.toml`, is never suggested again, and is left out of the flow. `porter tidy enable <id>` takes the dismissal back.
 
 ```toml
 [[tidy]]

@@ -287,8 +287,27 @@ impl MappingDoc {
         Ok(())
     }
 
-    /// Turns the `[[tidy]]` rule with this id on or off; an unknown id lists the known ones.
+    /// Turns the `[[tidy]]` rule with this id on or off (on also takes back a dismissal);
+    /// an unknown id lists the known ones.
     pub fn set_tidy_enabled(&mut self, id: &str, on: bool) -> Result<()> {
+        self.tidy_rule(id, |t| {
+            set_value(t, "enabled", on.into());
+            if on {
+                t.remove("dismissed");
+            }
+        })
+    }
+
+    /// Dismisses the `[[tidy]]` rule with this id: off, and `dismissed = true`, so it stays
+    /// in the file and is never suggested again.
+    pub fn dismiss_tidy(&mut self, id: &str) -> Result<()> {
+        self.tidy_rule(id, |t| {
+            set_value(t, "enabled", false.into());
+            set_value(t, "dismissed", true.into());
+        })
+    }
+
+    fn tidy_rule(&mut self, id: &str, f: impl FnOnce(&mut Table)) -> Result<()> {
         let rules = self
             .doc
             .get_mut("tidy")
@@ -304,7 +323,7 @@ impl MappingDoc {
         });
         match found {
             Some(t) => {
-                set_value(t, "enabled", on.into());
+                f(t);
                 Ok(())
             }
             None => anyhow::bail!(
@@ -494,6 +513,7 @@ mod tests {
         let rule = TidyRule {
             id: "pages".into(),
             enabled: false,
+            dismissed: false,
             label: Some("Merge".into()),
             why: None,
             kind: TidyKind::MergeBlocks {
