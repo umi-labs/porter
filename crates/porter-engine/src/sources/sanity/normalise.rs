@@ -394,12 +394,25 @@ fn normalise(ctx: &StageCtx) -> Result<()> {
             written.insert(rid);
         }
     }
-    for (key, (id, url, _)) in &old {
+    for (key, (cid, url, status)) in &old {
         if !seen_old.contains(key) {
+            // A canonical route, so verify checks the URL too.
+            let k = normalise_url(url, None).map_or_else(|| url.clone(), |k| k.0);
+            let (id, src) = canon(ItemKind::Route, &format!("route:{k}"), Some(url.clone()));
+            let title = store.get_item::<Route>(*cid)?.and_then(|r| r.title);
+            let route = Route {
+                url: url.clone(),
+                target: RouteTarget::None,
+                http_status: *status,
+                title,
+            };
+            store.put_item(ItemKind::Route, id, &src, &route)?;
+            ctx.item_status(id, ItemKind::Route, ItemStatus::Done)?;
+            written.insert(id);
             ctx.issue(
                 IssueKind::UnresolvedLink,
                 Severity::Warning,
-                Some(*id),
+                Some(id),
                 format!("old site URL {url} has no document"),
                 json!({"url": url}),
             )?;

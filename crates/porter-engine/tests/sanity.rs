@@ -796,6 +796,14 @@ async fn crawl_urls_merge_with_pattern_routes() {
         .collect();
     assert_eq!(merged.len(), 1, "{routes:?}");
     assert_eq!(merged[0].2.http_status, Some(200));
+    assert_eq!(merged[0].1.connector, "sanity");
+    let about: Vec<_> = routes
+        .iter()
+        .filter(|(_, s, r)| s.connector == "sanity" && r.url.ends_with("/about/"))
+        .collect();
+    assert_eq!(about.len(), 1, "{routes:?}");
+    assert_eq!(about[0].2.target, RouteTarget::None);
+    assert_eq!(about[0].2.http_status, Some(200));
     let issues = all_issues(&fx);
     let warn: Vec<_> = issues
         .iter()
@@ -803,6 +811,7 @@ async fn crawl_urls_merge_with_pattern_routes() {
         .collect();
     assert_eq!(warn.len(), 1, "{warn:?}");
     assert_eq!(warn[0].severity, Severity::Warning);
+    assert_eq!(warn[0].item, Some(about[0].0));
     assert_eq!(
         warn[0].message,
         format!("old site URL {}/about/ has no document", old.uri())
