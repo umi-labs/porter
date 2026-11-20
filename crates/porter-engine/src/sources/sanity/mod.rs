@@ -2,6 +2,8 @@
 //! Normalise and assets land in later tasks.
 
 mod export;
+mod portable_text;
+mod shape;
 
 use crate::config::ConnectorConfig;
 use crate::connectors::RawItem;
