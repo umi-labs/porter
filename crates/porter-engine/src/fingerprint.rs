@@ -34,6 +34,9 @@ fn canonical(v: Value) -> Value {
 /// - schema: `[mapping]`, `[destination]`
 /// - load: `[source]`, `[mapping]`, `[destination]`
 /// - verify: load's, plus `[verify]`
+///
+/// Normalise and later also take `[[tidy]]`, only when there are rules, so projects
+/// without any keep their recorded fingerprints.
 fn sections(cfg: &ProjectConfig, stage: Stage) -> Vec<(&'static str, String)> {
     fn h(v: &impl Serialize) -> String {
         // ponytail: an unserialisable section hashes as null; every section is plain data.
@@ -47,8 +50,9 @@ fn sections(cfg: &ProjectConfig, stage: Stage) -> Vec<(&'static str, String)> {
     let source = ("source", h(&cfg.source));
     let mapping = ("mapping", h(&cfg.mapping));
     let destination = ("destination", h(&cfg.destination));
-    match stage {
-        Stage::Analyse | Stage::Extract => vec![source, ("connectors", h(&cfg.connectors))],
+    let tidy = (!cfg.tidy.is_empty()).then(|| ("tidy", h(&cfg.tidy)));
+    let mut out = match stage {
+        Stage::Analyse | Stage::Extract => return vec![source, ("connectors", h(&cfg.connectors))],
         Stage::Normalise => vec![
             source,
             ("connectors", h(&cfg.connectors)),
@@ -61,7 +65,9 @@ fn sections(cfg: &ProjectConfig, stage: Stage) -> Vec<(&'static str, String)> {
         Stage::Schema => vec![mapping, destination],
         Stage::Load => vec![source, mapping, destination],
         Stage::Verify => vec![source, mapping, destination, ("verify", h(&cfg.verify))],
-    }
+    };
+    out.extend(tidy);
+    out
 }
 
 /// The fingerprint of what `stage` reads from `cfg`.
@@ -84,12 +90,17 @@ pub fn changed(recorded: Option<&str>, cfg: &ProjectConfig, stage: Stage) -> Opt
         return Some(NOT_RECORDED.into());
     };
     let old: Vec<&str> = recorded.split(';').collect();
-    for (k, v) in sections(cfg, stage) {
+    let now = sections(cfg, stage);
+    for (k, v) in &now {
         if !old.contains(&format!("{k}={v}").as_str()) {
             return Some(format!("{k} changed since"));
         }
     }
-    None
+    // A section recorded then but gone now (every tidy rule removed).
+    old.iter()
+        .filter_map(|o| o.split_once('=').map(|(k, _)| k))
+        .find(|k| !now.iter().any(|(n, _)| n == k))
+        .map(|k| format!("{k} changed since"))
 }
 
 #[cfg(test)]
@@ -186,5 +197,30 @@ to = "posts"
             .as_deref(),
             Some("mapping changed since")
         );
+    }
+
+    #[test]
+    fn tidy_rules_stale_normalise_and_later() {
+        let a = cfg(BASE);
+        let b = cfg(&format!(
+            "{BASE}\n[[tidy]]\nid = \"m\"\nkind = \"merge-types\"\nfrom = [\"post\"]\ninto = \"posts\"\n"
+        ));
+        for st in [Stage::Normalise, Stage::Schema, Stage::Load, Stage::Verify] {
+            let fp = fingerprint(&a, st);
+            assert_eq!(
+                changed(Some(&fp), &b, st).as_deref(),
+                Some("tidy changed since"),
+                "{st:?}"
+            );
+            // Removing every rule is a change too.
+            let fp = fingerprint(&b, st);
+            assert_eq!(
+                changed(Some(&fp), &a, st).as_deref(),
+                Some("tidy changed since"),
+                "{st:?}"
+            );
+        }
+        let ex = fingerprint(&a, Stage::Extract);
+        assert_eq!(changed(Some(&ex), &b, Stage::Extract), None);
     }
 }

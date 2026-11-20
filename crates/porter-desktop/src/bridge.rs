@@ -504,7 +504,12 @@ fn mapping_check(session: &Session, doc: MappingDoc) -> Result<Box<mapping::Load
         .transpose()
         .map_err(err);
     let issues = match &dest {
-        Ok(Some(d)) => schema_check::check(&summary, &config.mapping, d),
+        // The mapping load will use: tidy rules compiled in (a bad rule: the raw one).
+        Ok(Some(d)) => {
+            let m = porter_engine::tidy::effective_mapping(&config)
+                .unwrap_or_else(|_| config.mapping.clone());
+            schema_check::check(&summary, &m, d)
+        }
         _ => vec![],
     };
     Ok(Box::new(mapping::Loaded {

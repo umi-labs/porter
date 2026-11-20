@@ -100,6 +100,10 @@ pub struct TypeMap {
     /// Source field holding the title, tried before the adapter's defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_field: Option<String>,
+    /// Reference field whose target becomes the document's parent, in place of the
+    /// source's own (set by a `merge-types` tidy rule's `parent`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
     pub key_field: String,
     pub key_type: KeyType,
     /// Source status -> destination status, e.g. `private = "draft"`; `"skip"` leaves
@@ -118,6 +122,7 @@ impl Default for TypeMap {
             drop_reason: None,
             path: None,
             title_field: None,
+            parent: None,
             key_field: "legacyId".into(),
             key_type: KeyType::Text,
             status: IndexMap::new(),
@@ -206,6 +211,20 @@ pub fn block_kind_name(k: &BlockKind) -> String {
         .ok()
         .and_then(|v| v["type"].as_str().map(String::from))
         .unwrap_or_default()
+}
+
+/// Sets each document's parent from its type's `parent` field, where the mapping names
+/// one: the document that field references, else none. Normalise output is untouched;
+/// this is the load-side view.
+pub fn mapped_parents(docs: &mut [Document], m: &MappingConfig) {
+    for d in docs {
+        if let Some(f) = m.types.get(&d.doc_type).and_then(|t| t.parent.as_deref()) {
+            d.parent = match lookup(d, f) {
+                FieldValue::Doc(id) => Some(id),
+                _ => None,
+            };
+        }
+    }
 }
 
 /// Paths `lookup` answers from the document itself when no custom field has that name.

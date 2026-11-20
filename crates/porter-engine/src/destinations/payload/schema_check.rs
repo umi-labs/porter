@@ -153,6 +153,7 @@ pub fn check(
         for (src, fm) in tm.fields.iter().filter(|(_, fm)| !fm.drop) {
             if let Some(s) = stats
                 && s.field(src).is_none()
+                && src != crate::tidy::DISCRIMINATOR
             {
                 out.push(warning(
                     format!(

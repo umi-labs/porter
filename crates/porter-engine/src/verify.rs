@@ -129,14 +129,17 @@ pub async fn run(ctx: &StageCtx, dest: &dyn Destination) -> Result<()> {
     for (_, _, c, _) in store.removed_with_dest(&ctx.config.source.adapter)? {
         *removed.entry(c).or_default() += 1;
     }
-    let docs: Vec<Document> = canonical(ctx, ItemKind::Document)?;
+    // What load used: the mapping with tidy rules compiled in, parents included.
+    let mapping = crate::tidy::effective_mapping(&ctx.config)?;
+    let mut docs: Vec<Document> = canonical(ctx, ItemKind::Document)?;
+    crate::mapping::mapped_parents(&mut docs, &mapping);
     let mut checks = Checks::default();
-    counts(ctx, dest, &docs, &loaded, &removed, &mut checks).await?;
+    counts(ctx, dest, &mapping, &docs, &loaded, &removed, &mut checks).await?;
     if !ctx.cancel.is_cancelled() {
-        structure(ctx, dest, &docs, &loaded, &mut checks).await?;
+        structure(ctx, dest, &mapping, &docs, &loaded, &mut checks).await?;
     }
     if !ctx.cancel.is_cancelled() {
-        let new_paths: HashMap<ItemId, String> = paths::render_all(&docs, &ctx.config.mapping)
+        let new_paths: HashMap<ItemId, String> = paths::render_all(&docs, &mapping)
             .into_iter()
             .filter_map(|(id, r)| Some((id, r.ok()?)))
             .collect();
@@ -179,6 +182,7 @@ fn canonical_ids<T: DeserializeOwned>(ctx: &StageCtx, kind: ItemKind) -> Result<
 async fn counts(
     ctx: &StageCtx,
     dest: &dyn Destination,
+    mapping: &MappingConfig,
     docs: &[Document],
     loaded: &Loaded,
     removed: &HashMap<String, u64>,
@@ -188,7 +192,7 @@ async fn counts(
     let mut want: BTreeMap<String, (Option<String>, HashSet<String>)> = BTreeMap::new();
     // ponytail: types mapped into one collection with different key fields count by the
     // first one; count per key field if that ever happens.
-    for tm in ctx.config.mapping.types.values() {
+    for tm in mapping.types.values() {
         if let Some(to) = &tm.to {
             want.entry(to.clone())
                 .or_insert_with(|| (Some(tm.key_field.clone()), HashSet::new()));
@@ -271,11 +275,11 @@ struct Problem {
 async fn structure(
     ctx: &StageCtx,
     dest: &dyn Destination,
+    mapping: &MappingConfig,
     docs: &[Document],
     loaded: &Loaded,
     checks: &mut Checks,
 ) -> Result<()> {
-    let mapping = &ctx.config.mapping;
     let mut todo: Vec<(&Document, &TypeMap)> = vec![];
     // Every document gets a status: the ones there is nothing to check say why.
     for d in docs {

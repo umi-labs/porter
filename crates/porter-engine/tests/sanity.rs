@@ -918,3 +918,235 @@ async fn generate_into_matches_test_app() {
         assert_eq!(got, want, "{sub} differs: bless with PORTER_BLESS=1");
     }
 }
+
+/// Tidy-up rules over the fixture: compiled into the mapping, accounted before load.
+mod tidy {
+    use super::*;
+    use porter_engine::config::ProjectConfig;
+    use porter_engine::destinations::payload::PayloadDestination;
+    use porter_engine::destinations::payload::ts::{CollectionSchema, DestField, DestSchema};
+    use porter_engine::stage::Destination;
+    use porter_engine::tidy::{Problem, account, effective_mapping};
+    use porter_model::{IssueKind, Severity};
+
+    const MERGE: &str = r#"
+[[tidy]]
+id = "destinations"
+kind = "merge-types"
+enabled = true
+from = ["regionPage", "countryPage", "cityPage"]
+into = "destinations"
+discriminator = { field = "kind", values = { regionPage = "region", countryPage = "country", cityPage = "city" } }
+parent = { cityPage = "country", countryPage = "region" }
+
+[[tidy]]
+id = "card-carousels"
+kind = "merge-blocks"
+enabled = true
+from = ["cardCarousel", "customCardCarousel"]
+into = "card-carousel"
+fields = { "customCardCarousel.cards" = "items" }
+"#;
+
+    /// The fixture (each document passed through `edit`) normalised, with the seeded
+    /// mapping and `MERGE`'s rules in porter.toml.
+    async fn fx(edit: impl Fn(&mut Value)) -> Fx {
+        let fx = project(export(fixture_path().parent().unwrap().to_path_buf()));
+        let src = fx.d.path().join("export");
+        std::fs::create_dir_all(&src).unwrap();
+        let data: String = fixture()
+            .lines()
+            .map(|l| {
+                let mut v: Value = serde_json::from_str(l).unwrap();
+                edit(&mut v);
+                v.to_string() + "\n"
+            })
+            .collect();
+        std::fs::write(src.join("data.ndjson"), data).unwrap();
+        let mut cfg = fx.p.config().clone();
+        cfg.connectors = vec![export(src)];
+        cfg.mapping.forms.submission_types = vec!["enquiryForm".into()];
+        let save = |cfg: &ProjectConfig| {
+            std::fs::write(
+                fx.d.path().join("porter.toml"),
+                toml::to_string(cfg).unwrap(),
+            )
+            .unwrap();
+            Arc::new(Project::open(fx.d.path()).unwrap())
+        };
+        let p = save(&cfg);
+        let fx = Fx { p, d: fx.d };
+        stage(&fx, Stage::Analyse).await.unwrap();
+        stage(&fx, Stage::Normalise).await.unwrap();
+        cfg.mapping = porter_engine::mapping::MappingConfig::seed_from(fx.p.store());
+        porter_engine::sources::sanity::seed_mapping(&fx.p, &mut cfg.mapping).unwrap();
+        cfg.tidy = toml::from_str::<ProjectConfig>(MERGE).unwrap().tidy;
+        std::fs::write(
+            fx.d.path().join("porter.toml"),
+            toml::to_string(&cfg).unwrap(),
+        )
+        .unwrap();
+        Fx {
+            p: Arc::new(Project::open(fx.d.path()).unwrap()),
+            d: fx.d,
+        }
+    }
+
+    async fn dry_run(fx: &Fx) -> porter_engine::events::Summary {
+        let cfg = Arc::new(fx.p.config().clone());
+        run_stage(
+            fx.p.clone(),
+            cfg,
+            EventSink::new(4096),
+            CancellationToken::new(),
+            Stage::Load,
+            |ctx| async move {
+                PayloadDestination::new(&ctx.config.destination)
+                    .load(&ctx, false)
+                    .await
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    fn previews(fx: &Fx, coll: &str) -> Vec<Value> {
+        let dir = fx.d.path().join("raw/load-preview").join(coll);
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| serde_json::from_str(&std::fs::read_to_string(e.path()).unwrap()).unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn merge_types_compiles_to_one_collection_with_discriminator() {
+        let fx = fx(|_| {}).await;
+        dry_run(&fx).await;
+        let docs = previews(&fx, "destinations");
+        assert_eq!(docs.len(), 6, "{docs:?}");
+        for ty in ["regionPage", "countryPage", "cityPage"] {
+            assert!(previews(&fx, ty).is_empty(), "{ty} not loaded on its own");
+        }
+        let by_key = |sid: &str| {
+            let id = canon(ItemKind::Document, sid).to_string();
+            docs.iter()
+                .find(|d| d["legacyId"] == id.as_str())
+                .unwrap_or_else(|| panic!("{sid} not in destinations"))
+                .clone()
+        };
+        let dry = |sid: &str| json_str(&format!("dry-run:{}", canon(ItemKind::Document, sid)));
+        let region = by_key("regionPage-r1");
+        assert_eq!(region["kind"], "region");
+        assert!(region["parent"].is_null(), "{region}");
+        for c in ["countryPage-c1", "countryPage-c2"] {
+            let d = by_key(c);
+            assert_eq!(d["kind"], "country");
+            assert_eq!(d["parent"], dry("regionPage-r1"));
+        }
+        for (city, country) in [
+            ("cityPage-ci1", "countryPage-c1"),
+            ("cityPage-ci2", "countryPage-c2"),
+            ("cityPage-ci3", "countryPage-c2"),
+        ] {
+            let d = by_key(city);
+            assert_eq!(d["kind"], "city");
+            assert_eq!(d["parent"], dry(country), "{city}");
+        }
+        // Normalise stays a faithful copy: no parent recorded there.
+        assert_eq!(sdoc(&fx, "cityPage-ci1").parent, None);
+        let report: Value = serde_json::from_str(
+            &std::fs::read_to_string(fx.p.reports_dir().join("tidy.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report[0]["rule"], "destinations");
+    }
+
+    fn json_str(s: &str) -> Value {
+        Value::String(s.into())
+    }
+
+    #[tokio::test]
+    async fn shape_conflict_blocks_load() {
+        let fx = fx(|v| match v["_type"].as_str() {
+            Some("cityPage") => v["images"] = serde_json::json!(["a", "b"]),
+            Some("countryPage") => v["images"] = serde_json::json!("one"),
+            _ => {}
+        })
+        .await;
+        let s = dry_run(&fx).await;
+        assert_eq!(porter_engine::events::exit_code(&s), 2);
+        let errs: Vec<_> = all_issues(&fx)
+            .into_iter()
+            .filter(|i| i.kind == IssueKind::SchemaMismatch && i.severity == Severity::Error)
+            .collect();
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert_eq!(
+            errs[0].message,
+            "tidy \"destinations\": images is text in countryPage but list in cityPage"
+        );
+        assert_eq!(errs[0].item, None);
+        assert!(previews(&fx, "destinations").is_empty(), "nothing loaded");
+    }
+
+    #[tokio::test]
+    async fn existing_target_missing_field_is_unaccounted() {
+        let fx = fx(|_| {}).await;
+        let cfg = fx.p.config().clone();
+        let m = effective_mapping(&cfg).unwrap();
+        let mut fields: Vec<DestField> = ["legacyId", "title", "slug"]
+            .into_iter()
+            .map(String::from)
+            .chain(
+                ["regionPage", "countryPage", "cityPage"]
+                    .iter()
+                    .flat_map(|t| m.types[*t].fields.values().map(|f| f.to.clone())),
+            )
+            .filter(|f| f != "location")
+            .map(|name| DestField {
+                name,
+                kind: "json".into(),
+                ..Default::default()
+            })
+            .collect();
+        fields.dedup_by(|a, b| a.name == b.name);
+        let mut dest = DestSchema::default();
+        dest.collections.insert(
+            "destinations".into(),
+            CollectionSchema {
+                fields,
+                ..Default::default()
+            },
+        );
+        let out = account(fx.p.store(), &cfg, Some(&dest)).unwrap();
+        assert_eq!(
+            out[0].problems,
+            vec![Problem::Unaccounted {
+                field: "location".into(),
+                dest: "destinations".into()
+            }]
+        );
+        // Against a destination porter generates there's nothing to miss.
+        assert!(
+            account(fx.p.store(), &cfg, None).unwrap()[0]
+                .problems
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn accounting_counts_in_out() {
+        let fx = fx(|_| {}).await;
+        let out = account(fx.p.store(), fx.p.config(), None).unwrap();
+        let d = &out[0];
+        assert_eq!(d.rule, "destinations");
+        assert_eq!((d.items_in, d.items_out, d.dropped), (6, 6, 0));
+        assert!(d.carried > 0 && d.problems.is_empty(), "{d:?}");
+        let b = &out[1];
+        assert_eq!(b.rule, "card-carousels");
+        assert!(b.items_in >= 2 && b.items_in == b.items_out, "{b:?}");
+        assert!(b.renamed >= 1, "cards -> items: {b:?}");
+        assert!(b.problems.is_empty(), "{b:?}");
+    }
+}

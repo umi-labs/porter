@@ -7,7 +7,7 @@ use crate::destinations::payload::lexical::{IdMap, to_lexical};
 use crate::destinations::payload::schema_check::find;
 use crate::destinations::payload::ts::DestField;
 use crate::html::PendingIssue;
-use crate::mapping::{KeyType, TypeMap, apply, lookup, paths};
+use crate::mapping::{KeyType, TypeMap, apply, lookup, mapped_parents, paths};
 use anyhow::Result;
 use porter_model::{DocStatus, Document, FieldValue, IssueKind, ItemId, ItemKind, Severity};
 use serde_json::{Map, Value, json};
@@ -23,12 +23,13 @@ struct Built {
 }
 
 pub(super) async fn load(l: &mut Loader<'_>) -> Result<()> {
-    let docs: Vec<Document> = l
+    let mut docs: Vec<Document> = l
         .items::<Document>(KIND)?
         .into_iter()
         .map(|(.., d)| d)
         .collect();
-    let mapping = l.ctx.config.mapping.clone();
+    let mapping = l.mapping.clone();
+    mapped_parents(&mut docs, &mapping);
     let mut todo: Vec<(&Document, &TypeMap, &str)> = vec![];
     let mut unmapped: HashMap<&str, usize> = HashMap::new();
     for d in &docs {
@@ -423,7 +424,7 @@ fn value(l: &Loader, v: &FieldValue, f: Option<&DestField>, out: &mut Vec<Pendin
             j
         }
         FieldValue::Layout(blocks) => {
-            let (arr, issues) = to_blocks(blocks, &l.ctx.config.mapping.blocks, &l.ids, raw);
+            let (arr, issues) = to_blocks(blocks, &l.mapping.blocks, &l.ids, raw);
             out.extend(issues);
             let mut v = Value::Array(arr);
             out.extend(settle_relations(

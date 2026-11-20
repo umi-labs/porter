@@ -16,6 +16,9 @@ pub struct ProjectConfig {
     pub mapping: MappingConfig,
     pub redirects: Vec<ManualRedirect>,
     pub verify: VerifyConfig,
+    /// `[[tidy]]`: rules that merge source types or block types, compiled into the mapping.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tidy: Vec<crate::tidy::TidyRule>,
     /// Written by `porter hub link`. Never holds a token.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hub: Option<HubConfig>,

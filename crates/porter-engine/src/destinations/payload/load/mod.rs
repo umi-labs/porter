@@ -63,6 +63,8 @@ pub(super) struct Loader<'a> {
     /// None on a dry run: nothing is sent.
     client: Option<Arc<PayloadClient>>,
     schema: Option<DestSchema>,
+    /// `[mapping]` with the tidy rules compiled in.
+    mapping: crate::mapping::MappingConfig,
     ids: LoadIds,
 }
 
@@ -98,10 +100,16 @@ pub(super) async fn run(
             None
         }
     };
+    // Tidy rules are accounted first: a field one would lose or mangle blocks the load.
+    let mapping = crate::tidy::effective_mapping(&ctx.config)?;
+    if !crate::tidy::check_before_load(ctx, schema.as_ref())? {
+        return Ok(());
+    }
     let mut l = Loader {
         ctx,
         client,
         schema,
+        mapping,
         ids: LoadIds::default(),
     };
     for (item, collection, id) in ctx.project.store().dest_ids()? {

@@ -91,7 +91,7 @@ impl Destination for PayloadDestination {
 
     async fn schema(&self, mode: SchemaMode, ctx: &StageCtx) -> Result<()> {
         let summary = TypeSummary::from_store(ctx.project.store())?;
-        let mapping = &ctx.config.mapping;
+        let mapping = &crate::tidy::effective_mapping(&ctx.config)?;
         let project = ctx.project.dir();
         let config_dir = self.cfg.config_dir.as_ref().map(|d| project.join(d));
         let reports = ctx.project.reports_dir();

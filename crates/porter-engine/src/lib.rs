@@ -16,5 +16,6 @@ pub mod session;
 pub mod sources;
 pub mod stage;
 pub mod store;
+pub mod tidy;
 pub mod url;
 pub mod verify;

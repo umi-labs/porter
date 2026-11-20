@@ -528,7 +528,8 @@ fn declared_slugs(repo: &Path) -> Result<Vec<(String, String)>> {
 /// issue, and then nothing is written.
 pub fn generate_into(ctx: &StageCtx, repo: &Path) -> Result<IntoReport> {
     let summary = TypeSummary::from_store(ctx.project.store())?;
-    let b = build(&summary, &ctx.config.mapping, "../../blocks/porter");
+    let mapping = crate::tidy::effective_mapping(&ctx.config)?;
+    let b = build(&summary, &mapping, "../../blocks/porter");
     for i in &b.infos {
         ctx.issue(
             IssueKind::SchemaMismatch,
