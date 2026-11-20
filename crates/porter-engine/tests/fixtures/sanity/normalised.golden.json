@@ -333,27 +333,18 @@
             },
             "props": {
               "cards": {
-                "t": "layout",
+                "t": "list",
                 "v": [
                   {
-                    "kind": {
-                      "type": "raw"
-                    },
-                    "props": {
+                    "t": "object",
+                    "v": {
+                      "_type": {
+                        "t": "text",
+                        "v": "card"
+                      },
                       "title": {
                         "t": "text",
                         "v": "A"
-                      }
-                    },
-                    "children": [],
-                    "original": {
-                      "builder": "sanity",
-                      "module": "card",
-                      "classes": [],
-                      "settings": {
-                        "_type": "card",
-                        "_key": "c1",
-                        "title": "A"
                       }
                     }
                   }
@@ -384,13 +375,15 @@
             },
             "props": {
               "cards": {
-                "t": "layout",
+                "t": "list",
                 "v": [
                   {
-                    "kind": {
-                      "type": "raw"
-                    },
-                    "props": {
+                    "t": "object",
+                    "v": {
+                      "_type": {
+                        "t": "text",
+                        "v": "card"
+                      },
                       "title": {
                         "t": "text",
                         "v": "B"
@@ -398,25 +391,6 @@
                       "image": {
                         "t": "media",
                         "v": "f404ef39-8d2e-5737-8c0e-4117e2e254cd"
-                      }
-                    },
-                    "children": [],
-                    "original": {
-                      "builder": "sanity",
-                      "module": "card",
-                      "classes": [],
-                      "settings": {
-                        "_type": "card",
-                        "_key": "c2",
-                        "title": "B",
-                        "image": {
-                          "_type": "image",
-                          "asset": {
-                            "_type": "reference",
-                            "_ref": "image-d267af74a142296235941b40d70bc38113a0481e-800x600-jpg"
-                          },
-                          "alt": "Image 2"
-                        }
                       }
                     }
                   }
@@ -455,13 +429,15 @@
             },
             "props": {
               "items": {
-                "t": "layout",
+                "t": "list",
                 "v": [
                   {
-                    "kind": {
-                      "type": "raw"
-                    },
-                    "props": {
+                    "t": "object",
+                    "v": {
+                      "_type": {
+                        "t": "text",
+                        "v": "item"
+                      },
                       "question": {
                         "t": "text",
                         "v": "Q?"
@@ -469,18 +445,6 @@
                       "answer": {
                         "t": "text",
                         "v": "A."
-                      }
-                    },
-                    "children": [],
-                    "original": {
-                      "builder": "sanity",
-                      "module": "item",
-                      "classes": [],
-                      "settings": {
-                        "_type": "item",
-                        "_key": "a1",
-                        "question": "Q?",
-                        "answer": "A."
                       }
                     }
                   }
@@ -997,27 +961,18 @@
             },
             "props": {
               "cards": {
-                "t": "layout",
+                "t": "list",
                 "v": [
                   {
-                    "kind": {
-                      "type": "raw"
-                    },
-                    "props": {
+                    "t": "object",
+                    "v": {
+                      "_type": {
+                        "t": "text",
+                        "v": "card"
+                      },
                       "title": {
                         "t": "text",
                         "v": "A"
-                      }
-                    },
-                    "children": [],
-                    "original": {
-                      "builder": "sanity",
-                      "module": "card",
-                      "classes": [],
-                      "settings": {
-                        "_type": "card",
-                        "_key": "c1",
-                        "title": "A"
                       }
                     }
                   }
@@ -1048,13 +1003,15 @@
             },
             "props": {
               "cards": {
-                "t": "layout",
+                "t": "list",
                 "v": [
                   {
-                    "kind": {
-                      "type": "raw"
-                    },
-                    "props": {
+                    "t": "object",
+                    "v": {
+                      "_type": {
+                        "t": "text",
+                        "v": "card"
+                      },
                       "title": {
                         "t": "text",
                         "v": "B"
@@ -1062,25 +1019,6 @@
                       "image": {
                         "t": "media",
                         "v": "f404ef39-8d2e-5737-8c0e-4117e2e254cd"
-                      }
-                    },
-                    "children": [],
-                    "original": {
-                      "builder": "sanity",
-                      "module": "card",
-                      "classes": [],
-                      "settings": {
-                        "_type": "card",
-                        "_key": "c2",
-                        "title": "B",
-                        "image": {
-                          "_type": "image",
-                          "asset": {
-                            "_type": "reference",
-                            "_ref": "image-d267af74a142296235941b40d70bc38113a0481e-800x600-jpg"
-                          },
-                          "alt": "Image 2"
-                        }
                       }
                     }
                   }
@@ -1119,13 +1057,15 @@
             },
             "props": {
               "items": {
-                "t": "layout",
+                "t": "list",
                 "v": [
                   {
-                    "kind": {
-                      "type": "raw"
-                    },
-                    "props": {
+                    "t": "object",
+                    "v": {
+                      "_type": {
+                        "t": "text",
+                        "v": "item"
+                      },
                       "question": {
                         "t": "text",
                         "v": "Q?"
@@ -1133,18 +1073,6 @@
                       "answer": {
                         "t": "text",
                         "v": "A."
-                      }
-                    },
-                    "children": [],
-                    "original": {
-                      "builder": "sanity",
-                      "module": "item",
-                      "classes": [],
-                      "settings": {
-                        "_type": "item",
-                        "_key": "a1",
-                        "question": "Q?",
-                        "answer": "A."
                       }
                     }
                   }
@@ -1596,27 +1524,18 @@
             },
             "props": {
               "cards": {
-                "t": "layout",
+                "t": "list",
                 "v": [
                   {
-                    "kind": {
-                      "type": "raw"
-                    },
-                    "props": {
+                    "t": "object",
+                    "v": {
+                      "_type": {
+                        "t": "text",
+                        "v": "card"
+                      },
                       "title": {
                         "t": "text",
                         "v": "A"
-                      }
-                    },
-                    "children": [],
-                    "original": {
-                      "builder": "sanity",
-                      "module": "card",
-                      "classes": [],
-                      "settings": {
-                        "_type": "card",
-                        "_key": "c1",
-                        "title": "A"
                       }
                     }
                   }
@@ -1647,13 +1566,15 @@
             },
             "props": {
               "cards": {
-                "t": "layout",
+                "t": "list",
                 "v": [
                   {
-                    "kind": {
-                      "type": "raw"
-                    },
-                    "props": {
+                    "t": "object",
+                    "v": {
+                      "_type": {
+                        "t": "text",
+                        "v": "card"
+                      },
                       "title": {
                         "t": "text",
                         "v": "B"
@@ -1661,25 +1582,6 @@
                       "image": {
                         "t": "media",
                         "v": "f404ef39-8d2e-5737-8c0e-4117e2e254cd"
-                      }
-                    },
-                    "children": [],
-                    "original": {
-                      "builder": "sanity",
-                      "module": "card",
-                      "classes": [],
-                      "settings": {
-                        "_type": "card",
-                        "_key": "c2",
-                        "title": "B",
-                        "image": {
-                          "_type": "image",
-                          "asset": {
-                            "_type": "reference",
-                            "_ref": "image-d267af74a142296235941b40d70bc38113a0481e-800x600-jpg"
-                          },
-                          "alt": "Image 2"
-                        }
                       }
                     }
                   }
@@ -1718,13 +1620,15 @@
             },
             "props": {
               "items": {
-                "t": "layout",
+                "t": "list",
                 "v": [
                   {
-                    "kind": {
-                      "type": "raw"
-                    },
-                    "props": {
+                    "t": "object",
+                    "v": {
+                      "_type": {
+                        "t": "text",
+                        "v": "item"
+                      },
                       "question": {
                         "t": "text",
                         "v": "Q?"
@@ -1732,18 +1636,6 @@
                       "answer": {
                         "t": "text",
                         "v": "A."
-                      }
-                    },
-                    "children": [],
-                    "original": {
-                      "builder": "sanity",
-                      "module": "item",
-                      "classes": [],
-                      "settings": {
-                        "_type": "item",
-                        "_key": "a1",
-                        "question": "Q?",
-                        "answer": "A."
                       }
                     }
                   }

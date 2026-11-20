@@ -2,10 +2,10 @@
 //! `Submission`s, plus routes, manual redirects and per-use media details (connector `sanity`).
 
 use super::CANON;
-use super::analyse::{MIN_SUBMISSION_DOCS, detect_submissions};
+use super::analyse::{MIN_SUBMISSION_DOCS, detect_submissions, is_plugin_type};
 use super::assets::cdn_url;
 use super::export::{self, Export};
-use super::fields::{Cx, MediaUse, flatten};
+use super::fields::{Cx, MediaUse, array_types, flatten};
 use crate::html::PendingIssue;
 use crate::mapping::paths::render;
 use crate::mapping::transforms::slugify;
@@ -77,6 +77,9 @@ fn entries(ex: &Export) -> Vec<Entry<'_>> {
     let mut drafts: HashMap<String, &Value> = HashMap::new();
     for d in &ex.docs {
         let Some(id) = text(d, "_id") else { continue };
+        if text(d, "_type").is_some_and(is_plugin_type) {
+            continue;
+        }
         let (sid, is_draft) = match id.strip_prefix("drafts.") {
             Some(s) => (s, true),
             None => (id, false),
@@ -110,9 +113,11 @@ fn entries(ex: &Export) -> Vec<Entry<'_>> {
         .collect()
 }
 
-fn title_of(e: &Entry) -> String {
-    ["title", "name", "heading", "label"]
-        .iter()
+/// `title_field` (per type) when it holds text, else the first of title/name/heading/label.
+fn title_of(e: &Entry, title_field: Option<&str>) -> String {
+    title_field
+        .into_iter()
+        .chain(["title", "name", "heading", "label"])
         .find_map(|k| text(e.doc, k))
         .unwrap_or(&e.sid)
         .to_string()
@@ -150,6 +155,27 @@ fn normalise(ctx: &StageCtx) -> Result<()> {
         }
     }
     let asset_ids: BTreeSet<String> = ex.assets.keys().cloned().collect();
+    let mut plugin: BTreeMap<&str, usize> = BTreeMap::new();
+    for t in ex.docs.iter().filter_map(|d| text(d, "_type")) {
+        if is_plugin_type(t) {
+            *plugin.entry(t).or_default() += 1;
+        }
+    }
+    for (t, n) in plugin {
+        ctx.issue(
+            IssueKind::UnmappedField,
+            Severity::Info,
+            None,
+            format!("{t}: plugin or system documents ({n}) aren't content; skipped"),
+            json!({"type": t, "count": n}),
+        )?;
+    }
+    let arrays = array_types(
+        &ex.docs
+            .iter()
+            .filter(|d| !text(d, "_type").is_some_and(is_plugin_type))
+            .collect::<Vec<_>>(),
+    );
     let all = entries(&ex);
     let mut sub_types: BTreeSet<String> = detect_submissions(&ex.docs, MIN_SUBMISSION_DOCS)
         .into_iter()
@@ -177,11 +203,17 @@ fn normalise(ctx: &StageCtx) -> Result<()> {
         if i % 200 == 0 {
             ctx.progress(i as u64, Some(total), "documents");
         }
-        let title = title_of(e);
+        let title_field = cfg
+            .mapping
+            .types
+            .get(&e.ty)
+            .and_then(|t| t.title_field.as_deref());
+        let title = title_of(e, title_field);
         let mut cx = Cx {
             docs: &doc_ids,
             media: &media,
             assets: &asset_ids,
+            arrays: &arrays,
             uses: &mut uses,
             conflicts: &mut conflicts,
             label: format!("{} \"{title}\"", e.ty),
@@ -207,7 +239,7 @@ fn normalise(ctx: &StageCtx) -> Result<()> {
                 .into_iter()
                 .flatten()
                 .filter(|(k, _)| !k.starts_with('_') && k.as_str() != "slug")
-                .map(|(k, v)| (k.clone(), cx.conv(v, 0, false)))
+                .map(|(k, v)| (k.clone(), cx.conv(v, &format!("{}.{k}", e.ty), 0, false)))
                 .collect();
             (seo, fields)
         }));
@@ -464,4 +496,24 @@ fn drop_stale(ctx: &StageCtx, written: &HashSet<ItemId>) -> Result<()> {
         ctx.item_status(id, kind, ItemStatus::Skipped { reason })?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn title_field_wins_when_it_holds_text() {
+        let doc = json!({"_id":"a","_type":"t","title":"T","headline":"H","empty":""});
+        let e = Entry {
+            sid: "a".into(),
+            ty: "t".into(),
+            doc: &doc,
+            status: DocStatus::Published,
+            has_draft: false,
+        };
+        assert_eq!(title_of(&e, Some("headline")), "H");
+        assert_eq!(title_of(&e, Some("empty")), "T");
+        assert_eq!(title_of(&e, None), "T");
+    }
 }

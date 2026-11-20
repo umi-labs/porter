@@ -596,6 +596,17 @@ async fn builder_array_becomes_layout_with_modules() {
         ["hero", "cardCarousel", "customCardCarousel", "accordion"]
     );
     assert_eq!(blocks[3].kind, BlockKind::Accordion);
+    // An array field that only ever holds one item type is a list, not a builder.
+    let FieldValue::List(cards) = &blocks[1].props["cards"] else {
+        panic!("{:?}", blocks[1].props["cards"]);
+    };
+    let FieldValue::Object(card) = &cards[0] else {
+        panic!("{:?}", cards[0]);
+    };
+    assert_eq!(card["_type"], FieldValue::Text("card".into()));
+    assert_eq!(card["title"], FieldValue::Text("A".into()));
+    assert!(!card.contains_key("_key"));
+    assert!(matches!(blocks[3].props["items"], FieldValue::List(_)));
     assert_eq!(blocks[0].kind, BlockKind::Raw);
     assert_eq!(blocks[0].props["heading"], FieldValue::Text("Hello".into()));
     assert!(matches!(blocks[0].props["image"], FieldValue::Media(_)));
@@ -659,4 +670,24 @@ async fn second_normalise_is_stable_and_drops_stale() {
     let after = sanity_docs(&fx);
     assert_eq!(after.len(), before.len() - 1);
     assert!(after.iter().all(|d| d.source.source_id != "regionPage-r1"));
+}
+
+#[tokio::test]
+async fn plugin_documents_are_skipped_with_one_info() {
+    use porter_model::{IssueKind, Severity};
+    let fx = normalised().await;
+    assert!(sanity_docs(&fx).iter().all(|d| d.doc_type != "media.tag"));
+    let info: Vec<_> = all_issues(&fx)
+        .into_iter()
+        .filter(|i| i.message.starts_with("media.tag"))
+        .collect();
+    assert_eq!(info.len(), 1, "{info:?}");
+    assert_eq!(
+        (info[0].kind, info[0].severity),
+        (IssueKind::UnmappedField, Severity::Info)
+    );
+    assert_eq!(
+        info[0].message,
+        "media.tag: plugin or system documents (1) aren't content; skipped"
+    );
 }

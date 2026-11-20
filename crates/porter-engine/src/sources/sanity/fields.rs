@@ -27,6 +27,8 @@ pub(super) struct Cx<'a> {
     /// Asset ids in the export, downloaded or not.
     pub assets: &'a BTreeSet<String>,
     pub uses: &'a mut BTreeMap<String, MediaUse>,
+    /// Field path → item `_type`s seen in that array across the export (see [`array_types`]).
+    pub arrays: &'a HashMap<String, BTreeSet<String>>,
     /// Assets whose uses disagree.
     pub conflicts: &'a mut BTreeSet<String>,
     /// `<type> "<title>"`, for messages.
@@ -150,8 +152,8 @@ impl Cx<'_> {
         FieldValue::RichText(pt_to_richtext(items, &mut pt))
     }
 
-    /// One page-builder item.
-    fn block(&mut self, item: &Value, depth: usize) -> Block {
+    /// One page-builder item at `path` (the item's own path, see [`item_path`]).
+    fn block(&mut self, item: &Value, path: &str, depth: usize) -> Block {
         let module = item
             .get("_type")
             .and_then(Value::as_str)
@@ -175,7 +177,10 @@ impl Cx<'_> {
             {
                 continue;
             }
-            props.insert(k.clone(), self.conv(v, depth + 1, false));
+            props.insert(
+                k.clone(),
+                self.conv(v, &format!("{path}.{k}"), depth + 1, false),
+            );
         }
         Block {
             kind,
@@ -190,21 +195,36 @@ impl Cx<'_> {
         }
     }
 
-    fn object(&mut self, o: &Map<String, Value>, depth: usize, in_list: bool) -> FieldValue {
+    fn object(
+        &mut self,
+        o: &Map<String, Value>,
+        path: &str,
+        depth: usize,
+        in_list: bool,
+    ) -> FieldValue {
         FieldValue::Object(
             o.iter()
                 .filter_map(|(k, v)| match k.as_str() {
                     "_type" if in_list => Some((k.clone(), FieldValue::Text(v.as_str()?.into()))),
                     _ if k.starts_with('_') => None,
-                    _ => Some((k.clone(), self.conv(v, depth + 1, false))),
+                    _ => Some((
+                        k.clone(),
+                        self.conv(v, &format!("{path}.{k}"), depth + 1, false),
+                    )),
                 })
                 .collect(),
         )
     }
 
-    /// A field value typed by its shape. `in_list`: the value is a list item, so its
-    /// `_type` is kept as the discriminator.
-    pub(super) fn conv(&mut self, v: &Value, depth: usize, in_list: bool) -> FieldValue {
+    /// A field value typed by its shape. `path` locates it (see [`array_types`]);
+    /// `in_list`: the value is a list item, so its `_type` is kept as the discriminator.
+    pub(super) fn conv(
+        &mut self,
+        v: &Value,
+        path: &str,
+        depth: usize,
+        in_list: bool,
+    ) -> FieldValue {
         if depth > MAX_DEPTH {
             let msg = format!(
                 "{} has a value nested deeper than {MAX_DEPTH}; kept as JSON text",
@@ -217,28 +237,31 @@ impl Cx<'_> {
             Shape::Reference { id, weak } => self.reference(&id, weak),
             Shape::Image | Shape::File => self.media(v),
             Shape::PortableText => self.portable_text(v.as_array().map_or(&[], Vec::as_slice)),
-            Shape::Builder => FieldValue::Layout(
-                v.as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|x| self.block(x, depth))
-                    .collect(),
-            ),
+            // A builder when the field ever holds two item types, else a plain list.
+            Shape::Builder if self.arrays.get(path).is_some_and(|t| t.len() >= 2) => {
+                FieldValue::Layout(
+                    v.as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|x| self.block(x, &item_path(path, x), depth))
+                        .collect(),
+                )
+            }
             Shape::Slug(s) => FieldValue::Text(s),
             Shape::Geopoint { lat, lng } => FieldValue::Object(IndexMap::from([
                 ("lat".to_string(), FieldValue::Number(lat)),
                 ("lng".to_string(), FieldValue::Number(lng)),
             ])),
             Shape::Date(d) => FieldValue::Date(d),
-            Shape::List => FieldValue::List(
+            Shape::List | Shape::Builder => FieldValue::List(
                 v.as_array()
                     .into_iter()
                     .flatten()
-                    .map(|x| self.conv(x, depth + 1, true))
+                    .map(|x| self.conv(x, &item_path(path, x), depth + 1, true))
                     .collect(),
             ),
             Shape::Object => match v.as_object() {
-                Some(o) => self.object(o, depth, in_list),
+                Some(o) => self.object(o, path, depth, in_list),
                 None => FieldValue::Null,
             },
             Shape::Scalar => match v {
@@ -259,6 +282,54 @@ impl Cx<'_> {
             _ => None,
         }
     }
+}
+
+/// An array item's path: `<array path>[<item _type>]`.
+fn item_path(path: &str, item: &Value) -> String {
+    let ty = item
+        .get("_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    format!("{path}[{ty}]")
+}
+
+/// Every typed-object array in the export (published and drafts), keyed by field path,
+/// with the item `_type`s it ever holds. A path starts at the document type and adds
+/// `.<key>` per object key and `[<item _type>]` per array item, e.g.
+/// `hotelBreak.flexibleContent[cardCarousel].cards`.
+pub(super) fn array_types(docs: &[&Value]) -> HashMap<String, BTreeSet<String>> {
+    fn walk(v: &Value, path: &str, depth: usize, out: &mut HashMap<String, BTreeSet<String>>) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        match v {
+            Value::Object(o) => {
+                for (k, x) in o.iter().filter(|(k, _)| !k.starts_with('_')) {
+                    walk(x, &format!("{path}.{k}"), depth + 1, out);
+                }
+            }
+            Value::Array(a) => {
+                if shape(v) == Shape::Builder {
+                    let types = out.entry(path.to_string()).or_default();
+                    types.extend(
+                        a.iter()
+                            .filter_map(|x| x.get("_type")?.as_str())
+                            .map(str::to_string),
+                    );
+                }
+                for x in a {
+                    walk(x, &item_path(path, x), depth + 1, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = HashMap::new();
+    for d in docs {
+        let ty = d.get("_type").and_then(Value::as_str).unwrap_or_default();
+        walk(d, ty, 0, &mut out);
+    }
+    out
 }
 
 /// Flattens a submission into dotted keys with stringified scalars. Nulls and `_` keys

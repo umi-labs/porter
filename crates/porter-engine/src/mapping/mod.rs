@@ -93,6 +93,9 @@ pub struct TypeMap {
     /// URL pattern, e.g. `/{type}/{slug}/`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Source field holding the title, tried before the adapter's defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_field: Option<String>,
     pub key_field: String,
     pub key_type: KeyType,
     /// Source status -> destination status, e.g. `private = "draft"`; `"skip"` leaves
@@ -110,6 +113,7 @@ impl Default for TypeMap {
             to: None,
             drop_reason: None,
             path: None,
+            title_field: None,
             key_field: "legacyId".into(),
             key_type: KeyType::Text,
             status: IndexMap::new(),
