@@ -403,6 +403,50 @@ impl MappingConfig {
     }
 }
 
+/// After normalise: gives each mapped type (`to` set) an identity entry for every field
+/// its normalised documents hold that `[mapping.types.<t>.fields]` doesn't mention at all,
+/// nor any `[[tidy]]` rule's `drop`. Existing entries, drops included, are never changed.
+/// Comments survive (edited through `MappingDoc`). Returns `"<type>.<field>"` per entry added.
+pub fn top_up_fields(project_dir: &Path, store: &Store) -> Result<Vec<String>> {
+    let path = project_dir.join("porter.toml");
+    let mut doc = edit::MappingDoc::open(&path)?;
+    let cfg = doc.config()?;
+    let tidy_drops: std::collections::HashSet<&String> = cfg
+        .tidy
+        .iter()
+        .flat_map(|r| match &r.kind {
+            crate::tidy::TidyKind::MergeTypes { drop, .. } => drop.keys(),
+            crate::tidy::TidyKind::MergeBlocks { drop, .. } => drop.keys(),
+        })
+        .collect();
+    let mut added = vec![];
+    for (_, _, d) in store.items_decodable::<Document>(ItemKind::Document)? {
+        let Some(tm) = cfg.mapping.types.get(&d.doc_type) else {
+            continue;
+        };
+        if tm.to.is_none() {
+            continue;
+        }
+        for k in d.fields.keys() {
+            let key = format!("{}.{k}", d.doc_type);
+            if tm.fields.contains_key(k) || tidy_drops.contains(&key) {
+                continue;
+            }
+            if doc.add_identity_field(&d.doc_type, k) {
+                added.push(key);
+            }
+        }
+    }
+    if added.is_empty() {
+        return Ok(added);
+    }
+    let problems = doc.save();
+    if !problems.is_empty() {
+        anyhow::bail!("{}", problems.join("; "));
+    }
+    Ok(added)
+}
+
 /// Appends `[mapping]` to `<project_dir>/porter.toml` unless it already has a non-empty
 /// mapping table. Edits in place with toml_edit so the user's comments survive.
 /// Returns whether anything was written.

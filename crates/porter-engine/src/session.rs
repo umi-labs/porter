@@ -791,6 +791,30 @@ impl Env {
 }
 
 impl Env {
+    /// After a successful normalise: gives mapped types an entry for each field their
+    /// documents hold that the mapping doesn't mention (the seed after analyse only knows
+    /// the types), then runs the rest of the plan with it.
+    fn top_up_fields(&self, out: &Mutex<RunOutcome>) {
+        match crate::mapping::top_up_fields(self.project.dir(), self.project.store()) {
+            Ok(new) if new.is_empty() => {}
+            Ok(new) => {
+                lock_out(out).messages.push(format!(
+                    "{} field(s) added to [mapping], each to itself; edit or `drop` them in porter.toml",
+                    new.len()
+                ));
+                match ProjectConfig::load(&self.project.dir().join("porter.toml")) {
+                    Ok(c) => *self.config.lock().unwrap_or_else(|e| e.into_inner()) = Arc::new(c),
+                    Err(e) => lock_out(out)
+                        .messages
+                        .push(format!("warning: could not re-read porter.toml: {e:#}")),
+                }
+            }
+            Err(e) => lock_out(out)
+                .messages
+                .push(format!("warning: could not add fields to [mapping]: {e:#}")),
+        }
+    }
+
     /// After a successful normalise: appends disabled `[[tidy]]` suggestions to
     /// porter.toml (none already there by `from` set), saying how many it added.
     fn suggest_tidy(&self, out: &Mutex<RunOutcome>) {
@@ -1065,6 +1089,7 @@ async fn drive(env: Env, plan: RunPlan) -> RunOutcome {
             }
             // Suggestions read the normalised documents, so they come after normalise.
             if matches!(step, Step::Normalise) && matches!(code, 0 | 2) {
+                env.top_up_fields(out);
                 env.suggest_tidy(out);
             }
             if matches!(step, Step::Normalise | Step::Load(_)) && matches!(code, 0 | 2) {

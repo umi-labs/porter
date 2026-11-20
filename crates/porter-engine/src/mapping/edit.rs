@@ -158,6 +158,23 @@ impl MappingDoc {
         }
     }
 
+    /// Adds `field = { to = "<field>" }` under the type's `fields` table; never touches an
+    /// entry that is already there. Returns whether it added one.
+    pub fn add_identity_field(&mut self, ty: &str, field: &str) -> bool {
+        let t = self.type_table(ty);
+        if !t.contains_key("fields") {
+            t.insert("fields", Item::Table(Table::new()));
+        }
+        let fields = sub(t, "fields");
+        if fields.contains_key(field) {
+            return false;
+        }
+        let mut it = toml_edit::InlineTable::new();
+        it.insert("to", field.into());
+        fields.insert(field, Item::Value(Value::InlineTable(it)));
+        true
+    }
+
     /// Back to unmapped: the field's entry goes.
     pub fn remove_field(&mut self, ty: &str, field: &str) {
         sub(self.type_table(ty), "fields").remove(field);

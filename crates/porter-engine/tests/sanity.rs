@@ -697,6 +697,39 @@ async fn plugin_documents_are_skipped_with_one_info() {
     );
 }
 
+/// R17: after normalise, mapped types get an identity entry for each field the mapping
+/// doesn't mention; renamed and dropped entries (and tidy drops) are left exactly as they are.
+#[tokio::test]
+async fn top_up_adds_only_unmentioned_fields() {
+    let fx = normalised().await;
+    let f = fx.d.path().join("porter.toml");
+    let t = std::fs::read_to_string(&f).unwrap()
+        + "\n# keep me\n[mapping.types.hotelBreak]\nto = \"hotelBreak\"\n\n[mapping.types.hotelBreak.fields]\ndescription = { to = \"body\" }\nhighlights = { drop = true }\n\n[[tidy]]\nid = \"x\"\nkind = \"merge-types\"\nfrom = [\"hotelBreak\"]\ninto = \"breaks\"\ndrop = { \"hotelBreak.city\" = \"not wanted\" }\n";
+    std::fs::write(&f, t).unwrap();
+    let added = porter_engine::mapping::top_up_fields(fx.d.path(), fx.p.store()).unwrap();
+    assert!(
+        added.contains(&"hotelBreak.mainImage".to_string()),
+        "{added:?}"
+    );
+    assert!(
+        added.iter().all(|a| a.starts_with("hotelBreak.")),
+        "{added:?}"
+    );
+    let cfg = porter_engine::config::ProjectConfig::load(&f).unwrap();
+    let fields = &cfg.mapping.types["hotelBreak"].fields;
+    assert_eq!(fields["description"].to, "body");
+    assert!(fields["highlights"].drop);
+    assert!(!fields.contains_key("city"));
+    assert_eq!(fields["mainImage"].to, "mainImage");
+    assert!(std::fs::read_to_string(&f).unwrap().contains("# keep me"));
+    // Nothing more to add the second time.
+    assert!(
+        porter_engine::mapping::top_up_fields(fx.d.path(), fx.p.store())
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[tokio::test]
 async fn path_pattern_follows_references() {
     use porter_engine::mapping::TypeMap;

@@ -808,3 +808,70 @@ async fn sanity_401_exits_1_naming_the_token_var() {
         .code(1)
         .stderr(predicate::str::contains("PORTER_SANITY_TOKEN"));
 }
+
+/// The documented user path, nothing pre-seeded: init → analyse (seeds `[mapping]`) →
+/// extract → normalise → schema generate → dry-run load. A straight move must carry the
+/// content fields all the way to the preview bodies (C1).
+#[test]
+fn sanity_straight_move_carries_content_fields() {
+    let d = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        let mut c = Command::cargo_bin("porter").unwrap();
+        c.arg("--project")
+            .arg(d.path())
+            .args(args)
+            .timeout(Duration::from_secs(60))
+            .assert()
+    };
+    run(&["init", "kirker", "--adapter", "sanity"]).success();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-engine/tests/fixtures/sanity");
+    let f = d.path().join("porter.toml");
+    let t = std::fs::read_to_string(&f)
+        .unwrap()
+        .replace("# adapter = \"\"", "adapter = \"payload\"")
+        .replace(
+            "# url = \"https://cms.example.com\"",
+            "url = \"http://127.0.0.1:9\"",
+        )
+        .replace(
+            "# api_key_env = \"MY_API_KEY_ENV_VAR\"",
+            "api_key_env = \"PORTER_TEST_UNSET_KEY\"",
+        )
+        + &format!(
+            "\n[[connectors]]\nkind = \"sanity-export\"\npath = \"{}\"\n",
+            fixture.display()
+        );
+    std::fs::write(&f, t).unwrap();
+    for stage in ["analyse", "extract", "normalise"] {
+        run(&[stage]).code(predicate::in_iter([0, 2]));
+    }
+    let toml = std::fs::read_to_string(&f).unwrap();
+    assert!(toml.contains("[mapping.types.hotelBreak.fields]"), "{toml}");
+    run(&["schema", "generate"]).code(predicate::in_iter([0, 2]));
+    let ts = std::fs::read_to_string(d.path().join("generated/payload/HotelBreak.ts")).unwrap();
+    for field in ["description", "highlights", "mainImage"] {
+        assert!(ts.contains(&format!("name: \"{field}\"")), "{field}: {ts}");
+    }
+    run(&["load"]).code(predicate::in_iter([0, 2]));
+    let dir = d.path().join("raw/load-preview/hotelBreak");
+    let bodies: Vec<serde_json::Value> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| {
+            serde_json::from_str(&std::fs::read_to_string(e.unwrap().path()).unwrap()).unwrap()
+        })
+        .collect();
+    assert_eq!(bodies.len(), 3);
+    for v in &bodies {
+        for field in ["description", "seo", "flexibleContent"] {
+            assert!(
+                v.get(field).is_some_and(|x| !x.is_null()),
+                "{field} not sent: {v}"
+            );
+        }
+    }
+    assert!(
+        bodies.iter().any(|v| v["highlights"].is_array()),
+        "{bodies:?}"
+    );
+}
