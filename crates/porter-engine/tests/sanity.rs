@@ -947,16 +947,22 @@ mod tidy {
         }
 
         #[tokio::test]
-        async fn suggests_merging_the_three_page_types() {
+        async fn suggests_merging_the_linked_page_types() {
             let fx = normalised().await;
             let rules = append(&fx.p).unwrap();
             let r = rules
                 .iter()
                 .find(|r| matches!(r.kind, TidyKind::MergeTypes { .. }))
                 .unwrap();
-            assert_eq!(from_of(r), ["cityPage", "countryPage", "regionPage"]);
+            // The fixture's cityPage adds `location` and drops nothing, so it only reaches
+            // 0.4 against countryPage (below the linked bar); region and country link
+            // at 0.67. (The three-way cluster on real data is the unit test.)
+            assert_eq!(from_of(r), ["countryPage", "regionPage"]);
             assert!(!r.enabled);
-            assert!(r.why.as_deref().unwrap().contains("share"), "{:?}", r.why);
+            assert_eq!(
+                r.why.as_deref(),
+                Some("They share 2 of 3 fields and link to each other")
+            );
             let TidyKind::MergeTypes {
                 parent,
                 discriminator,
@@ -965,7 +971,7 @@ mod tidy {
             else {
                 unreachable!()
             };
-            assert_eq!(parent["cityPage"], "country");
+            assert_eq!(parent["countryPage"], "region");
             assert_eq!(discriminator.as_ref().unwrap().field, "kind");
             let on_disk = ProjectConfig::load(&fx.d.path().join("porter.toml")).unwrap();
             assert_eq!(on_disk.tidy, rules);

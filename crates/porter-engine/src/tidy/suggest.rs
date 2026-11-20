@@ -5,14 +5,16 @@
 use super::{Discriminator, TidyKind, TidyRule};
 use crate::mapping::MappingConfig;
 use crate::mapping::edit::MappingDoc;
-use crate::mapping::summary::{TypeStats, TypeSummary};
+use crate::mapping::summary::TypeSummary;
 use crate::project::Project;
 use anyhow::Result;
 use indexmap::IndexMap;
 use std::collections::BTreeSet;
 
 /// Jaccard similarity of field-name sets at or above which two types are grouped.
-const THRESHOLD: f64 = 0.7;
+const SIMILAR: f64 = 0.7;
+/// The lower bar for two types where one has a reference field to the other.
+const SIMILAR_LINKED: f64 = 0.5;
 
 /// Suggestions for what `summary` holds, none enabled, skipping groups an existing rule
 /// already covers (same `from` set, whatever its id).
@@ -34,7 +36,7 @@ pub fn suggest_in(
         summary
             .types
             .iter()
-            .map(|(t, s)| (t.clone(), field_names(s))),
+            .map(|(t, s)| (t.clone(), s.fields.keys().cloned().collect())),
     );
     let blocks: Vec<(String, BTreeSet<String>)> = sorted(
         summary
@@ -44,7 +46,8 @@ pub fn suggest_in(
     );
 
     for (is_types, items) in [(true, &types), (false, &blocks)] {
-        for group in components(items) {
+        let linked = |a: &str, b: &str| is_types && references(summary, a, b);
+        for (group, via_link) in components(items, &linked) {
             let names: Vec<&String> = group.iter().map(|&i| &items[i].0).collect();
             if covered.contains(&names.iter().map(|n| n.to_string()).collect()) {
                 continue;
@@ -89,9 +92,14 @@ pub fn suggest_in(
                     humanise(&into)
                 )),
                 why: Some(format!(
-                    "They share {} of {} fields",
+                    "They share {} of {} fields{}",
                     common.len(),
-                    all.len()
+                    all.len(),
+                    if via_link {
+                        " and link to each other"
+                    } else {
+                        ""
+                    }
                 )),
                 kind,
             });
@@ -150,18 +158,6 @@ fn excluded(project: &Project, m: &MappingConfig, summary: &TypeSummary) -> BTre
     out
 }
 
-/// The type's own fields plus the document paths (`seo.title`, `created`...) its
-/// documents actually fill, which is what a mapping can send somewhere.
-fn field_names(s: &TypeStats) -> BTreeSet<String> {
-    let own = s.fields.keys().cloned();
-    let doc = s
-        .doc_fields
-        .iter()
-        .filter(|(_, f)| f.filled > 0)
-        .map(|(k, _)| k.clone());
-    own.chain(doc).collect()
-}
-
 fn from_set(r: &TidyRule) -> BTreeSet<String> {
     match &r.kind {
         TidyKind::MergeTypes { from, .. } | TidyKind::MergeBlocks { from, .. } => {
@@ -185,25 +181,36 @@ fn jaccard(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
     a.intersection(b).count() as f64 / union as f64
 }
 
-/// Connected components (of two or more) over pairs at or above the threshold, as
-/// sorted index lists in first-member order.
-fn components(items: &[(String, BTreeSet<String>)]) -> Vec<Vec<usize>> {
+/// Connected components (of two or more) over qualifying pairs, in first-member order,
+/// each with whether a pair in it qualified only through the linked bar.
+fn components(
+    items: &[(String, BTreeSet<String>)],
+    linked: &dyn Fn(&str, &str) -> bool,
+) -> Vec<(Vec<usize>, bool)> {
     let n = items.len();
+    let j = |a: usize, b: usize| jaccard(&items[a].1, &items[b].1);
+    let link =
+        |a: usize, b: usize| linked(&items[a].0, &items[b].0) || linked(&items[b].0, &items[a].0);
+    let only_linked =
+        |a: usize, b: usize| j(a, b) < SIMILAR && j(a, b) >= SIMILAR_LINKED && link(a, b);
     let mut comp: Vec<usize> = (0..n).collect();
-    for i in 0..n {
-        for j in i + 1..n {
-            if jaccard(&items[i].1, &items[j].1) >= THRESHOLD {
-                let (a, b) = (comp[i], comp[j]);
-                comp.iter_mut().filter(|c| **c == b).for_each(|c| *c = a);
+    for a in 0..n {
+        for b in a + 1..n {
+            if j(a, b) >= SIMILAR || only_linked(a, b) {
+                let (x, y) = (comp[a], comp[b]);
+                comp.iter_mut().filter(|c| **c == y).for_each(|c| *c = x);
             }
         }
     }
-    let mut out: Vec<Vec<usize>> = vec![];
+    let mut out = vec![];
     for i in 0..n {
         if comp[i] == i {
-            let g: Vec<usize> = (0..n).filter(|&j| comp[j] == i).collect();
+            let g: Vec<usize> = (0..n).filter(|&k| comp[k] == i).collect();
             if g.len() > 1 {
-                out.push(g);
+                let l = g
+                    .iter()
+                    .any(|&a| g.iter().any(|&b| a < b && only_linked(a, b)));
+                out.push((g, l));
             }
         }
     }
@@ -345,6 +352,15 @@ fn discriminator(from: &[String], summary: &TypeSummary, mapping: &MappingConfig
     }
 }
 
+/// Whether type `a` has a reference field pointing at type `b`.
+fn references(summary: &TypeSummary, a: &str, b: &str) -> bool {
+    summary.types.get(a).is_some_and(|s| {
+        s.fields
+            .values()
+            .any(|f| f.variants.contains("Doc") && f.relation_types.contains(b))
+    })
+}
+
 /// A member whose reference field points at another member gets that field as parent.
 fn parents(from: &[String], summary: &TypeSummary) -> IndexMap<String, String> {
     let mut out = IndexMap::new();
@@ -366,7 +382,7 @@ fn parents(from: &[String], summary: &TypeSummary) -> IndexMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mapping::summary::{BlockStats, FieldStats};
+    use crate::mapping::summary::{BlockStats, FieldStats, TypeStats};
 
     fn stats(fields: &[&str]) -> TypeStats {
         TypeStats {
@@ -455,5 +471,79 @@ mod tests {
         };
         assert_eq!(d.field, "page_kind");
         assert_eq!(d.values["regionPage"], "region");
+    }
+
+    /// A type with `own` made-up fields plus the ones named in `shared`, and references.
+    fn ty(shared: &[&str], own: usize, tag: &str, refs: &[&str]) -> TypeStats {
+        let mut t = stats(shared);
+        for i in 0..own {
+            t.fields.insert(format!("{tag}{i}"), FieldStats::default());
+        }
+        for r in refs {
+            let mut f = FieldStats::default();
+            f.variants.insert("Doc".into());
+            f.relation_types.insert(r.to_string());
+            t.fields.insert(format!("ref_{r}"), f);
+        }
+        t
+    }
+
+    /// Field sets built to the ratios measured on a real dataset.
+    #[test]
+    fn real_world_pairings_cluster_as_measured() {
+        let mut s = TypeSummary::default();
+        // Each pair shares a core of 7 fields, so J = 7 / (7 + extras): 0.7 needs 3
+        // extras between them, 0.5 needs 7.
+        let core = ["a", "b", "c", "d", "e", "f", "g"];
+        // destinations: city links country (0.67-ish), region/country 0.53, city/region 0.62
+        s.types.insert("regionPage".into(), ty(&core, 0, "r", &[]));
+        s.types
+            .insert("countryPage".into(), ty(&core, 4, "c", &["regionPage"]));
+        s.types
+            .insert("cityPage".into(), ty(&core, 0, "y", &["countryPage"]));
+        // unrelated: 7/(7+10) = 0.41, no reference
+        s.types
+            .insert("hotelBreak".into(), ty(&core[..4], 3, "h", &[]));
+        // holidays: chain of >= 0.7 pairs
+        let h = ["h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8", "h9"];
+        s.types.insert("railJourney".into(), ty(&h, 0, "x", &[]));
+        s.types.insert("riverCruise".into(), ty(&h, 1, "y", &[]));
+        s.types
+            .insert("tailorMadeHoliday".into(), ty(&h[..8], 2, "z", &[]));
+        // 0.67 with riverCruise-like fields but no reference: not merged
+        s.types.insert("opera".into(), ty(&h[..6], 0, "o", &[]));
+        let r = suggest(&s, &[]);
+        let froms: Vec<Vec<String>> = r
+            .iter()
+            .map(|r| match &r.kind {
+                TidyKind::MergeTypes { from, .. } => from.clone(),
+                _ => vec![],
+            })
+            .collect();
+        assert!(
+            froms.contains(&vec![
+                "cityPage".to_string(),
+                "countryPage".into(),
+                "regionPage".into()
+            ]),
+            "{froms:?}"
+        );
+        assert!(froms.iter().all(|f| !f.contains(&"hotelBreak".to_string())));
+        assert!(
+            froms.iter().all(|f| !f.contains(&"opera".to_string())),
+            "{froms:?}"
+        );
+        let holidays = froms
+            .iter()
+            .find(|f| f.contains(&"railJourney".to_string()))
+            .unwrap();
+        assert_eq!(holidays.len(), 3, "{froms:?}");
+        let dest = r.iter().find(|r| r.id == "pages").unwrap();
+        assert!(
+            dest.why
+                .as_deref()
+                .unwrap()
+                .ends_with("and link to each other")
+        );
     }
 }

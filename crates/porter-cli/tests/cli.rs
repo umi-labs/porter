@@ -582,7 +582,7 @@ fn tidy_enable_round_trip() {
     let pages = rules.iter().find(|r| r["id"] == "pages").unwrap();
     assert_eq!(
         pages["label"],
-        "Merge City pages, Country pages and Region pages into Pages"
+        "Merge Country pages and Region pages into Pages"
     );
     assert_eq!(pages["event"], "tidy");
     assert_eq!(pages["v"], 1);
