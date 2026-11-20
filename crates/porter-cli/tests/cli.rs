@@ -452,17 +452,18 @@ fn init_sanity_project() {
     assert!(t.contains("# kind = \"sanity-api\""), "{t}");
 }
 
-/// A project whose mapping sends `post` to `pages`, and a repo for `--into`.
+/// A project whose mapping sends `post` to `slug`, and a repo for `--into` declaring `pages`.
 fn into_fixture(slug: &str) -> (tempfile::TempDir, tempfile::TempDir) {
+    into_fixture_with(&format!("[mapping.types.post]\nto = \"{slug}\"\n"))
+}
+
+fn into_fixture_with(mapping: &str) -> (tempfile::TempDir, tempfile::TempDir) {
     let d = tempfile::tempdir().unwrap();
     init(d.path());
     let toml = std::fs::read_to_string(d.path().join("porter.toml"))
         .unwrap()
         .replace("# adapter = \"\"", "adapter = \"payload\"")
-        .replace(
-            "# [mapping]",
-            &format!("[mapping.types.post]\nto = \"{slug}\"\n"),
-        );
+        .replace("# [mapping]", mapping);
     std::fs::write(d.path().join("porter.toml"), toml).unwrap();
     let repo = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(repo.path().join("src/collections")).unwrap();
@@ -474,9 +475,56 @@ fn into_fixture(slug: &str) -> (tempfile::TempDir, tempfile::TempDir) {
     (d, repo)
 }
 
+/// A type mapped onto the app's own collection on purpose: that collection isn't
+/// generated (the app has it), the rest is, and the report says so (R20).
+#[test]
+fn schema_generate_into_skips_a_collection_mapped_onto_the_app() {
+    let (d, repo) = into_fixture_with(
+        "[mapping.types.post]\nto = \"pages\"\n\n[mapping.types.event]\nto = \"events\"\n",
+    );
+    porter(d.path())
+        .args(["schema", "generate", "--into"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "`post` maps onto existing collection `pages` (src/collections/Pages.ts); not generated: run porter schema check for missing fields",
+        ));
+    let porter_dir = repo.path().join("src/collections/porter");
+    assert!(!porter_dir.join("Pages.ts").exists());
+    assert!(porter_dir.join("Events.ts").is_file());
+    let index = std::fs::read_to_string(porter_dir.join("index.ts")).unwrap();
+    assert!(index.contains("[Events]"), "{index}");
+}
+
+/// A block slug or interface name the app already declares stops everything (R20).
+#[test]
+fn schema_generate_into_block_collision_writes_nothing() {
+    let (d, repo) = into_fixture_with(
+        "[mapping.types.post]\nto = \"articles\"\n\n[[mapping.blocks]]\nmatch = { kind = \"hero\" }\nto = \"hero\"\n",
+    );
+    std::fs::create_dir_all(repo.path().join("src/blocks/Hero")).unwrap();
+    std::fs::write(
+        repo.path().join("src/blocks/Hero/config.ts"),
+        "export const Hero = { slug: 'hero', interfaceName: 'HeroBlock', fields: [] }\n",
+    )
+    .unwrap();
+    porter(d.path())
+        .args(["schema", "generate", "--into"])
+        .arg(repo.path())
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "block `hero` is already declared in src/blocks/Hero/config.ts; nothing written",
+        ));
+    assert!(!repo.path().join("src/collections/porter").exists());
+}
+
+/// A collection porter would generate under a name the app already has, with no type
+/// mapped onto it by design (the seed's `pages` -> `pages`), stops everything.
 #[test]
 fn schema_generate_into_collision_exits_2_and_writes_nothing() {
-    let (d, repo) = into_fixture("pages");
+    let (d, repo) = into_fixture_with("[mapping.types.pages]\nto = \"pages\"\n");
     porter(d.path())
         .args(["schema", "generate", "--into"])
         .arg(repo.path())

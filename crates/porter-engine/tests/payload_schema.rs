@@ -1089,8 +1089,10 @@ async fn into(
     (summary, out, issues)
 }
 
+/// `post` maps onto the app's `pages` on purpose (R20): `pages` is left to the app, with a
+/// warning; nothing collides. (The accidental case, `pages` -> `pages`, is the CLI test.)
 #[tokio::test]
-async fn into_refuses_existing_slug() {
+async fn into_skips_a_collection_mapped_onto_the_app() {
     let repo = tempfile::tempdir().unwrap();
     write(
         repo.path(),
@@ -1099,16 +1101,14 @@ async fn into_refuses_existing_slug() {
     );
     let (summary, report, issues) = into(repo.path(), "pages").await;
     let report = report.unwrap();
-    assert_eq!(report.collisions, ["pages"]);
-    assert!(report.written.is_empty());
-    assert!(!repo.path().join("src/collections/porter").exists());
-    assert!(!repo.path().join("src/blocks/porter").exists());
-    assert_eq!(summary.errors, 1);
-    assert_eq!(porter_engine::events::exit_code(&summary), 2);
+    assert!(report.collisions.is_empty());
+    assert_eq!(report.skipped, ["pages"]);
+    assert!(!repo.path().join("src/collections/porter/Pages.ts").exists());
+    assert_eq!(summary.errors, 0);
     assert!(
-        issues
-            .iter()
-            .any(|i| i.severity == Severity::Error && i.message.contains("pages")),
+        issues.iter().any(|i| i.severity == Severity::Warning
+            && i.message
+                .contains("`post` maps onto existing collection `pages`")),
         "{issues:?}"
     );
 }

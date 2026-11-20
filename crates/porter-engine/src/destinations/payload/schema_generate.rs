@@ -291,6 +291,8 @@ pub struct Generated {
 pub struct IntoReport {
     pub written: Vec<PathBuf>,
     pub collisions: Vec<String>,
+    /// Collections a type maps onto on purpose that the app already declares: not generated.
+    pub skipped: Vec<String>,
 }
 
 /// The `payload.config.ts` lines that wire in what `--into` wrote.
@@ -498,19 +500,29 @@ pub fn generate(
     })
 }
 
-/// Collection slugs declared in `<repo>/src/collections/*.ts` (not under `porter/`, which
-/// is ours), with the file that declares each.
-fn declared_slugs(repo: &Path) -> Result<Vec<(String, String)>> {
-    let dir = repo.join("src").join("collections");
-    let Ok(rd) = std::fs::read_dir(&dir) else {
-        return Ok(vec![]);
-    };
-    let re = regex::Regex::new(r#"slug:\s*['"]([^'"]+)['"]"#)?;
-    let mut files: Vec<PathBuf> = rd
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "ts"))
-        .collect();
+/// `(value, file)` for every `<key>: '<value>'` in the `.ts` files under `<repo>/<dir>`,
+/// subfolders included, except `porter/` (ours). Files are read in sorted order.
+fn declared(repo: &Path, dir: &str, key: &str) -> Result<Vec<(String, String)>> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for p in rd.filter_map(|e| e.ok().map(|e| e.path())) {
+            if p.is_dir() {
+                if p.file_name()
+                    .is_some_and(|n| n != "porter" && n != "node_modules")
+                {
+                    walk(&p, out);
+                }
+            } else if p.extension().is_some_and(|x| x == "ts" || x == "tsx") {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = vec![];
+    walk(&repo.join(dir), &mut files);
     files.sort();
+    let re = regex::Regex::new(&format!(r#"\b{key}:\s*['"]([^'"]+)['"]"#))?;
     let mut out = vec![];
     for f in files {
         let text = std::fs::read_to_string(&f).with_context(|| format!("read {}", f.display()))?;
@@ -524,8 +536,10 @@ fn declared_slugs(repo: &Path) -> Result<Vec<(String, String)>> {
 
 /// `porter schema generate --into <repo>`: collections to `src/collections/porter/`, blocks
 /// to `src/blocks/porter/`, and `src/collections/porter/index.ts` exporting
-/// `porterCollections` and `porterBlocks`. A slug the repo already declares is an Error
-/// issue, and then nothing is written.
+/// `porterCollections` and `porterBlocks`. A collection a type maps onto on purpose (its
+/// `to` names an app collection) is left to the app, with a Warning. A collection slug
+/// the app declares with no type mapped onto it by design, or a block slug or interface
+/// name it declares, is an Error issue, and then nothing is written.
 pub fn generate_into(ctx: &StageCtx, repo: &Path) -> Result<IntoReport> {
     let summary = TypeSummary::from_store(ctx.project.store())?;
     let mapping = crate::tidy::effective_mapping(&ctx.config)?;
@@ -539,10 +553,22 @@ pub fn generate_into(ctx: &StageCtx, repo: &Path) -> Result<IntoReport> {
             json!({}),
         )?;
     }
-    let declared = declared_slugs(repo)?;
+    let declared_colls = declared(repo, "src/collections", "slug")?;
     let mut report = IntoReport::default();
     for (slug, ..) in &b.collections {
-        if let Some((_, file)) = declared.iter().find(|(s, _)| s == slug) {
+        let Some((_, file)) = declared_colls.iter().find(|(s, _)| s == slug) else {
+            continue;
+        };
+        // Mapped onto the app's collection by design (a type of another name sends its
+        // documents there): the app has it, so it isn't generated. Otherwise (the seed's
+        // `pages` -> `pages`) it's an accident, and nothing is written.
+        let onto: Vec<&str> = mapping
+            .types
+            .iter()
+            .filter(|(ty, tm)| tm.to.as_deref() == Some(slug.as_str()) && *ty != slug)
+            .map(|(ty, _)| ty.as_str())
+            .collect();
+        if onto.is_empty() {
             ctx.issue(
                 IssueKind::SchemaMismatch,
                 Severity::Error,
@@ -551,15 +577,57 @@ pub fn generate_into(ctx: &StageCtx, repo: &Path) -> Result<IntoReport> {
                 json!({"slug": slug, "file": file}),
             )?;
             report.collisions.push(slug.clone());
+        } else {
+            let types = onto.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>();
+            ctx.issue(
+                IssueKind::SchemaMismatch,
+                Severity::Warning,
+                None,
+                format!(
+                    "{} maps onto existing collection `{slug}` ({file}); not generated: run porter schema check for missing fields",
+                    types.join(", ")
+                ),
+                json!({"slug": slug, "file": file, "types": onto}),
+            )?;
+            report.skipped.push(slug.clone());
+        }
+    }
+    let block_slugs_declared = declared(repo, "src/blocks", "slug")?;
+    let interfaces = declared(repo, "src/blocks", "interfaceName")?;
+    for (slug, (ident, _)) in block_slugs(&mapping).iter().zip(&b.blocks) {
+        let hit = block_slugs_declared
+            .iter()
+            .find(|(s, _)| s == slug)
+            .map(|(_, f)| format!("block `{slug}` is already declared in {f}"))
+            .or_else(|| {
+                interfaces
+                    .iter()
+                    .find(|(s, _)| s == ident)
+                    .map(|(_, f)| format!("block interface `{ident}` is already declared in {f}"))
+            });
+        if let Some(why) = hit {
+            ctx.issue(
+                IssueKind::SchemaMismatch,
+                Severity::Error,
+                None,
+                format!("{why}; nothing written"),
+                json!({"slug": slug, "interface": ident}),
+            )?;
+            report.collisions.push(slug.clone());
         }
     }
     if !report.collisions.is_empty() {
         return Ok(report);
     }
+    let made: Vec<&(String, String, String)> = b
+        .collections
+        .iter()
+        .filter(|c| !report.skipped.contains(&c.0))
+        .collect();
     let colls = repo.join("src").join("collections").join("porter");
     let blocks = repo.join("src").join("blocks").join("porter");
     let mut imports = String::new();
-    for (_, ident, text) in &b.collections {
+    for (_, ident, text) in &made {
         let p = colls.join(format!("{ident}.ts"));
         write(&p, text)?;
         imports.push_str(&format!("import {{ {ident} }} from './{ident}'\n"));
@@ -580,7 +648,7 @@ pub fn generate_into(ctx: &StageCtx, repo: &Path) -> Result<IntoReport> {
          {imports}\n\
          export const porterCollections: CollectionConfig[] = [{}]\n\
          export const porterBlocks: Block[] = [{}]\n",
-        list(b.collections.iter().map(|c| c.1.as_str()).collect()),
+        list(made.iter().map(|c| c.1.as_str()).collect()),
         list(b.blocks.iter().map(|x| x.0.as_str()).collect()),
     );
     let p = colls.join("index.ts");
