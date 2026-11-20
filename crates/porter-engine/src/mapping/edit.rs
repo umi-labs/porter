@@ -467,6 +467,24 @@ fields = { title = "heading" }
     }
 
     #[test]
+    fn lookups_parse_and_survive_edits() {
+        let text = format!("{FIXTURE}\n[mapping.lookups.tiers]\ngold = \"premium\"\n");
+        let (_d, p) = fixture(&text);
+        let mut doc = MappingDoc::open(&p).unwrap();
+        assert_eq!(
+            doc.config().unwrap().mapping.lookups["tiers"]["gold"],
+            "premium"
+        );
+        doc.set_path("post", Some("/{slug}"));
+        assert_eq!(doc.save(), Vec::<String>::new());
+        let after = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            after.contains("[mapping.lookups.tiers]\ngold = \"premium\""),
+            "{after}"
+        );
+    }
+
+    #[test]
     fn edit_preserves_other_lines() {
         let (_d, p) = fixture(FIXTURE);
         let mut doc = MappingDoc::open(&p).unwrap();

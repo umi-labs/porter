@@ -37,6 +37,10 @@ pub struct MappingConfig {
     pub menus: MenusMap,
     #[serde(skip_serializing_if = "SettingsMap::is_empty")]
     pub settings: SettingsMap,
+    /// Named value maps for path patterns: `{field|lookup:<table>}` maps the field's value
+    /// through `lookups.<table>`.
+    #[serde(skip_serializing_if = "IndexMap::is_empty")]
+    pub lookups: IndexMap<String, IndexMap<String, String>>,
 }
 
 /// Where menus go: a `collection` (one doc per menu: `title`, `items`), or a `global`

@@ -415,9 +415,14 @@ async fn assets_cancel_marks_remaining_partial() {
 /// A project over the fixture with `enquiryForm` listed as submissions, analysed, with the
 /// three referenced assets already in the store (as extract leaves them), then normalised.
 async fn normalised() -> Fx {
+    normalised_with(|_| {}).await
+}
+
+async fn normalised_with(tweak: impl FnOnce(&mut porter_engine::config::ProjectConfig)) -> Fx {
     let fx = project(export(fixture_path().parent().unwrap().to_path_buf()));
     let mut cfg = fx.p.config().clone();
     cfg.mapping.forms.submission_types = vec!["enquiryForm".into()];
+    tweak(&mut cfg);
     std::fs::write(
         fx.d.path().join("porter.toml"),
         toml::to_string(&cfg).unwrap(),
@@ -690,4 +695,39 @@ async fn plugin_documents_are_skipped_with_one_info() {
         info[0].message,
         "media.tag: plugin or system documents (1) aren't content; skipped"
     );
+}
+
+#[tokio::test]
+async fn path_pattern_follows_references() {
+    use porter_engine::mapping::TypeMap;
+    use porter_model::{IssueKind, Severity};
+    let fx = normalised_with(|c| {
+        let tm = |p: &str| TypeMap {
+            path: Some(p.into()),
+            ..Default::default()
+        };
+        c.mapping.types.insert(
+            "cityPage".into(),
+            tm("/destinations/{country.region.slug}/{country.slug}/{slug}"),
+        );
+        // Spain has a region; this pattern can't resolve for the city without one.
+        c.mapping
+            .types
+            .insert("countryPage".into(), tm("/c/{region.nope}/{slug}"));
+    })
+    .await;
+    assert_eq!(
+        sdoc(&fx, "cityPage-ci1").path,
+        "/destinations/europe/spain/madrid"
+    );
+    // Unresolvable token: warning naming the token, fallback path.
+    let c1 = sdoc(&fx, "countryPage-c1");
+    assert_eq!(c1.path, "/countryPage/spain/");
+    let w: Vec<_> = all_issues(&fx)
+        .into_iter()
+        .filter(|i| i.item == Some(c1.id) && i.kind == IssueKind::UnresolvedRelation)
+        .collect();
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert_eq!(w[0].severity, Severity::Warning);
+    assert!(w[0].message.contains("{region.nope}"), "{}", w[0].message);
 }

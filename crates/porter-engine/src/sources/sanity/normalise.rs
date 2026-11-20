@@ -7,7 +7,7 @@ use super::assets::cdn_url;
 use super::export::{self, Export};
 use super::fields::{Cx, MediaUse, array_types, flatten};
 use crate::html::PendingIssue;
-use crate::mapping::paths::render;
+use crate::mapping::paths::{PathCx, render};
 use crate::mapping::transforms::slugify;
 use crate::stage::StageCtx;
 use anyhow::{Result, anyhow};
@@ -269,7 +269,7 @@ fn normalise(ctx: &StageCtx) -> Result<()> {
             .or_else(|| slugify(&title).ok().filter(|s| !s.is_empty()))
             .unwrap_or_else(|| e.sid.clone());
         let (id, src) = canon(ItemKind::Document, &e.sid, None);
-        let mut d = Document {
+        let d = Document {
             id,
             doc_type: e.ty.clone(),
             status: e.status,
@@ -287,32 +287,44 @@ fn normalise(ctx: &StageCtx) -> Result<()> {
             original: e.doc.clone(),
             source: src,
         };
-        // ponytail: patterns can't follow references yet; Task 7 adds that.
+        finished.push((d, std::mem::take(&mut cx.issues), st, cx.label.clone()));
+    }
+
+    // Paths are rendered once every document exists, so patterns can follow references.
+    // ponytail: clones every document once; index by id if exports get huge.
+    let by_id: HashMap<ItemId, Document> = finished.iter().map(|f| (f.0.id, f.0.clone())).collect();
+    let pcx = PathCx {
+        docs: &by_id,
+        lookups: &cfg.mapping.lookups,
+    };
+    for (d, issues, _, label) in &mut finished {
         let mut routable = false;
-        if let Some(p) = cfg.mapping.types.get(&e.ty).and_then(|t| t.path.as_deref()) {
-            match render(p, &d, Some("")) {
+        if let Some(p) = cfg
+            .mapping
+            .types
+            .get(&d.doc_type)
+            .and_then(|t| t.path.as_deref())
+        {
+            match render(p, d, Some(""), &pcx) {
                 Ok(path) => {
                     d.path = path;
                     routable = true;
                 }
-                Err(why) => cx.issues.push(PendingIssue {
-                    kind: IssueKind::UnmappedField,
+                Err(why) => issues.push(PendingIssue {
+                    kind: IssueKind::UnresolvedRelation,
                     severity: Severity::Warning,
-                    message: format!("{}: path pattern didn't render: {why}", cx.label),
+                    message: format!("{label}: path pattern didn't render: {why}"),
                     details: json!({"pattern": p}),
                 }),
             }
         }
-        let url = site
+        d.source.url = site
             .filter(|_| routable && d.status == DocStatus::Published)
             .map(|s| format!("{s}{}", d.path));
-        d.source.url = url;
-        finished.push((d, std::mem::take(&mut cx.issues), st));
     }
-
     // Written after converting: a write resets the URL index media lookups use.
     let mut written: HashSet<ItemId> = HashSet::new();
-    for (d, issues, st) in finished {
+    for (d, issues, st, _) in finished {
         store.put_item(ItemKind::Document, d.id, &d.source, &d)?;
         written.insert(d.id);
         for i in issues {
