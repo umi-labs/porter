@@ -731,3 +731,94 @@ async fn path_pattern_follows_references() {
     assert_eq!(w[0].severity, Severity::Warning);
     assert!(w[0].message.contains("{region.nope}"), "{}", w[0].message);
 }
+
+#[tokio::test]
+async fn crawl_urls_merge_with_pattern_routes() {
+    use porter_engine::mapping::TypeMap;
+    use porter_model::{IssueKind, Route, RouteTarget, Severity};
+    let old = MockServer::start().await;
+    let locs: String = ["/hotel/hb-1/", "/about/"]
+        .iter()
+        .map(|p| format!("<url><loc>{}{p}</loc></url>", old.uri()))
+        .collect();
+    let xml =
+        format!(r#"<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{locs}</urlset>"#);
+    Mock::given(method("GET"))
+        .and(path("/sitemap.xml"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(xml, "application/xml"))
+        .mount(&old)
+        .await;
+    for p in ["/hotel/hb-1/", "/about/"] {
+        Mock::given(method("GET"))
+            .and(path(p))
+            .respond_with(ResponseTemplate::new(200).set_body_raw("<title>x</title>", "text/html"))
+            .mount(&old)
+            .await;
+    }
+    let fx = project(export(fixture_path().parent().unwrap().to_path_buf()));
+    let mut cfg = fx.p.config().clone();
+    cfg.connectors.push(ConnectorConfig::Crawl {
+        url: old.uri(),
+        concurrency: 2,
+        delay_ms: 0,
+        include: vec![],
+        exclude: vec![],
+        max_pages: Some(50),
+        keep_query: vec![],
+        max_media_bytes: 1024 * 1024,
+    });
+    cfg.verify.site_url = Some("https://new.test".into());
+    cfg.mapping.forms.submission_types = vec!["enquiryForm".into()];
+    cfg.mapping.types.insert(
+        "hotelBreak".into(),
+        TypeMap {
+            path: Some("/hotel/{id}/".into()),
+            ..Default::default()
+        },
+    );
+    std::fs::write(
+        fx.d.path().join("porter.toml"),
+        toml::to_string(&cfg).unwrap(),
+    )
+    .unwrap();
+    let fx = Fx {
+        p: Arc::new(Project::open(fx.d.path()).unwrap()),
+        d: fx.d,
+    };
+    stage(&fx, Stage::Analyse).await.unwrap();
+    stage(&fx, Stage::Normalise).await.unwrap();
+
+    let hb1 = canon(ItemKind::Document, "hb-1");
+    let routes = fx.p.store().items::<Route>(ItemKind::Route).unwrap();
+    let merged: Vec<_> = routes
+        .iter()
+        .filter(|(_, _, r)| r.target == RouteTarget::Document(hb1))
+        .collect();
+    assert_eq!(merged.len(), 1, "{routes:?}");
+    assert_eq!(merged[0].2.http_status, Some(200));
+    let issues = all_issues(&fx);
+    let warn: Vec<_> = issues
+        .iter()
+        .filter(|i| i.kind == IssueKind::UnresolvedLink && i.severity == Severity::Warning)
+        .collect();
+    assert_eq!(warn.len(), 1, "{warn:?}");
+    assert_eq!(warn[0].severity, Severity::Warning);
+    assert_eq!(
+        warn[0].message,
+        format!("old site URL {}/about/ has no document", old.uri())
+    );
+    let info: Vec<_> = issues
+        .iter()
+        .filter(|i| i.message.ends_with("wasn't found on the old site"))
+        .collect();
+    assert_eq!(info.len(), 1, "{info:?}");
+    assert_eq!(info[0].severity, Severity::Info);
+    assert_eq!(
+        info[0].message,
+        "https://new.test/hotel/hb-2/ wasn't found on the old site"
+    );
+    assert!(
+        !info.iter().any(|i| i.message.contains("/hotel/hb-1/")),
+        "{info:?}"
+    );
+}

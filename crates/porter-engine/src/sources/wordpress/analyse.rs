@@ -86,7 +86,7 @@ fn body_ids(classes: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn is_file(key: &str) -> bool {
+pub(crate) fn is_file(key: &str) -> bool {
     key.split_once('/')
         .map_or("", |(_, path)| path)
         .rsplit('/')

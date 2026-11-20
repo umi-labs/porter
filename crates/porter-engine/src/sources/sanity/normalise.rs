@@ -6,10 +6,13 @@ use super::analyse::{MIN_SUBMISSION_DOCS, detect_submissions, is_plugin_type};
 use super::assets::cdn_url;
 use super::export::{self, Export};
 use super::fields::{Cx, MediaUse, array_types, flatten};
+use crate::config::ConnectorConfig;
 use crate::html::PendingIssue;
 use crate::mapping::paths::{PathCx, render};
 use crate::mapping::transforms::slugify;
+use crate::sources::wordpress::analyse::is_file;
 use crate::stage::StageCtx;
+use crate::url::normalise_url;
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
@@ -40,6 +43,17 @@ fn panic_text(e: &(dyn std::any::Any + Send)) -> String {
         .cloned()
         .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
         .unwrap_or_else(|| "converter panicked".into())
+}
+
+/// Path part of a normalised URL (or of a bare `/path`), for matching old-site URLs to documents.
+fn path_key(u: &str) -> String {
+    let k = if u.starts_with('/') {
+        normalise_url(&format!("http://x{u}"), None)
+    } else {
+        normalise_url(u, None)
+    };
+    k.and_then(|k| k.0.split_once('/').map(|(_, p)| p.to_string()))
+        .unwrap_or_default()
 }
 
 fn canon(kind: ItemKind, sid: &str, url: Option<String>) -> (ItemId, SourceRef) {
@@ -322,6 +336,23 @@ fn normalise(ctx: &StageCtx) -> Result<()> {
             .filter(|_| routable && d.status == DocStatus::Published)
             .map(|s| format!("{s}{}", d.path));
     }
+    // Live HTML pages from a crawl connector (2xx only), keyed by path.
+    let crawl = cfg
+        .connectors
+        .iter()
+        .any(|c| matches!(c, ConnectorConfig::Crawl { .. }));
+    let mut old: BTreeMap<String, (ItemId, String, Option<u16>)> = BTreeMap::new();
+    if crawl {
+        for (id, src, r) in store.items::<Route>(ItemKind::Route)? {
+            if src.connector == "crawl"
+                && r.http_status.is_some_and(|s| (200..300).contains(&s))
+                && !is_file(&src.source_id)
+            {
+                old.insert(path_key(&r.url), (id, r.url, r.http_status));
+            }
+        }
+    }
+    let mut seen_old: BTreeSet<String> = BTreeSet::new();
     // Written after converting: a write resets the URL index media lookups use.
     let mut written: HashSet<ItemId> = HashSet::new();
     for (d, issues, st, _) in finished {
@@ -331,7 +362,22 @@ fn normalise(ctx: &StageCtx) -> Result<()> {
             ctx.issue(i.kind, i.severity, Some(d.id), i.message, i.details)?;
         }
         ctx.item_status(d.id, ItemKind::Document, st)?;
-        if let Some(u) = &d.source.url {
+        let key = path_key(&d.path);
+        let hit = old
+            .get(&key)
+            .filter(|_| crawl && d.status == DocStatus::Published);
+        if hit.is_some() {
+            seen_old.insert(key);
+        } else if let Some(u) = d.source.url.as_ref().filter(|_| crawl) {
+            ctx.issue(
+                IssueKind::UnresolvedLink,
+                Severity::Info,
+                Some(d.id),
+                format!("{u} wasn't found on the old site"),
+                json!({"url": u}),
+            )?;
+        }
+        if let Some(u) = d.source.url.clone().or_else(|| hit.map(|h| h.1.clone())) {
             let (rid, rsrc) = canon(
                 ItemKind::Route,
                 &format!("route:{}", d.source.source_id),
@@ -340,12 +386,23 @@ fn normalise(ctx: &StageCtx) -> Result<()> {
             let route = Route {
                 url: u.clone(),
                 target: RouteTarget::Document(d.id),
-                http_status: None,
+                http_status: hit.and_then(|h| h.2),
                 title: Some(d.title.clone()),
             };
             store.put_item(ItemKind::Route, rid, &rsrc, &route)?;
             ctx.item_status(rid, ItemKind::Route, ItemStatus::Done)?;
             written.insert(rid);
+        }
+    }
+    for (key, (id, url, _)) in &old {
+        if !seen_old.contains(key) {
+            ctx.issue(
+                IssueKind::UnresolvedLink,
+                Severity::Warning,
+                Some(*id),
+                format!("old site URL {url} has no document"),
+                json!({"url": url}),
+            )?;
         }
     }
     ctx.progress(total, Some(total), "documents");
