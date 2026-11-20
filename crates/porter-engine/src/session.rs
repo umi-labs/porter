@@ -837,6 +837,12 @@ fn validate(cfg: &ProjectConfig, step: Step) -> Result<()> {
     if !errs.is_empty() {
         bail!("porter.toml: {}", errs.join("; "));
     }
+    // A tidy rule that can't compile stops schema, load and verify before they start.
+    if step.needs_destination()
+        && let Err(e) = crate::tidy::effective_mapping(cfg)
+    {
+        bail!("porter.toml: {e}");
+    }
     Ok(())
 }
 
@@ -1404,6 +1410,39 @@ mod tests {
         let out = s.run(apply()).unwrap().wait().await;
         let err = out.per_stage[0].2.clone().unwrap_or_default();
         assert!(err.contains("schema re-ran after it"), "{err}");
+    }
+
+    /// A tidy rule that can't compile is a config error: code 1, before load begins.
+    #[tokio::test]
+    async fn bad_tidy_rule_refuses_load() {
+        let (d, s) = dry_run_with(|_| {});
+        edit_toml(d.path(), |t| {
+            // Valid otherwise, so the tidy rule is what stops it.
+            let t = t.replace(
+                "[destination]\n",
+                "[destination]\napi_key_env = \"K\"\nauth_collection = \"users\"\n",
+            );
+            format!(
+                "{t}\n[mapping.types.post.fields.category]\nto = \"kind\"\n\n[[tidy]]\nid = \"m\"\nkind = \"merge-types\"\nenabled = true\nfrom = [\"post\"]\ninto = \"posts\"\ndiscriminator = {{ field = \"kind\", values = {{ post = \"post\" }} }}\n"
+            )
+        });
+        let runs = s.project.store().runs(Stage::Load).unwrap().len();
+        let plan = RunPlan::Stage(
+            Stage::Load,
+            StageOpts {
+                refresh: false,
+                apply: false,
+                schema_mode: SchemaMode::Check,
+            },
+        );
+        let out = s.run(plan).unwrap().wait().await;
+        assert_eq!(out.code, 1, "{out:?}");
+        let err = out.per_stage[0].2.clone().unwrap_or_default();
+        assert!(
+            err.contains("tidy \"m\": discriminator field kind is already used by post.category"),
+            "{err}"
+        );
+        assert_eq!(s.project.store().runs(Stage::Load).unwrap().len(), runs);
     }
 
     /// With no dry run on record, `load --apply` is not refused by the guard (the

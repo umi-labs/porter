@@ -37,6 +37,32 @@ pub fn effective_mapping(cfg: &ProjectConfig) -> Result<MappingConfig> {
             } => {
                 check(from, &mut parent.keys(), "parent")?;
                 check(from, &mut drop.keys(), "drop")?;
+                // The discriminator would overwrite whatever a from-type already sends to
+                // its field (or a sub-field of it): refuse rather than lose that data.
+                if let Some(d) = discriminator {
+                    let used: Vec<String> = from
+                        .iter()
+                        .filter_map(|ty| Some((ty, m.types.get(ty)?)))
+                        .flat_map(|(ty, tm)| {
+                            tm.fields
+                                .iter()
+                                .filter(|(src, fm)| {
+                                    !fm.drop
+                                        && src.as_str() != DISCRIMINATOR
+                                        && (fm.to == d.field
+                                            || fm.to.starts_with(&format!("{}.", d.field)))
+                                })
+                                .map(move |(src, _)| format!("{ty}.{src}"))
+                        })
+                        .collect();
+                    if !used.is_empty() {
+                        bail!(
+                            "tidy \"{id}\": discriminator field {} is already used by {}; pick another name",
+                            d.field,
+                            used.join(", ")
+                        );
+                    }
+                }
                 for ty in from {
                     let Some(tm) = m.types.get_mut(ty) else {
                         bail!(
@@ -284,6 +310,27 @@ fields = { "customCardCarousel.cards" = "items" }
         assert_eq!(tm.path.as_deref(), Some("/d/{slug}/"));
         assert_eq!(tm.status["draft"], "skip");
         assert_eq!(tm.to.as_deref(), Some("destinations"));
+    }
+
+    #[test]
+    fn discriminator_may_not_overwrite_a_mapped_field() {
+        let mut c = cfg();
+        c.mapping
+            .types
+            .get_mut("cityPage")
+            .unwrap()
+            .fields
+            .get_mut("addAnchor")
+            .unwrap()
+            .to = "kind".into();
+        let e = effective_mapping(&c).unwrap_err().to_string();
+        assert_eq!(
+            e,
+            "tidy \"destinations\": discriminator field kind is already used by cityPage.addAnchor; pick another name"
+        );
+        // A dropped field sends nothing, so it can't clash.
+        c.tidy[0].enabled = false;
+        assert!(effective_mapping(&c).is_ok());
     }
 
     #[test]
