@@ -33,7 +33,7 @@ dataset = "production"
 assets = "referenced"        # referenced | all
 ```
 
-**`sanity-export`** reads a `sanity dataset export` file someone sent you: a `.tar.gz`, or a folder holding `data.ndjson`. Use it when you have no token. A `--no-assets` export has no image references, so it cannot carry the images.
+**`sanity-export`** reads a `sanity dataset export` file someone sent you: a `.tar.gz`, or a folder holding `data.ndjson`. Use it when you have no token. It reads the documents only. **Images and files need `sanity-api`:** porter finds them through the asset documents an API export includes, and a CLI `sanity dataset export` archive leaves those out (its images are `_sanityAsset` references to files under `images/` and `files/`, which porter doesn't read yet). From an archive, every image and file is a "no asset" warning and no media loads.
 
 ```toml
 [[connectors]]
@@ -51,7 +51,7 @@ Assets are fetched four at a time, retried on network errors and 5xx, and checke
 ## Drafts
 
 - A document that exists only as a draft loads as a Payload draft.
-- A draft of a document that is also published is **not loaded**. Porter raises one `unpublished-changes` warning per document, so someone can publish or discard the change in Sanity before the final run.
+- A draft of a document that is also published is **not loaded**. Porter raises one `unmapped-field` warning per document ("has unpublished changes in Sanity; only the published version is loaded"), so someone can publish or discard the change in Sanity before the final run.
 
 ## Form submissions
 
@@ -67,6 +67,10 @@ List a type by hand when it has fewer than 50 documents. Add the line after `por
 Each submission type becomes one form, with fields from the union of submitted names. Nested objects are flattened to dotted keys (`holidayDetails.destination`). Loading them needs the Payload form-builder plugin; `porter schema check` says so when it is missing.
 
 Submissions are personal data. They show as counts only, and **never** appear in flow examples, reports or share links.
+
+## The mapping
+
+`porter analyse` seeds `[mapping]` with every type, each going to a collection of its own name. Sanity's fields are only known once documents are normalised, so `porter normalise` then adds an entry for every field a mapped type's documents hold that the mapping doesn't mention yet, each to a field of the same name (`description = { to = "description" }`). It never changes or removes an entry you wrote, and never re-adds one you dropped. Rename a field with `to`, or leave it behind with `drop = true`.
 
 ## URLs
 
@@ -99,11 +103,13 @@ Other mapping keys that help here: `title_field` picks the source field for a ty
 porter schema generate --into ../acme-site
 ```
 
-This writes `src/collections/porter/`, `src/blocks/porter/` and an `index.ts` exporting `porterCollections` and `porterGlobals`. It prints the two lines to add to `payload.config.ts` (one import, one spread of the arrays) and a one-file catch-all route, `app/(frontend)/[[...path]]/page.tsx`, that serves any document by its old path. Then run `payload migrate:create`.
+This writes `src/collections/porter/`, `src/blocks/porter/` and an `index.ts` exporting `porterCollections` and `porterBlocks`. It prints the two lines to add to `payload.config.ts` (one import, one spread of the arrays) and a one-file catch-all route, `app/(frontend)/[[...path]]/page.tsx`, that serves any document by its old path. Then run `payload migrate:create`.
 
-Porter **never edits `payload.config.ts`** or any file outside those folders. Every generated collection has an indexed, unique `path` text field, which load fills from the path pattern.
+Porter **never edits `payload.config.ts`** or any file outside those folders. Every generated collection has an indexed, unique `path` text field, which load fills from the path pattern. Normalise checks paths are unique per destination collection. A type with no pattern gets `/<type>/<slug>/`; when two documents would share one, the later (by Sanity id) becomes `-2`, `-3`... with an info issue. A pattern that gives two documents the same path is an error naming both: fix the pattern, or Payload rejects the second at load.
 
-If a generated collection has the slug of one the app already has (a `pages` collection against the template's `Pages`), porter writes nothing and exits 2. Either map onto the existing collection and add the missing fields from `porter schema check` (or give `porter schema prompt` to an agent), or rename the generated one with `to = "..."`.
+A type you map onto a collection the app already has (`[mapping.types.homepage] to = "pages"` against the template's `Pages`) is left to the app: porter doesn't generate that collection, and a warning says so. Run `porter schema check` for the fields it lacks, and add them (or give `porter schema prompt` to an agent).
+
+Porter writes nothing and exits 2 only on an accidental clash: a collection it would generate under a name the app already has with no type mapped onto it by design (a source type called `pages`, seeded as `to = "pages"`), or a block whose slug or interface name (`HeroBlock`) the app already declares under `src/blocks`. Rename it with `to = "..."`.
 
 ## Tidy-ups
 
@@ -136,7 +142,7 @@ parent = { countryPage = "region" }   # parent from a reference field
 - `merge-types` puts several document types in one collection. A discriminator field records what each was.
 - `merge-blocks` puts several block types in one block, with `fields = { "typeA.cards" = "items" }` to align differing names.
 
-Porter accounts for every field. A field is carried, renamed (listed), or dropped (listed with a reason in `drop`). A field that holds data and is none of those is an error that blocks load, as is a shape conflict between fields merged under one name. A discriminator may not reuse the name of a mapped field. Normalise output stays a faithful copy of Sanity; tidy-ups change where things go, not what the source said.
+Porter accounts for every field. A field is carried, renamed (listed), or dropped (listed with a reason in `drop`). Under an enabled rule, a field or block field that holds data and is none of those is an error that blocks load, as is a shape conflict between fields merged under one name. Outside tidy-ups, load warns once per type and field that holds data with no mapping entry, with a count. To leave a field behind on purpose, set `drop = true` rather than deleting its entry. A discriminator may not reuse the name of a mapped field. Normalise output stays a faithful copy of Sanity; tidy-ups change where things go, not what the source said.
 
 ## The flow
 
@@ -205,9 +211,9 @@ A typical run:
 ```bash
 export PORTER_SANITY_TOKEN=...
 porter init kirker --adapter sanity
-porter analyse                 # seeds [mapping]; then edit it
+porter analyse                 # seeds [mapping] with the types
 porter extract                 # resumable
-porter normalise
+porter normalise               # adds each type's fields to [mapping]; then edit it
 porter tidy list               # enable what you want
 porter flow
 porter schema generate --into ../kirker-site
