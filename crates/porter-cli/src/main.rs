@@ -103,6 +103,8 @@ pub enum Command {
     Export {
         file: PathBuf,
     },
+    /// How content flows: sources, tidy-ups and destinations, with the last load's counts
+    Flow,
     /// Tidy-ups: merge look-alike types or blocks; list, suggest, enable, disable
     Tidy {
         #[command(subcommand)]
@@ -176,6 +178,7 @@ async fn dispatch(cli: Cli) -> Result<i32> {
         Command::Clean => clean::run(&dir, json),
         Command::Report => report::run(&dir, json),
         Command::Export { file } => export::run(&dir, json, &file),
+        Command::Flow => flow::run(&dir, json),
         Command::Tidy { cmd } => tidy::run(&dir, json, cmd),
         Command::Hub(args) => {
             let ctx = hub::Ctx {

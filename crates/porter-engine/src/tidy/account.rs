@@ -104,7 +104,7 @@ fn unaccounted(out: &mut Vec<Problem>, field: &str, dest: &str) {
 }
 
 /// Every block in `v`, nested ones included.
-fn blocks<'a>(v: &'a FieldValue, out: &mut Vec<&'a Block>) {
+pub(crate) fn blocks<'a>(v: &'a FieldValue, out: &mut Vec<&'a Block>) {
     match v {
         FieldValue::Layout(bs) => bs.iter().for_each(|b| block(b, out)),
         FieldValue::List(xs) => xs.iter().for_each(|x| blocks(x, out)),

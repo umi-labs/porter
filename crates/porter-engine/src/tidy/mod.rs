@@ -8,7 +8,8 @@ mod account;
 mod compile;
 pub mod suggest;
 
-pub use account::{Problem, RuleOutcome, account, check_before_load};
+pub(crate) use account::blocks;
+pub use account::{Problem, REPORT, RuleOutcome, account, check_before_load};
 pub use compile::{DISCRIMINATOR, effective_mapping};
 
 use indexmap::IndexMap;

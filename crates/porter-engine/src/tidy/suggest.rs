@@ -285,7 +285,7 @@ fn unique(ids: &mut BTreeSet<String>, base: &str) -> String {
 }
 
 /// "cityPage" -> "city-pages" (the last word pluralised), for labels.
-fn plural_name(s: &str) -> String {
+pub(crate) fn plural_name(s: &str) -> String {
     let mut w = words(s);
     if let Some(l) = w.pop() {
         w.push(plural(&l));
@@ -294,7 +294,7 @@ fn plural_name(s: &str) -> String {
 }
 
 /// "regionPage" / "region-pages" -> "Region page" / "Region pages".
-fn humanise(s: &str) -> String {
+pub(crate) fn humanise(s: &str) -> String {
     let w = words(s).join(" ");
     let mut c = w.chars();
     c.next()
@@ -303,7 +303,7 @@ fn humanise(s: &str) -> String {
 }
 
 /// "A, B and C".
-fn list(names: &[String]) -> String {
+pub(crate) fn list(names: &[String]) -> String {
     match names.split_last() {
         Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
         Some((last, _)) => last.clone(),

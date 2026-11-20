@@ -6,6 +6,7 @@ pub mod connectors;
 pub mod destinations;
 pub mod events;
 pub mod fingerprint;
+pub mod flow;
 pub mod html;
 pub mod http;
 pub mod mapping;

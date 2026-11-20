@@ -4,6 +4,7 @@ use std::path::Path;
 
 pub mod clean;
 pub mod export;
+pub mod flow;
 pub mod hub;
 pub mod init;
 pub mod issues;

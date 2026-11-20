@@ -1207,6 +1207,149 @@ fields = { "customCardCarousel.cards" = "items" }
         );
     }
 
+    /// The flow graph over the fixture with `MERGE`'s rules.
+    mod flow {
+        use super::*;
+        use porter_engine::flow::{FlowGraph, NodeKind, build};
+
+        fn graph(fx: &Fx) -> FlowGraph {
+            build(&fx.p, fx.p.config()).unwrap()
+        }
+
+        fn node<'a>(g: &'a FlowGraph, id: &str) -> &'a porter_engine::flow::FlowNode {
+            g.nodes
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("no node {id}"))
+        }
+
+        fn edges_from(g: &FlowGraph, id: &str) -> Vec<String> {
+            g.edges
+                .iter()
+                .filter(|e| e.from == id)
+                .map(|e| e.to.clone())
+                .collect()
+        }
+
+        #[tokio::test]
+        async fn flow_before_dry_run_has_no_counts() {
+            let fx = fx(|_| {}).await;
+            let g = graph(&fx);
+            assert_eq!(g.v, 1);
+            assert_eq!(g.counted_at, None);
+            assert!(g.nodes.iter().all(|n| n.counts.is_none()), "{g:?}");
+            assert!(g.edges.iter().all(|e| e.count.is_none()), "{g:?}");
+            assert_eq!(edges_from(&g, "src:cityPage"), ["tidy:destinations"]);
+            assert_eq!(edges_from(&g, "tidy:destinations"), ["dst:destinations"]);
+            let t = node(&g, "tidy:destinations");
+            assert!(t.enabled);
+            assert_eq!(
+                t.summary,
+                "Merges City pages, Country pages and Region pages into Destinations. Each keeps what it was in Kind."
+            );
+        }
+
+        #[tokio::test]
+        async fn flow_after_dry_run_counts_match_load() {
+            let fx = fx(|_| {}).await;
+            dry_run(&fx).await;
+            let g = graph(&fx);
+            let run = fx.p.store().runs(Stage::Load).unwrap().pop().unwrap();
+            assert_eq!(g.counted_at, run.ended_at);
+            let c = |id: &str| node(&g, id).counts.clone().unwrap();
+            let city = c("src:cityPage");
+            assert_eq!((city.items_in, city.ok, city.failed), (3, 3, 0));
+            let t = c("tidy:destinations");
+            assert_eq!((t.items_in, t.ok), (6, 6));
+            let d = c("dst:destinations");
+            assert_eq!((d.items_in, d.ok), (6, 6));
+            let e = g.edges.iter().find(|e| e.from == "src:cityPage").unwrap();
+            assert_eq!(e.count, Some(3));
+            // Every source node's statuses come from the load, and add up.
+            for n in g.nodes.iter().filter(|n| n.id.starts_with("src:")) {
+                let c = n.counts.as_ref().unwrap();
+                assert!(c.ok + c.skipped + c.failed <= c.items_in, "{n:?}");
+            }
+            let a = c("src:enquiryForm");
+            assert_eq!(a.items_in, 3);
+        }
+
+        #[tokio::test]
+        async fn disabled_rule_is_drawn_and_bypassed() {
+            let fx = fx(|_| {}).await;
+            let mut cfg = fx.p.config().clone();
+            cfg.tidy[0].enabled = false;
+            let g = build(&fx.p, &cfg).unwrap();
+            let t = node(&g, "tidy:destinations");
+            assert!(!t.enabled);
+            assert!(
+                t.summary.contains("passes straight through"),
+                "{}",
+                t.summary
+            );
+            assert!(
+                g.edges
+                    .iter()
+                    .all(|e| e.from != "tidy:destinations" && e.to != "tidy:destinations"),
+                "{:?}",
+                g.edges
+            );
+            let to = edges_from(&g, "src:cityPage");
+            assert_eq!(to.len(), 1, "{to:?}");
+            assert!(
+                to[0].starts_with("dst:") && to[0] != "dst:destinations",
+                "{to:?}"
+            );
+            // What the rule would do is still shown.
+            assert!(t.example.is_some());
+        }
+
+        #[tokio::test]
+        async fn submissions_never_have_examples() {
+            let fx = fx(|_| {}).await;
+            dry_run(&fx).await;
+            let g = graph(&fx);
+            let subs: Vec<_> = g
+                .nodes
+                .iter()
+                .filter(|n| matches!(n.kind, NodeKind::Submissions | NodeKind::Form))
+                .collect();
+            assert!(!subs.is_empty(), "{:?}", g.nodes);
+            assert!(subs.iter().all(|n| n.example.is_none()), "{subs:?}");
+            let json = serde_json::to_string(&g).unwrap();
+            for personal in ["person1@example.com", "Person 1", "Hello"] {
+                assert!(!json.contains(personal), "{personal} leaked");
+            }
+            // Merged documents do get one.
+            let ex = node(&g, "tidy:destinations").example.clone().unwrap();
+            assert!(
+                ex.changed
+                    .iter()
+                    .any(|(f, _, a)| f == "kind" && a == "region"),
+                "{ex:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn flow_json_shape_golden() {
+            let fx = fx(|_| {}).await;
+            dry_run(&fx).await;
+            let mut got = serde_json::to_value(graph(&fx)).unwrap();
+            assert!(got["counted_at"].is_string());
+            got.as_object_mut().unwrap().remove("counted_at");
+            let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/sanity/flow.golden.json");
+            if std::env::var("PORTER_BLESS").is_ok() {
+                std::fs::write(&p, serde_json::to_string_pretty(&got).unwrap() + "\n").unwrap();
+            }
+            let want: Value = serde_json::from_str(
+                &std::fs::read_to_string(&p).expect("bless with PORTER_BLESS=1"),
+            )
+            .unwrap();
+            assert_eq!(got, want, "differs: bless with PORTER_BLESS=1");
+        }
+    }
+
     #[tokio::test]
     async fn accounting_counts_in_out() {
         let fx = fx(|_| {}).await;

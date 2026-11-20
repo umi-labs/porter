@@ -627,3 +627,43 @@ fn tidy_enable_unknown_id_exits_1() {
         .code(1)
         .stderr(predicate::str::contains("known: ").and(predicate::str::contains("pages")));
 }
+
+#[test]
+fn flow_needs_normalise() {
+    let d = tempfile::tempdir().unwrap();
+    init(d.path());
+    porter(d.path())
+        .arg("flow")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("run porter normalise first"));
+}
+
+#[test]
+fn flow_json_is_one_line_and_normalise_wrote_it() {
+    let d = normalised_sanity();
+    assert!(d.path().join("reports/flow.json").exists());
+    let out = porter(d.path()).args(["--json", "flow"]).output().unwrap();
+    assert!(out.status.success());
+    let s = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(s.lines().count(), 1, "{s}");
+    let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+    assert_eq!(
+        (v["v"].as_u64(), v["event"].as_str()),
+        (Some(1), Some("flow"))
+    );
+    assert!(v["graph"]["counted_at"].is_null());
+    // Suggested rules appear as disabled cards.
+    let pages = v["graph"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == "tidy:pages")
+        .unwrap();
+    assert_eq!(pages["enabled"], false);
+    porter(d.path())
+        .arg("flow")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Tidy-ups").and(predicate::str::contains("not counted")));
+}

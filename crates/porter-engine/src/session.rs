@@ -805,6 +805,18 @@ impl Env {
                 .push(format!("warning: could not suggest tidy-ups: {e:#}")),
         }
     }
+
+    /// After normalise and after load: writes `reports/flow.json` from porter.toml as it
+    /// is now (suggestions included). A failure is a warning, never a failed stage.
+    fn write_flow(&self, out: &Mutex<RunOutcome>) {
+        let r = ProjectConfig::load(&self.project.dir().join("porter.toml"))
+            .and_then(|cfg| crate::flow::write(&self.project, &cfg));
+        if let Err(e) = r {
+            lock_out(out)
+                .messages
+                .push(format!("warning: could not write the flow graph: {e:#}"));
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1054,6 +1066,9 @@ async fn drive(env: Env, plan: RunPlan) -> RunOutcome {
             // Suggestions read the normalised documents, so they come after normalise.
             if matches!(step, Step::Normalise) && matches!(code, 0 | 2) {
                 env.suggest_tidy(out);
+            }
+            if matches!(step, Step::Normalise | Step::Load(_)) && matches!(code, 0 | 2) {
+                env.write_flow(out);
             }
             code
         }
