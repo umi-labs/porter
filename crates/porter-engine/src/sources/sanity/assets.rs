@@ -60,16 +60,30 @@ pub(crate) fn cdn_url(asset: &AssetDoc) -> String {
     asset.url.split(['?', '#']).next().unwrap_or("").to_string()
 }
 
-/// `originalFilename`, else `<sha1>.<ext>` (Payload guesses the mime type from the extension).
-fn file_name(a: &AssetDoc, url: &str) -> String {
-    if let Some(n) = a.filename.as_ref().filter(|n| !n.is_empty()) {
-        return n.clone();
-    }
+/// The asset's real extension: the CDN URL's, else the mime subtype.
+fn asset_ext(a: &AssetDoc, url: &str) -> String {
     let last = url.rsplit('/').next().unwrap_or("");
-    let ext = match last.rsplit_once('.') {
+    match last.rsplit_once('.') {
         Some((_, e)) if !e.is_empty() && e.len() <= 5 => e.to_string(),
         _ => a.mime.rsplit('/').next().unwrap_or("bin").to_string(),
+    }
+}
+
+/// `originalFilename` with the asset's real extension (kept stem, extension appended or
+/// replaced; Payload guesses the mime type from it), else `<sha1>.<ext>`.
+fn file_name(a: &AssetDoc, url: &str) -> String {
+    let ext = asset_ext(a, url);
+    let norm = |e: &str| match e.to_ascii_lowercase().as_str() {
+        "jpeg" => "jpg".to_string(),
+        e => e.to_string(),
     };
+    if let Some(n) = a.filename.as_ref().filter(|n| !n.is_empty()) {
+        return match n.rsplit_once('.') {
+            Some((_, e)) if norm(e) == norm(&ext) => n.clone(),
+            Some((stem, _)) if !stem.is_empty() => format!("{stem}.{ext}"),
+            _ => format!("{n}.{ext}"),
+        };
+    }
     let stem = if a.sha1.is_empty() { &a.id } else { &a.sha1 };
     format!("{stem}.{ext}")
 }
@@ -225,4 +239,36 @@ async fn one(ctx: &StageCtx, client: &Client, a: &AssetDoc) -> Result<Outcome> {
     }
     status(ItemStatus::Done)?;
     Ok(Outcome::Fetched)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn asset(filename: Option<&str>) -> AssetDoc {
+        AssetDoc {
+            id: "image-x".into(),
+            url: "http://cdn.test/images/p/d/abc-1x1.jpg?x=1".into(),
+            sha1: "abc".into(),
+            size: 1,
+            mime: "image/jpeg".into(),
+            width: None,
+            height: None,
+            filename: filename.map(str::to_string),
+            alt: None,
+        }
+    }
+
+    #[test]
+    fn file_name_always_carries_the_real_extension() {
+        let name = |f| {
+            let a = asset(f);
+            file_name(&a, &cdn_url(&a))
+        };
+        assert_eq!(name(Some("photo")), "photo.jpg");
+        assert_eq!(name(Some("photo.png")), "photo.jpg");
+        assert_eq!(name(Some("photo.jpg")), "photo.jpg");
+        assert_eq!(name(Some("photo.JPEG")), "photo.JPEG");
+        assert_eq!(name(None), "abc.jpg");
+    }
 }
