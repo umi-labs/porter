@@ -1560,3 +1560,62 @@ async fn not_read_this_run_is_not_called_removed() {
         "{issues:#?}"
     );
 }
+
+/// A document carries its new path when its collection has a `path` field, and relations
+/// inside a group or array rows go out as Payload ids.
+#[tokio::test]
+async fn sends_path_and_nested_relations_as_ids() {
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let mut f = fx(&s.uri());
+    let dir = site(
+        "{ name: 'path', type: 'text', unique: true },
+         { name: 'hero', type: 'group', fields: [
+           { name: 'label', type: 'text' },
+           { name: 'link', type: 'relationship', relationTo: 'posts' } ] },
+         { name: 'rows', type: 'array', fields: [
+           { name: 'label', type: 'text' },
+           { name: 'link', type: 'relationship', relationTo: 'posts' } ] }",
+        "",
+    );
+    f.cfg.destination.config_dir = Some(dir.path().to_path_buf());
+    with_posts(&mut f);
+    f.cfg.mapping.types.get_mut("page").unwrap().fields.clear();
+    map_field(&mut f, "page", "hero", "hero");
+    map_field(&mut f, "page", "rows", "rows");
+    let obj = |label: &str, link: Option<&str>| {
+        let mut m = IndexMap::new();
+        m.insert("label".to_string(), FieldValue::Text(label.into()));
+        if let Some(l) = link {
+            m.insert("link".to_string(), FieldValue::Doc(did(l)));
+        }
+        FieldValue::Object(m)
+    };
+    let mut a = doc("page", "p:1", "a", None);
+    a.fields.insert("hero".into(), obj("Go", Some("b:1")));
+    a.fields.insert(
+        "rows".into(),
+        FieldValue::List(vec![obj("one", Some("b:1")), obj("two", None)]),
+    );
+    // The mapping's pattern wins over the source path.
+    a.path = "/old/a/".into();
+    let b = doc("post", "b:1", "b", None);
+    f.put(&a);
+    f.put(&b);
+    f.load(true, CancellationToken::new()).await;
+    let page = patch_of(&fake, "pages/1");
+    assert_eq!(page["path"], json!("/a/"));
+    assert_eq!(page["hero"], json!({"label": "Go", "link": 1}));
+    assert_eq!(
+        page["rows"],
+        json!([{"label": "one", "link": 1}, {"label": "two"}])
+    );
+    // The read schema's posts have no `path` field: none sent.
+    let post = fake
+        .writes()
+        .into_iter()
+        .find(|(m, p, _)| m == "POST" && p == "posts")
+        .unwrap()
+        .2;
+    assert!(post.get("path").is_none(), "{post}");
+}

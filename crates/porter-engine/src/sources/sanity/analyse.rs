@@ -441,6 +441,7 @@ mod tests {
                 r("cityPage", "country", "countryPage", 3),
                 r("countryPage", "region", "regionPage", 2),
                 r("hotelBreak", "city", "cityPage", 3),
+                r("hotelBreak", "highlights.city", "cityPage", 1),
                 r("hotelBreak", "related", "cityPage", 1),
             ]
         );

@@ -339,6 +339,12 @@ fn build(l: &Loader, d: &Document, tm: &TypeMap, coll: &str) -> Built {
     };
     b.data.insert("title".into(), json!(d.title));
     b.data.insert("slug".into(), json!(d.slug));
+    // The new URL path (the mapping's pattern, else the source's), for the generated
+    // `path` field; sent unless the read schema shows the collection has none.
+    let path = l.ids.paths.get(&d.id).unwrap_or(&d.path);
+    if !path.is_empty() && fields.is_none_or(|fs| fs.iter().any(|f| f.name == "path")) {
+        b.data.insert("path".into(), json!(path));
+    }
     for (src, fm) in tm.fields.iter().filter(|(_, fm)| !fm.drop) {
         let v = match apply(&lookup(d, src), &fm.transform) {
             Ok(v) => v,

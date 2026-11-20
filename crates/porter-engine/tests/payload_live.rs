@@ -280,3 +280,143 @@ async fn live_lexical_and_blocks_round_trip() {
     assert_eq!(got[1]["image"], media["id"]);
     assert_eq!(got[2]["html"], "<i>raw</i>");
 }
+
+/// The Sanity fixture, normalised with the seeded mapping, loads into the collections
+/// tests/payload-app imports from `src/collections/porter` (what `schema generate --into`
+/// wrote; `sanity.rs` golden-tests that it still does): groups, arrays, relations, `path`.
+#[tokio::test]
+async fn live_sanity_fixture_round_trip() {
+    use porter_engine::config::{ConnectorConfig, SanityAssets};
+    use porter_engine::destinations::payload::PayloadDestination;
+    use porter_engine::events::EventSink;
+    use porter_engine::project::Project;
+    use porter_engine::sources::sanity::SanitySource;
+    use porter_engine::stage::{Destination, Source, run_stage};
+    use porter_model::{ItemId, ItemKind, SourceRef, Stage};
+    use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
+
+    let Some(c) = client() else {
+        eprintln!("skipped: PORTER_PAYLOAD_TEST_URL / PORTER_PAYLOAD_API_KEY not set");
+        return;
+    };
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let d = tempfile::tempdir().unwrap();
+    let p = Project::init(d.path(), "t", "sanity").unwrap();
+    let mut cfg = p.config().clone();
+    cfg.connectors = vec![ConnectorConfig::SanityExport {
+        path: root.join("tests/fixtures/sanity"),
+        assets: SanityAssets::Referenced,
+    }];
+    cfg.mapping.forms.submission_types = vec!["enquiryForm".into()];
+    let p = Arc::new(p);
+    let stage = |cfg: &porter_engine::config::ProjectConfig, st: Stage| {
+        let (p, cfg) = (p.clone(), Arc::new(cfg.clone()));
+        async move {
+            run_stage(
+                p,
+                cfg.clone(),
+                EventSink::new(4096),
+                CancellationToken::new(),
+                st,
+                |ctx| async move {
+                    match st {
+                        Stage::Analyse => {
+                            for k in SanitySource.connectors(&cfg)? {
+                                k.analyse(&ctx).await?;
+                            }
+                            Ok(())
+                        }
+                        Stage::Normalise => SanitySource.normalise(&ctx),
+                        _ => {
+                            PayloadDestination::new(&cfg.destination)
+                                .load(&ctx, true)
+                                .await
+                        }
+                    }
+                },
+            )
+            .await
+            .unwrap()
+        }
+    };
+    stage(&cfg, Stage::Analyse).await;
+    // The referenced assets, as extract would leave them (the fixture's CDN isn't real).
+    for (i, path) in [
+        "/images/abc/production/d3dfdcf650653fee4a8b89c828ccad98a8406fdd-800x600.jpg",
+        "/images/abc/production/d267af74a142296235941b40d70bc38113a0481e-800x600.jpg",
+        "/files/abc/production/ca7fcf72964eb65f1a947189036a170a1489a0bb.pdf",
+    ]
+    .iter()
+    .enumerate()
+    {
+        // Letter names: Payload renames a taken `x-1.png` to the next free `x-N.png`, and
+        // parallel renames of one stem race.
+        let n = ["a", "b", "c"][i];
+        let bytes = [PNG, n.as_bytes()].concat();
+        p.store()
+            .put_media_bytes(
+                &bytes,
+                &format!("http://cdn.test{path}"),
+                &format!("sanity-fixture-{n}.png"),
+            )
+            .unwrap();
+    }
+    stage(&cfg, Stage::Normalise).await;
+    cfg.mapping = porter_engine::mapping::MappingConfig::seed_from(p.store());
+    porter_engine::sources::sanity::seed_mapping(&p, &mut cfg.mapping).unwrap();
+    cfg.destination.adapter = "payload".into();
+    cfg.destination.url = std::env::var("PORTER_PAYLOAD_TEST_URL").unwrap();
+    cfg.destination.api_key_env = "PORTER_PAYLOAD_API_KEY".into();
+    cfg.destination.config_dir = Some(root.join("../../tests/payload-app/src"));
+    let loaded = stage(&cfg, Stage::Load).await;
+    let errors: Vec<_> = p
+        .store()
+        .issues(&Default::default())
+        .unwrap()
+        .into_iter()
+        .filter(|i| i.stage == Stage::Load && i.severity == porter_model::Severity::Error)
+        .map(|i| i.message)
+        .collect();
+    assert_eq!(loaded.failed, 0, "{errors:#?}");
+
+    let id = |sid: &str| {
+        ItemId::new(
+            ItemKind::Document,
+            &SourceRef {
+                connector: "sanity".into(),
+                source_id: sid.into(),
+                url: None,
+            },
+        )
+        .to_string()
+    };
+    let find = |coll: &'static str, sid: &str| {
+        let (c, key) = (&c, json!(id(sid)));
+        async move {
+            c.find_by(coll, "legacyId", &key)
+                .await
+                .unwrap()
+                .unwrap_or_else(|| panic!("{coll} {key} not loaded"))
+        }
+    };
+    let hb = find("hotelBreak", "hb-1").await;
+    let (madrid, lisbon) = (
+        find("cityPage", "cityPage-ci1").await,
+        find("cityPage", "cityPage-ci2").await,
+    );
+    assert_eq!(hb["title"], "Beach Break");
+    assert_eq!(hb["path"], "/hotelBreak/beach-break/");
+    assert_eq!(hb["seo"]["metaTitle"], "Meta title");
+    assert_eq!(hb["city"], madrid["id"]);
+    let rows = hb["highlights"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{hb}");
+    assert_eq!(rows[0]["label"], "Pool");
+    assert_eq!(rows[0]["city"], lisbon["id"]);
+    assert_eq!(rows[1]["label"], "Spa");
+    assert_eq!(hb["related"], json!([lisbon["id"]]));
+    assert!(
+        hb["mainImage"].is_number() || hb["mainImage"].is_string(),
+        "{hb}"
+    );
+}

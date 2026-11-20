@@ -141,3 +141,48 @@ pub async fn run(dir: &Path, json: bool, cmd: StageCmd, refresh: bool) -> Result
 pub async fn run_all(dir: &Path, json: bool, keep_going: bool, apply: bool) -> Result<i32> {
     drive(dir, json, RunPlan::All { keep_going, apply }).await
 }
+
+/// `schema generate --into <repo>`: one schema run that writes into the repo, then the
+/// `payload.config.ts` lines and catch-all route to add by hand (porter never edits the
+/// config). With `--json` they go out as one `schema-into` event.
+pub async fn generate_into(dir: &Path, json: bool, repo: &Path) -> Result<i32> {
+    use porter_engine::destinations::payload::schema_generate::{
+        CATCH_ALL_ROUTE, CONFIG_LINES, generate_into,
+    };
+    const ROUTE_FILE: &str = "app/(frontend)/[...path]/page.tsx";
+    let project = std::sync::Arc::new(porter_engine::project::Project::open(dir)?);
+    let cfg = std::sync::Arc::new(project.config().clone());
+    if cfg.destination.adapter != "payload" {
+        anyhow::bail!("--into needs destination.adapter = \"payload\"");
+    }
+    let events = porter_engine::events::EventSink::new(4096);
+    let printer = Printer::start(json, events.subscribe());
+    let mut report = None;
+    let slot = &mut report;
+    let res = porter_engine::stage::run_stage(
+        project,
+        cfg,
+        events,
+        Default::default(),
+        Stage::Schema,
+        |ctx| async move {
+            *slot = Some(generate_into(&ctx, repo)?);
+            Ok(())
+        },
+    )
+    .await;
+    printer.finish().await;
+    let summary = res?;
+    if report.is_some_and(|r| r.collisions.is_empty()) {
+        if json {
+            crate::output::print_json(&serde_json::json!({
+                "v": 1, "event": "schema-into",
+                "config_lines": CONFIG_LINES, "route_file": ROUTE_FILE, "route": CATCH_ALL_ROUTE,
+            }));
+        } else {
+            println!("Add to payload.config.ts:\n\n{CONFIG_LINES}");
+            println!("A catch-all route to see the content, {ROUTE_FILE}:\n\n{CATCH_ALL_ROUTE}");
+        }
+    }
+    Ok(porter_engine::events::exit_code(&summary))
+}

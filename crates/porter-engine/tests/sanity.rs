@@ -861,3 +861,60 @@ async fn coverage_platform_is_sanity() {
     assert!(!m.types.contains_key("media.tag"));
     assert_eq!(m.blocks.len(), 4);
 }
+
+/// Files under `dir`, relative, sorted, with their text.
+fn tree(dir: &std::path::Path) -> Vec<(String, String)> {
+    let mut out = vec![];
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            continue;
+        }
+        let name = p.file_name().unwrap().to_string_lossy().to_string();
+        out.push((name, std::fs::read_to_string(&p).unwrap()));
+    }
+    out.sort();
+    out
+}
+
+/// `schema generate --into` over the fixture, with the seeded mapping, is what
+/// tests/payload-app imports (the live round trip loads into it). `PORTER_BLESS=1` rewrites it.
+#[tokio::test]
+async fn generate_into_matches_test_app() {
+    use porter_engine::destinations::payload::schema_generate::generate_into;
+    let fx = normalised().await;
+    let mut cfg = fx.p.config().clone();
+    cfg.mapping = porter_engine::mapping::MappingConfig::seed_from(fx.p.store());
+    porter_engine::sources::sanity::seed_mapping(&fx.p, &mut cfg.mapping).unwrap();
+    let app = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/payload-app");
+    let tmp = tempfile::tempdir().unwrap();
+    let out = if std::env::var_os("PORTER_BLESS").is_some() {
+        app.clone()
+    } else {
+        tmp.path().to_path_buf()
+    };
+    let o = out.clone();
+    let summary = run_stage(
+        fx.p.clone(),
+        Arc::new(cfg),
+        EventSink::new(4096),
+        CancellationToken::new(),
+        Stage::Schema,
+        |ctx| async move {
+            let r = generate_into(&ctx, &o)?;
+            assert!(r.collisions.is_empty(), "{:?}", r.collisions);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(summary.errors, 0);
+    for sub in ["src/collections/porter", "src/blocks/porter"] {
+        let (got, want) = (tree(&out.join(sub)), tree(&app.join(sub)));
+        assert!(
+            !want.is_empty(),
+            "{sub} is empty: bless with PORTER_BLESS=1"
+        );
+        assert_eq!(got, want, "{sub} differs: bless with PORTER_BLESS=1");
+    }
+}

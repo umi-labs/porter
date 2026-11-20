@@ -80,6 +80,10 @@ pub enum Command {
     /// check | generate | prompt | spec
     Schema {
         mode: commands::stage::Mode,
+        /// generate only: write into this Payload repo's src/collections/porter/ and
+        /// src/blocks/porter/, then print the payload.config.ts lines and a catch-all route
+        #[arg(long)]
+        into: Option<PathBuf>,
     },
     /// Dry run unless --apply
     Load {
@@ -183,7 +187,17 @@ async fn dispatch(cli: Cli) -> Result<i32> {
         Command::Normalise { refresh } => {
             stage::run(&dir, json, StageCmd::Normalise, refresh).await
         }
-        Command::Schema { mode } => stage::run(&dir, json, StageCmd::Schema(mode), false).await,
+        Command::Schema { mode, into: None } => {
+            stage::run(&dir, json, StageCmd::Schema(mode), false).await
+        }
+        Command::Schema {
+            mode: stage::Mode::Generate,
+            into: Some(repo),
+        } => stage::generate_into(&dir, json, &repo).await,
+        Command::Schema { into: Some(_), .. } => {
+            eprintln!("error: --into only works with `schema generate`");
+            Ok(2)
+        }
         Command::Load { apply } => stage::run(&dir, json, StageCmd::Load(apply), false).await,
         Command::Verify => stage::run(&dir, json, StageCmd::Verify, false).await,
         Command::Run { keep_going, apply } => stage::run_all(&dir, json, keep_going, apply).await,

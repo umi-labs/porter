@@ -1108,6 +1108,41 @@
             "v": "a503c96c-4e9c-518b-adb5-cbc4c358b57e"
           }
         ]
+      },
+      "highlights": {
+        "t": "list",
+        "v": [
+          {
+            "t": "object",
+            "v": {
+              "_type": {
+                "t": "text",
+                "v": "highlight"
+              },
+              "label": {
+                "t": "text",
+                "v": "Pool"
+              },
+              "city": {
+                "t": "doc",
+                "v": "a503c96c-4e9c-518b-adb5-cbc4c358b57e"
+              }
+            }
+          },
+          {
+            "t": "object",
+            "v": {
+              "_type": {
+                "t": "text",
+                "v": "highlight"
+              },
+              "label": {
+                "t": "text",
+                "v": "Spa"
+              }
+            }
+          }
+        ]
       }
     },
     "seo": {
@@ -1265,6 +1300,22 @@
           "_type": "reference",
           "_ref": "cityPage-ci2",
           "_key": "x1"
+        }
+      ],
+      "highlights": [
+        {
+          "_type": "highlight",
+          "_key": "h1",
+          "label": "Pool",
+          "city": {
+            "_type": "reference",
+            "_ref": "cityPage-ci2"
+          }
+        },
+        {
+          "_type": "highlight",
+          "_key": "h2",
+          "label": "Spa"
         }
       ]
     },

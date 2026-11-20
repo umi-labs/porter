@@ -451,3 +451,76 @@ fn init_sanity_project() {
     assert!(t.contains("adapter = \"sanity\""), "{t}");
     assert!(t.contains("# kind = \"sanity-api\""), "{t}");
 }
+
+/// A project whose mapping sends `post` to `pages`, and a repo for `--into`.
+fn into_fixture(slug: &str) -> (tempfile::TempDir, tempfile::TempDir) {
+    let d = tempfile::tempdir().unwrap();
+    init(d.path());
+    let toml = std::fs::read_to_string(d.path().join("porter.toml"))
+        .unwrap()
+        .replace("# adapter = \"\"", "adapter = \"payload\"")
+        .replace(
+            "# [mapping]",
+            &format!("[mapping.types.post]\nto = \"{slug}\"\n"),
+        );
+    std::fs::write(d.path().join("porter.toml"), toml).unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(repo.path().join("src/collections")).unwrap();
+    std::fs::write(
+        repo.path().join("src/collections/Pages.ts"),
+        "export const Pages = { slug: \"pages\", fields: [] }\n",
+    )
+    .unwrap();
+    (d, repo)
+}
+
+#[test]
+fn schema_generate_into_collision_exits_2_and_writes_nothing() {
+    let (d, repo) = into_fixture("pages");
+    porter(d.path())
+        .args(["schema", "generate", "--into"])
+        .arg(repo.path())
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "collection `pages` is already declared",
+        ));
+    assert!(!repo.path().join("src/collections/porter").exists());
+}
+
+#[test]
+fn schema_generate_into_prints_config_lines_and_route() {
+    let (d, repo) = into_fixture("articles");
+    porter(d.path())
+        .args(["schema", "generate", "--into"])
+        .arg(repo.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "import { porterCollections } from './collections/porter'",
+        ))
+        .stdout(predicate::str::contains("...porterCollections"))
+        .stdout(predicate::str::contains(
+            "app/(frontend)/[...path]/page.tsx",
+        ));
+    assert!(
+        repo.path()
+            .join("src/collections/porter/Articles.ts")
+            .is_file()
+    );
+    assert!(
+        repo.path()
+            .join("src/collections/porter/index.ts")
+            .is_file()
+    );
+}
+
+#[test]
+fn into_needs_generate() {
+    let (d, repo) = into_fixture("articles");
+    porter(d.path())
+        .args(["schema", "check", "--into"])
+        .arg(repo.path())
+        .assert()
+        .code(2);
+}

@@ -125,7 +125,17 @@ impl Destination for PayloadDestination {
             }
             SchemaMode::Generate => {
                 let out = generated_dir(project);
-                written = schema_generate::generate(&summary, mapping, &out)?;
+                let g = schema_generate::generate(&summary, mapping, &out)?;
+                for i in g.infos {
+                    ctx.issue(
+                        porter_model::IssueKind::SchemaMismatch,
+                        porter_model::Severity::Info,
+                        None,
+                        i,
+                        serde_json::json!({}),
+                    )?;
+                }
+                written = g.files;
             }
             SchemaMode::Prompt => {
                 let dest = config_dir.unwrap_or_else(|| project.join("<payload site>"));
