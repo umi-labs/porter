@@ -15,7 +15,7 @@ use porter_model::{
     Block, Document, FieldValue, Form, ItemId, ItemKind, ItemStatus, Stage, Submission,
 };
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct FlowGraph {
@@ -135,6 +135,43 @@ fn counted_at(store: &Store) -> Result<Option<String>> {
         .filter(|r| r.id > norm.id)
         .filter_map(|r| r.ended_at)
         .next_back())
+}
+
+/// Field names that mark contact details (compared lowercased).
+const CONTACT_FIELDS: [&str; 14] = [
+    "email",
+    "e-mail",
+    "firstname",
+    "first_name",
+    "lastname",
+    "last_name",
+    "surname",
+    "phone",
+    "phonenumber",
+    "mobile",
+    "telephone",
+    "address",
+    "postcode",
+    "zip",
+];
+
+/// Whether a document holds contact details: any field, at the top or inside nested
+/// objects (and lists of them), named like one of `CONTACT_FIELDS`. Such a type's
+/// documents never appear in flow examples, whatever their source or number.
+pub fn contact_like(doc: &Document) -> bool {
+    fn any(fields: &IndexMap<String, FieldValue>) -> bool {
+        fields
+            .iter()
+            .any(|(k, v)| CONTACT_FIELDS.contains(&k.to_lowercase().as_str()) || nested(v))
+    }
+    fn nested(v: &FieldValue) -> bool {
+        match v {
+            FieldValue::Object(m) => any(m),
+            FieldValue::List(xs) => xs.iter().any(nested),
+            _ => false,
+        }
+    }
+    any(&doc.fields)
 }
 
 /// A field value as a short display string.
@@ -325,7 +362,18 @@ pub fn build(project: &Project, cfg: &ProjectConfig) -> Result<FlowGraph> {
         .map(|(.., d)| d)
         .collect();
     docs.sort_by(|a, b| (&a.title, a.id.to_string()).cmp(&(&b.title, b.id.to_string())));
-    let titles: HashMap<ItemId, String> = docs.iter().map(|d| (d.id, d.title.clone())).collect();
+    // Types that look like contact details never give an example, and a link to one
+    // never shows its title.
+    let contact: HashSet<&str> = docs
+        .iter()
+        .filter(|d| contact_like(d))
+        .map(|d| d.doc_type.as_str())
+        .collect();
+    let titles: HashMap<ItemId, String> = docs
+        .iter()
+        .filter(|d| !contact.contains(d.doc_type.as_str()))
+        .map(|d| (d.id, d.title.clone()))
+        .collect();
     let enabled_rule = |name: &str, types: bool| {
         cfg.tidy.iter().find(|r| {
             r.enabled
@@ -377,7 +425,9 @@ pub fn build(project: &Project, cfg: &ProjectConfig) -> Result<FlowGraph> {
         ds.iter().for_each(|d| c.tally(statuses.get(&d.id)));
         g.counts.insert(id.clone(), c);
         g.node(id, Column::Source, NodeKind::DocType, title, summary);
-        if let (Some(n), Some(tm)) = (g.nodes.last_mut(), tm) {
+        if let (Some(n), Some(tm)) = (g.nodes.last_mut(), tm)
+            && !contact.contains(ty)
+        {
             n.example = doc_example(ds[0], tm, &titles);
         }
     }
@@ -425,7 +475,11 @@ pub fn build(project: &Project, cfg: &ProjectConfig) -> Result<FlowGraph> {
         occ.iter().for_each(|(d, _)| c.tally(statuses.get(&d.id)));
         g.counts.insert(id.clone(), c);
         g.node(id, Column::Source, NodeKind::BlockType, title, summary);
-        if let Some(n) = g.nodes.last_mut() {
+        if let Some(n) = g.nodes.last_mut()
+            && !occ
+                .iter()
+                .any(|(d, _)| contact.contains(d.doc_type.as_str()))
+        {
             n.example = block_example(d0, b0, &m, None, &titles);
         }
     }
@@ -483,10 +537,13 @@ pub fn build(project: &Project, cfg: &ProjectConfig) -> Result<FlowGraph> {
                 if let Some(d) = discriminator {
                     s += &format!(" Each keeps what it was in {}.", humanise(&d.field));
                 }
-                let ex = mo.as_ref().and_then(|mo| {
-                    let d = docs.iter().find(|d| from.contains(&d.doc_type))?;
-                    doc_example(d, mo.types.get(&d.doc_type)?, &titles)
-                });
+                let ex = mo
+                    .as_ref()
+                    .filter(|_| !from.iter().any(|t| contact.contains(t.as_str())))
+                    .and_then(|mo| {
+                        let d = docs.iter().find(|d| from.contains(&d.doc_type))?;
+                        doc_example(d, mo.types.get(&d.doc_type)?, &titles)
+                    });
                 (NodeKind::MergeTypes, s, format!("dst:{into}"), ex)
             }
             TidyKind::MergeBlocks { drop, .. } => {
@@ -496,7 +553,15 @@ pub fn build(project: &Project, cfg: &ProjectConfig) -> Result<FlowGraph> {
                     list(&bs),
                     humanise(into)
                 );
-                let ex = mo.as_ref().and_then(|mo| {
+                let from_contact =
+                    by_module
+                        .iter()
+                        .filter(|(md, _)| from.contains(md))
+                        .any(|(_, occ)| {
+                            occ.iter()
+                                .any(|(d, _)| contact.contains(d.doc_type.as_str()))
+                        });
+                let ex = mo.as_ref().filter(|_| !from_contact).and_then(|mo| {
                     let (d, b) = by_module
                         .iter()
                         .filter(|(md, _)| from.contains(md))

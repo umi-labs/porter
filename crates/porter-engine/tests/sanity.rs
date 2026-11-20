@@ -1330,6 +1330,40 @@ fields = { "customCardCarousel.cards" = "items" }
             );
         }
 
+        /// A type that looks like contact details never gives an example, even below the
+        /// submission threshold and under a merge rule; nor does a link to one show its title.
+        #[tokio::test]
+        async fn contact_like_types_never_have_examples() {
+            let fx = fx(|v| {
+                if v["_type"] == "countryPage" {
+                    v["email"] = serde_json::json!("jo.contact@example.test");
+                    v["details"] = serde_json::json!({"_type": "details", "phone": "0700 900 123"});
+                }
+            })
+            .await;
+            dry_run(&fx).await;
+            let mut cfg = fx.p.config().clone();
+            // Drop and rename on the contact type too, so a value would otherwise show.
+            if let porter_engine::tidy::TidyKind::MergeTypes { drop, .. } = &mut cfg.tidy[0].kind {
+                drop.insert("countryPage.email".into(), "contact".into());
+            }
+            for on in [true, false] {
+                cfg.tidy[0].enabled = on;
+                let g = build(&fx.p, &cfg).unwrap();
+                assert!(node(&g, "src:countryPage").example.is_none());
+                assert!(node(&g, "tidy:destinations").example.is_none(), "on={on}");
+                let json = serde_json::to_string(&g).unwrap();
+                for v in [
+                    "jo.contact@example.test",
+                    "0700 900 123",
+                    "Spain",
+                    "Portugal",
+                ] {
+                    assert!(!json.contains(v), "{v} leaked (on={on}): {json}");
+                }
+            }
+        }
+
         #[tokio::test]
         async fn flow_json_shape_golden() {
             let fx = fx(|_| {}).await;
