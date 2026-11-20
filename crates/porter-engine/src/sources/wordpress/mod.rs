@@ -39,6 +39,12 @@ fn rank(c: &ConnectorConfig) -> Result<(u8, Box<dyn Connector>)> {
         ConnectorConfig::UmbracoJson { .. } => {
             bail!("connector kind \"umbraco-json\" does not apply to a wordpress source")
         }
+        ConnectorConfig::SanityApi { .. } => {
+            bail!("connector kind \"sanity-api\" does not apply to a wordpress source")
+        }
+        ConnectorConfig::SanityExport { .. } => {
+            bail!("connector kind \"sanity-export\" does not apply to a wordpress source")
+        }
     })
 }
 

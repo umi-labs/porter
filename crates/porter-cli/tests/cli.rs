@@ -82,7 +82,7 @@ fn unregistered_adapter_exits_1_naming_it() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains(
-            "no source adapter named \"nope\" (available: wordpress, umbraco)",
+            "no source adapter named \"nope\" (available: wordpress, umbraco, sanity)",
         ));
 }
 
@@ -367,7 +367,7 @@ fn init_rejects_unknown_adapter() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains(
-            "unknown adapter \"nope\" (available: wordpress, umbraco)",
+            "unknown adapter \"nope\" (available: wordpress, umbraco, sanity)",
         ));
     assert!(!d.path().join("porter.toml").exists());
 }
@@ -437,4 +437,17 @@ fn dry_run_load_says_so_in_the_summary() {
     let out = porter(d.path()).arg("load").assert();
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     assert!(stdout.contains("load (dry run)"), "{stdout}");
+}
+
+#[test]
+fn init_sanity_project() {
+    let d = tempfile::tempdir().unwrap();
+    porter(d.path())
+        .args(["init", "kirker", "--adapter", "sanity"])
+        .write_stdin("")
+        .assert()
+        .success();
+    let t = std::fs::read_to_string(d.path().join("porter.toml")).unwrap();
+    assert!(t.contains("adapter = \"sanity\""), "{t}");
+    assert!(t.contains("# kind = \"sanity-api\""), "{t}");
 }

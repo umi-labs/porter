@@ -16,7 +16,7 @@ Porter 2.0 is a rebuild, not an update. The 1.x commands and flags are gone and 
 | `--dry-run` | the default for `porter load`; add `--apply` to write |
 | `--debug`, `--verbose` | `-v`, `-vv`, `-vvv` (log detail on stderr) |
 | `--config <file>` | `--project <dir>` (the folder holding `porter.toml`) |
-| `--list-adapters` | gone; `porter init --adapter nope` exits 1 with `unknown adapter "nope" (available: wordpress, umbraco)` and writes nothing |
+| `--list-adapters` | gone; `porter init --adapter nope` exits 1 with `unknown adapter "nope" (available: wordpress, umbraco, sanity)` and writes nothing |
 | `--plugin-dir` | gone; there is no plugin system |
 
 **Removed commands.** `config`, `generate`, `template`, `migrate`, `explain`. Use `analyse`, `extract`, `normalise`, `schema generate|check|prompt|spec`, `load`. `init`, `clean` and `upgrade` remain but work differently (below).

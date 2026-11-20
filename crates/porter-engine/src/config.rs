@@ -101,6 +101,34 @@ pub enum ConnectorConfig {
         /// Umbraco JSON export files; relative paths resolve against the project folder.
         paths: Vec<PathBuf>,
     },
+    SanityApi {
+        project_id: String,
+        dataset: String,
+        /// Name of the env var holding the read token; the token itself never goes here.
+        #[serde(default = "default_sanity_token_env")]
+        token_env: String,
+        #[serde(default = "default_sanity_api_version")]
+        api_version: String,
+        #[serde(default)]
+        assets: SanityAssets,
+    },
+    SanityExport {
+        /// `sanity dataset export` archive or folder; relative paths resolve against the
+        /// project folder.
+        path: PathBuf,
+        #[serde(default)]
+        assets: SanityAssets,
+    },
+}
+
+/// Which Sanity assets are fetched.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SanityAssets {
+    /// Only assets some document references.
+    #[default]
+    Referenced,
+    All,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -150,6 +178,14 @@ fn default_max_media_bytes() -> u64 {
 
 fn default_delay_ms() -> u64 {
     250
+}
+
+fn default_sanity_token_env() -> String {
+    "PORTER_SANITY_TOKEN".into()
+}
+
+fn default_sanity_api_version() -> String {
+    "v2021-06-07".into()
 }
 
 fn default_table_prefix() -> String {
@@ -235,6 +271,16 @@ impl ProjectConfig {
                     site_url: Some(u), ..
                 } => url_ok(&format!("connectors[{i}].site_url"), u),
                 _ => {}
+            }
+        }
+        for (i, c) in self.connectors.iter().enumerate() {
+            if let ConnectorConfig::SanityApi { token_env, .. } = c
+                && !is_env_var_name(token_env)
+            {
+                // Never echoed: a value that is not a name may be the token itself.
+                errs.push(format!(
+                    "connectors[{i}].token_env must be the NAME of an env var (letters, digits, underscore), not a token"
+                ));
             }
         }
         for (i, r) in self.redirects.iter().enumerate() {
@@ -337,5 +383,50 @@ mod connector_key_tests {
         c.verify.site_url = None;
         c.connectors.remove(0);
         assert!(c.validate().is_empty(), "{:?}", c.validate());
+    }
+}
+
+#[cfg(test)]
+mod sanity_tests {
+    use super::*;
+
+    #[test]
+    fn sanity_api_parses_with_defaults() {
+        let c: ProjectConfig = toml::from_str(
+            "[[connectors]]\nkind = \"sanity-api\"\nproject_id = \"abc\"\ndataset = \"production\"\n",
+        )
+        .unwrap();
+        match &c.connectors[0] {
+            ConnectorConfig::SanityApi {
+                token_env,
+                api_version,
+                assets,
+                ..
+            } => {
+                assert_eq!(token_env, "PORTER_SANITY_TOKEN");
+                assert_eq!(api_version, "v2021-06-07");
+                assert_eq!(*assets, SanityAssets::Referenced);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn sanity_token_env_must_be_env_var_name() {
+        let c: ProjectConfig = toml::from_str(
+            "[[connectors]]\nkind = \"sanity-api\"\nproject_id = \"abc\"\ndataset = \"p\"\ntoken_env = \"not a name\"\n",
+        )
+        .unwrap();
+        let errs = c.validate();
+        assert!(errs.iter().any(|e| e.contains("token_env")), "{errs:?}");
+    }
+
+    #[test]
+    fn sanity_unknown_key_rejected() {
+        let e = toml::from_str::<ProjectConfig>(
+            "[[connectors]]\nkind = \"sanity-export\"\npath = \"x.tar.gz\"\ntoken = \"s\"\n",
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("token"), "{e}");
     }
 }

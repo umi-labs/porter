@@ -152,6 +152,28 @@ kind = "umbraco-json"
 paths = ["export/pages.json", "export/hotels.json"]
 ```
 
+### `sanity-api` and `sanity-export`: Sanity
+
+Reads a Sanity dataset through the API, or from a `sanity dataset export` archive. Use either with `[source] adapter = "sanity"`. The API token comes from the env var named by `token_env` (default `PORTER_SANITY_TOKEN`), never from the file.
+
+```toml
+[source]
+adapter = "sanity"
+
+[[connectors]]
+kind = "sanity-api"
+project_id = "abc123"
+dataset = "production"
+# token_env = "PORTER_SANITY_TOKEN"
+# api_version = "v2021-06-07"
+# assets = "referenced"               # referenced | all
+
+# or, from an export archive:
+# [[connectors]]
+# kind = "sanity-export"
+# path = "export/production.tar.gz"
+```
+
 ## `porter.toml`
 
 A full annotated example, WordPress to Payload. Every section is optional in the file, but `porter` reports exactly what is missing (`destination.url is missing`) and fails with exit code 1 before doing anything. Unknown keys are errors, so a typo is caught rather than ignored.
@@ -161,7 +183,7 @@ A full annotated example, WordPress to Payload. Every section is optional in the
 name = "acme"
 
 [source]
-adapter = "wordpress"                 # wordpress | umbraco
+adapter = "wordpress"                 # wordpress | umbraco | sanity
 
 # Zero or more connectors; see above.
 [[connectors]]
