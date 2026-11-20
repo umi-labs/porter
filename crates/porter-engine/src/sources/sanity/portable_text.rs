@@ -224,28 +224,37 @@ fn inlines(block: &Value, cx: &mut PtCx) -> Vec<Inline> {
                 }
             }
         }
-        let span = Inline::Text {
-            text: text.to_string(),
-            marks,
-        };
+        // A soft break (`\n`, shift+enter in the studio) is a line break, not a space.
+        let mut span = vec![];
+        for (i, part) in text.split('\n').enumerate() {
+            if i > 0 {
+                span.push(Inline::Break);
+            }
+            if !part.is_empty() || text.is_empty() {
+                span.push(Inline::Text {
+                    text: part.to_string(),
+                    marks,
+                });
+            }
+        }
         match link {
             Some((key, target, new_tab)) => {
                 if last_link.as_deref() == Some(&key)
                     && let Some(Inline::Link { inlines, .. }) = out.last_mut()
                 {
-                    inlines.push(span);
+                    inlines.extend(span);
                 } else {
                     out.push(Inline::Link {
                         target,
                         new_tab,
-                        inlines: vec![span],
+                        inlines: span,
                         fragment: None,
                     });
                 }
                 last_link = Some(key);
             }
             None => {
-                out.push(span);
+                out.extend(span);
                 last_link = None;
             }
         }
@@ -332,6 +341,33 @@ mod tests {
     fn li(kind: &str, level: u64, text: &str) -> Value {
         json!({"_type":"block","style":"normal","listItem":kind,"level":level,
                "children":[{"_type":"span","text":text,"marks":[]}],"markDefs":[]})
+    }
+
+    /// R24: a soft break (`\n` in span text, shift+enter in the studio) is a line break.
+    #[test]
+    fn pt_newline_in_span_is_a_break() {
+        let plain = Marks::default();
+        let (rt, _) = run(vec![block(
+            "normal",
+            json!([{"_type":"span","text":"1 High St\nLondon\n","marks":[]},
+                   {"_type":"span","text":"UK","marks":["strong"]}]),
+        )]);
+        assert_eq!(
+            rt.blocks,
+            vec![p(vec![
+                t("1 High St", plain),
+                Inline::Break,
+                t("London", plain),
+                Inline::Break,
+                t(
+                    "UK",
+                    Marks {
+                        bold: true,
+                        ..Marks::default()
+                    }
+                ),
+            ])]
+        );
     }
 
     #[test]
