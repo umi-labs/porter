@@ -7,8 +7,6 @@ use porter_model::{
 };
 use serde_json::{Value, json};
 
-// used by normalise (Task 6)
-#[allow(dead_code)]
 pub(crate) struct PtCx<'a> {
     pub resolve_doc: &'a dyn Fn(&str) -> Option<ItemId>,
     pub resolve_asset: &'a dyn Fn(&str) -> Option<ItemId>,
@@ -33,8 +31,6 @@ struct ListEntry {
     block: RtBlock,
 }
 
-// used by normalise (Task 6)
-#[allow(dead_code)]
 pub(crate) fn pt_to_richtext(blocks: &[Value], cx: &mut PtCx) -> RichText {
     let mut out = vec![];
     let mut run: Vec<ListEntry> = vec![];

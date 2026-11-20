@@ -1,8 +1,10 @@
 //! Sanity source: reads a dataset through the API or from a `sanity dataset export`.
-//! Normalise and assets land in later tasks.
 
+mod analyse;
 mod assets;
 mod export;
+mod fields;
+mod normalise;
 mod portable_text;
 mod shape;
 
@@ -56,8 +58,8 @@ impl Source for SanitySource {
         Ok(out)
     }
 
-    fn normalise(&self, _ctx: &StageCtx) -> Result<()> {
-        Ok(())
+    fn normalise(&self, ctx: &StageCtx) -> Result<()> {
+        normalise::run(ctx)
     }
 }
 

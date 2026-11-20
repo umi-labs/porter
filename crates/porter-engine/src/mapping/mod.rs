@@ -269,6 +269,9 @@ pub struct FormsMap {
     /// Form titles not to load.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub retire: Vec<String>,
+    /// Source types whose documents are form submissions (Sanity), beside detected ones.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub submission_types: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

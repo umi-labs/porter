@@ -93,6 +93,9 @@ async fn stage(fx: &Fx, st: Stage) -> anyhow::Result<porter_engine::events::Summ
         st,
         |ctx| async move {
             let src = SanitySource;
+            if st == Stage::Normalise {
+                return src.normalise(&ctx);
+            }
             for c in src.connectors(&ctx.config)? {
                 if st == Stage::Analyse {
                     c.analyse(&ctx).await?;
@@ -405,4 +408,255 @@ async fn assets_cancel_marks_remaining_partial() {
     .unwrap();
     assert!(s.interrupted);
     assert_eq!((s.done, s.partial), (1, 2));
+}
+
+// ---- normalise ----
+
+/// A project over the fixture with `enquiryForm` listed as submissions, analysed, with the
+/// three referenced assets already in the store (as extract leaves them), then normalised.
+async fn normalised() -> Fx {
+    let fx = project(export(fixture_path().parent().unwrap().to_path_buf()));
+    let mut cfg = fx.p.config().clone();
+    cfg.mapping.forms.submission_types = vec!["enquiryForm".into()];
+    std::fs::write(
+        fx.d.path().join("porter.toml"),
+        toml::to_string(&cfg).unwrap(),
+    )
+    .unwrap();
+    let fx = Fx {
+        p: Arc::new(Project::open(fx.d.path()).unwrap()),
+        d: fx.d,
+    };
+    stage(&fx, Stage::Analyse).await.unwrap();
+    for i in [0, 1, 3] {
+        fx.p.store()
+            .put_media_bytes(
+                &asset_bytes(i as u8 + 1),
+                &format!("http://cdn.test{}", ASSET_PATHS[i]),
+                &format!("file{}", i + 1),
+            )
+            .unwrap();
+    }
+    stage(&fx, Stage::Normalise).await.unwrap();
+    fx
+}
+
+fn canon(kind: ItemKind, sid: &str) -> porter_model::ItemId {
+    porter_model::ItemId::new(
+        kind,
+        &porter_model::SourceRef {
+            connector: "sanity".into(),
+            source_id: sid.into(),
+            url: None,
+        },
+    )
+}
+
+fn sdoc(fx: &Fx, sid: &str) -> porter_model::Document {
+    fx.p.store()
+        .get_item(canon(ItemKind::Document, sid))
+        .unwrap()
+        .unwrap_or_else(|| panic!("no document {sid}"))
+}
+
+fn all_issues(fx: &Fx) -> Vec<porter_model::Issue> {
+    fx.p.store().issues(&Default::default()).unwrap()
+}
+
+fn sanity_docs(fx: &Fx) -> Vec<porter_model::Document> {
+    let mut v: Vec<_> =
+        fx.p.store()
+            .items::<Value>(ItemKind::Document)
+            .unwrap()
+            .into_iter()
+            .filter(|(_, s, _)| s.connector == "sanity")
+            .map(|(_, _, d)| serde_json::from_value::<porter_model::Document>(d).unwrap())
+            .collect();
+    v.sort_by_key(|d| d.id.to_string());
+    v
+}
+
+#[tokio::test]
+async fn draft_and_published_merge_into_one_document() {
+    use porter_model::{DocStatus, IssueKind, Severity};
+    let fx = normalised().await;
+    let docs = sanity_docs(&fx);
+    assert_eq!(
+        docs.iter().filter(|d| d.source.source_id == "hb-1").count(),
+        1
+    );
+    let hb1 = sdoc(&fx, "hb-1");
+    assert_eq!(hb1.status, DocStatus::Published);
+    assert_eq!(hb1.title, "Beach Break");
+    assert_eq!(hb1.slug, "beach-break");
+    assert!(
+        docs.iter()
+            .all(|d| !d.source.source_id.starts_with("drafts."))
+    );
+    let warn: Vec<_> = all_issues(&fx)
+        .into_iter()
+        .filter(|i| {
+            i.item == Some(hb1.id)
+                && i.kind == IssueKind::UnmappedField
+                && i.severity == Severity::Warning
+        })
+        .collect();
+    assert_eq!(warn.len(), 1, "{warn:?}");
+    assert_eq!(
+        warn[0].message,
+        "hotelBreak \"Beach Break\" has unpublished changes in Sanity; only the published version is loaded"
+    );
+    assert_eq!(sdoc(&fx, "hb-new").status, DocStatus::Draft);
+}
+
+#[tokio::test]
+async fn dangling_strong_and_weak_references() {
+    use porter_model::{FieldValue, IssueKind, Severity};
+    let fx = normalised().await;
+    let rel: Vec<_> = all_issues(&fx)
+        .into_iter()
+        .filter(|i| i.kind == IssueKind::UnresolvedRelation)
+        .collect();
+    assert_eq!(rel.len(), 2, "{rel:?}");
+    let sev = |s: Severity| rel.iter().filter(|i| i.severity == s).count();
+    assert_eq!((sev(Severity::Error), sev(Severity::Warning)), (1, 1));
+    let hb2 = sdoc(&fx, "hb-2");
+    assert_eq!(hb2.fields["dangling"], FieldValue::Null);
+    assert_eq!(hb2.fields["weakDangling"], FieldValue::Null);
+    // A resolved reference points at the canonical document.
+    assert_eq!(
+        hb2.fields["city"],
+        FieldValue::Doc(canon(ItemKind::Document, "cityPage-ci1"))
+    );
+}
+
+#[tokio::test]
+async fn image_hotspot_becomes_focal_point() {
+    use porter_model::{FieldValue, IssueKind, Media, Severity};
+    let fx = normalised().await;
+    let hb1 = sdoc(&fx, "hb-1");
+    let FieldValue::Media(mid) = hb1.fields["mainImage"] else {
+        panic!("{:?}", hb1.fields["mainImage"]);
+    };
+    let m: Media = fx.p.store().get_item(mid).unwrap().unwrap();
+    assert_eq!(m.focal_x, Some(30.0));
+    assert_eq!(m.focal_y, Some(40.0));
+    assert_eq!(m.alt.as_deref(), Some("Image 1"));
+    let crops: Vec<_> = all_issues(&fx)
+        .into_iter()
+        .filter(|i| i.item == Some(hb1.id) && i.severity == Severity::Info)
+        .collect();
+    assert_eq!(crops.len(), 1, "{crops:?}");
+    assert_eq!(crops[0].kind, IssueKind::UnmappedField);
+    assert_eq!(
+        crops[0].message,
+        "hotelBreak \"Beach Break\" crops image-d3dfdcf650653fee4a8b89c828ccad98a8406fdd-800x600-jpg; Payload has no crop, so the full image is used"
+    );
+    // The asset's own altText wins over the per-use alt.
+    let FieldValue::RichText(rt) = &hb1.fields["description"] else {
+        panic!()
+    };
+    let inline = rt
+        .blocks
+        .iter()
+        .find_map(|b| match b {
+            porter_model::RtBlock::Media { media, .. } => Some(*media),
+            _ => None,
+        })
+        .unwrap();
+    let m2: Media = fx.p.store().get_item(inline).unwrap().unwrap();
+    assert_eq!(m2.alt.as_deref(), Some("A pic"));
+    // The PDF on the homepage resolves too.
+    assert!(matches!(
+        sdoc(&fx, "homepage").fields["brochure"],
+        FieldValue::Media(_)
+    ));
+    assert!(
+        !all_issues(&fx)
+            .iter()
+            .any(|i| i.kind == IssueKind::MissingMedia),
+        "{:?}",
+        all_issues(&fx)
+    );
+}
+
+#[tokio::test]
+async fn builder_array_becomes_layout_with_modules() {
+    use porter_model::{BlockKind, FieldValue};
+    let fx = normalised().await;
+    let FieldValue::Layout(blocks) = &sdoc(&fx, "hb-1").fields["flexibleContent"] else {
+        panic!()
+    };
+    let modules: Vec<_> = blocks
+        .iter()
+        .map(|b| b.original.as_ref().unwrap().module.as_str())
+        .collect();
+    assert_eq!(
+        modules,
+        ["hero", "cardCarousel", "customCardCarousel", "accordion"]
+    );
+    assert_eq!(blocks[3].kind, BlockKind::Accordion);
+    assert_eq!(blocks[0].kind, BlockKind::Raw);
+    assert_eq!(blocks[0].props["heading"], FieldValue::Text("Hello".into()));
+    assert!(matches!(blocks[0].props["image"], FieldValue::Media(_)));
+    assert!(!blocks[0].props.contains_key("_key"));
+}
+
+#[tokio::test]
+async fn enquiries_become_form_and_submissions() {
+    use porter_model::{Form, Submission};
+    let fx = normalised().await;
+    let store = fx.p.store();
+    let forms = store.items::<Form>(ItemKind::Form).unwrap();
+    assert_eq!(forms.len(), 1);
+    let (fid, fsrc, form) = &forms[0];
+    assert_eq!(fsrc.source_id, "form:enquiryForm");
+    let names: Vec<_> = form.fields.iter().map(|f| f.name.as_str()).collect();
+    assert!(names.contains(&"holidayDetails.destination"), "{names:?}");
+    assert!(names.contains(&"holidayDetails.dates.from"), "{names:?}");
+    assert!(!names.iter().any(|n| n.contains("_type")), "{names:?}");
+    let subs = store.items::<Submission>(ItemKind::Submission).unwrap();
+    assert_eq!(subs.len(), 3);
+    assert!(subs.iter().all(|(_, _, s)| s.form == *fid));
+    let s1 = subs
+        .iter()
+        .find(|(_, s, _)| s.source_id == "enq-1")
+        .unwrap();
+    assert_eq!(s1.2.values["holidayDetails.guests"], "1");
+    assert_eq!(s1.2.values["email"], "person1@example.com");
+    assert!(sanity_docs(&fx).iter().all(|d| d.doc_type != "enquiryForm"));
+}
+
+#[tokio::test]
+async fn normalise_golden() {
+    let fx = normalised().await;
+    let docs = serde_json::to_value(sanity_docs(&fx)).unwrap();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/sanity/normalised.golden.json");
+    if std::env::var_os("PORTER_BLESS").is_some() {
+        std::fs::write(&path, serde_json::to_string_pretty(&docs).unwrap() + "\n").unwrap();
+    }
+    let want: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(docs, want);
+}
+
+#[tokio::test]
+async fn second_normalise_is_stable_and_drops_stale() {
+    let fx = normalised().await;
+    let before = sanity_docs(&fx);
+    stage(&fx, Stage::Normalise).await.unwrap();
+    assert_eq!(sanity_docs(&fx), before);
+    // A document gone from the export is soft-deleted on the next run.
+    let raw = fx.d.path().join("raw/sanity/data.ndjson");
+    let kept: String = std::fs::read_to_string(&raw)
+        .unwrap()
+        .lines()
+        .filter(|l| !l.contains("\"regionPage-r1\", \"_type\""))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    std::fs::write(&raw, kept).unwrap();
+    stage(&fx, Stage::Normalise).await.unwrap();
+    let after = sanity_docs(&fx);
+    assert_eq!(after.len(), before.len() - 1);
+    assert!(after.iter().all(|d| d.source.source_id != "regionPage-r1"));
 }

@@ -1,0 +1,1947 @@
+[
+  {
+    "id": "11bae459-da12-5459-aedb-d44a00dcb3d8",
+    "type": "cityPage",
+    "status": "published",
+    "locale": null,
+    "translations": [],
+    "slug": "porto",
+    "path": "/cityPage/porto/",
+    "parent": null,
+    "title": "Porto",
+    "fields": {
+      "title": {
+        "t": "text",
+        "v": "Porto"
+      },
+      "seo": {
+        "t": "object",
+        "v": {
+          "metaTitle": {
+            "t": "text",
+            "v": "Meta title"
+          },
+          "metaDescription": {
+            "t": "text",
+            "v": "Meta description"
+          }
+        }
+      },
+      "country": {
+        "t": "doc",
+        "v": "57ed7d5e-5dd3-59dd-8c6b-9e681ca474f9"
+      }
+    },
+    "seo": {
+      "title": "Meta title",
+      "description": "Meta description",
+      "canonical": null,
+      "noindex": false,
+      "og_image": null,
+      "og_title": null,
+      "og_description": null
+    },
+    "created": "2024-01-01T00:00:00Z",
+    "updated": "2024-02-01T00:00:00Z",
+    "author": null,
+    "original": {
+      "_id": "cityPage-ci3",
+      "_type": "cityPage",
+      "_createdAt": "2024-01-01T00:00:00Z",
+      "_updatedAt": "2024-02-01T00:00:00Z",
+      "_rev": "r1",
+      "title": "Porto",
+      "slug": {
+        "_type": "slug",
+        "current": "porto"
+      },
+      "seo": {
+        "_type": "seoGroup",
+        "metaTitle": "Meta title",
+        "metaDescription": "Meta description"
+      },
+      "country": {
+        "_type": "reference",
+        "_ref": "countryPage-c2"
+      }
+    },
+    "source": {
+      "connector": "sanity",
+      "source_id": "cityPage-ci3",
+      "url": null
+    }
+  },
+  {
+    "id": "37907a6a-5933-5242-99b1-d920aca8ec46",
+    "type": "countryPage",
+    "status": "published",
+    "locale": null,
+    "translations": [],
+    "slug": "spain",
+    "path": "/countryPage/spain/",
+    "parent": null,
+    "title": "Spain",
+    "fields": {
+      "title": {
+        "t": "text",
+        "v": "Spain"
+      },
+      "seo": {
+        "t": "object",
+        "v": {
+          "metaTitle": {
+            "t": "text",
+            "v": "Meta title"
+          },
+          "metaDescription": {
+            "t": "text",
+            "v": "Meta description"
+          }
+        }
+      },
+      "region": {
+        "t": "doc",
+        "v": "d6720114-5e6c-5fd3-9abf-6f02db64dd96"
+      }
+    },
+    "seo": {
+      "title": "Meta title",
+      "description": "Meta description",
+      "canonical": null,
+      "noindex": false,
+      "og_image": null,
+      "og_title": null,
+      "og_description": null
+    },
+    "created": "2024-01-01T00:00:00Z",
+    "updated": "2024-02-01T00:00:00Z",
+    "author": null,
+    "original": {
+      "_id": "countryPage-c1",
+      "_type": "countryPage",
+      "_createdAt": "2024-01-01T00:00:00Z",
+      "_updatedAt": "2024-02-01T00:00:00Z",
+      "_rev": "r1",
+      "title": "Spain",
+      "slug": {
+        "_type": "slug",
+        "current": "spain"
+      },
+      "seo": {
+        "_type": "seoGroup",
+        "metaTitle": "Meta title",
+        "metaDescription": "Meta description"
+      },
+      "region": {
+        "_type": "reference",
+        "_ref": "regionPage-r1"
+      }
+    },
+    "source": {
+      "connector": "sanity",
+      "source_id": "countryPage-c1",
+      "url": null
+    }
+  },
+  {
+    "id": "57ed7d5e-5dd3-59dd-8c6b-9e681ca474f9",
+    "type": "countryPage",
+    "status": "published",
+    "locale": null,
+    "translations": [],
+    "slug": "portugal",
+    "path": "/countryPage/portugal/",
+    "parent": null,
+    "title": "Portugal",
+    "fields": {
+      "title": {
+        "t": "text",
+        "v": "Portugal"
+      },
+      "seo": {
+        "t": "object",
+        "v": {
+          "metaTitle": {
+            "t": "text",
+            "v": "Meta title"
+          },
+          "metaDescription": {
+            "t": "text",
+            "v": "Meta description"
+          }
+        }
+      },
+      "region": {
+        "t": "doc",
+        "v": "d6720114-5e6c-5fd3-9abf-6f02db64dd96"
+      }
+    },
+    "seo": {
+      "title": "Meta title",
+      "description": "Meta description",
+      "canonical": null,
+      "noindex": false,
+      "og_image": null,
+      "og_title": null,
+      "og_description": null
+    },
+    "created": "2024-01-01T00:00:00Z",
+    "updated": "2024-02-01T00:00:00Z",
+    "author": null,
+    "original": {
+      "_id": "countryPage-c2",
+      "_type": "countryPage",
+      "_createdAt": "2024-01-01T00:00:00Z",
+      "_updatedAt": "2024-02-01T00:00:00Z",
+      "_rev": "r1",
+      "title": "Portugal",
+      "slug": {
+        "_type": "slug",
+        "current": "portugal"
+      },
+      "seo": {
+        "_type": "seoGroup",
+        "metaTitle": "Meta title",
+        "metaDescription": "Meta description"
+      },
+      "region": {
+        "_type": "reference",
+        "_ref": "regionPage-r1"
+      }
+    },
+    "source": {
+      "connector": "sanity",
+      "source_id": "countryPage-c2",
+      "url": null
+    }
+  },
+  {
+    "id": "6ee1d10c-0320-5f68-abfd-0ff627ba8e7a",
+    "type": "hotelBreak",
+    "status": "draft",
+    "locale": null,
+    "translations": [],
+    "slug": "brand-new-break",
+    "path": "/hotelBreak/brand-new-break/",
+    "parent": null,
+    "title": "Brand New Break",
+    "fields": {
+      "title": {
+        "t": "text",
+        "v": "Brand New Break"
+      },
+      "mainImage": {
+        "t": "media",
+        "v": "e813924a-45e0-5f87-9b3d-76323cfa31b0"
+      },
+      "seo": {
+        "t": "object",
+        "v": {
+          "metaTitle": {
+            "t": "text",
+            "v": "Meta title"
+          },
+          "metaDescription": {
+            "t": "text",
+            "v": "Meta description"
+          }
+        }
+      },
+      "description": {
+        "t": "rich-text",
+        "v": {
+          "blocks": [
+            {
+              "type": "paragraph",
+              "inlines": [
+                {
+                  "type": "text",
+                  "text": "See ",
+                  "marks": {}
+                },
+                {
+                  "type": "link",
+                  "target": {
+                    "url": "https://example.com"
+                  },
+                  "new_tab": false,
+                  "inlines": [
+                    {
+                      "type": "text",
+                      "text": "this link",
+                      "marks": {}
+                    }
+                  ]
+                }
+              ],
+              "align": "none"
+            },
+            {
+              "type": "media",
+              "media": "f404ef39-8d2e-5737-8c0e-4117e2e254cd",
+              "caption": null,
+              "align": "none",
+              "width": null
+            }
+          ]
+        }
+      },
+      "city": {
+        "t": "doc",
+        "v": "77c806ee-77a4-5bcd-8b12-a1cfb6c40522"
+      },
+      "flexibleContent": {
+        "t": "layout",
+        "v": [
+          {
+            "kind": {
+              "type": "raw"
+            },
+            "props": {
+              "heading": {
+                "t": "text",
+                "v": "Hello"
+              },
+              "image": {
+                "t": "media",
+                "v": "e813924a-45e0-5f87-9b3d-76323cfa31b0"
+              }
+            },
+            "children": [],
+            "original": {
+              "builder": "sanity",
+              "module": "hero",
+              "classes": [],
+              "settings": {
+                "_type": "hero",
+                "_key": "f1",
+                "heading": "Hello",
+                "image": {
+                  "_type": "image",
+                  "asset": {
+                    "_type": "reference",
+                    "_ref": "image-d3dfdcf650653fee4a8b89c828ccad98a8406fdd-800x600-jpg"
+                  },
+                  "alt": "Image 1"
+                }
+              }
+            }
+          },
+          {
+            "kind": {
+              "type": "raw"
+            },
+            "props": {
+              "cards": {
+                "t": "layout",
+                "v": [
+                  {
+                    "kind": {
+                      "type": "raw"
+                    },
+                    "props": {
+                      "title": {
+                        "t": "text",
+                        "v": "A"
+                      }
+                    },
+                    "children": [],
+                    "original": {
+                      "builder": "sanity",
+                      "module": "card",
+                      "classes": [],
+                      "settings": {
+                        "_type": "card",
+                        "_key": "c1",
+                        "title": "A"
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "children": [],
+            "original": {
+              "builder": "sanity",
+              "module": "cardCarousel",
+              "classes": [],
+              "settings": {
+                "_type": "cardCarousel",
+                "_key": "f2",
+                "cards": [
+                  {
+                    "_type": "card",
+                    "_key": "c1",
+                    "title": "A"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "kind": {
+              "type": "raw"
+            },
+            "props": {
+              "cards": {
+                "t": "layout",
+                "v": [
+                  {
+                    "kind": {
+                      "type": "raw"
+                    },
+                    "props": {
+                      "title": {
+                        "t": "text",
+                        "v": "B"
+                      },
+                      "image": {
+                        "t": "media",
+                        "v": "f404ef39-8d2e-5737-8c0e-4117e2e254cd"
+                      }
+                    },
+                    "children": [],
+                    "original": {
+                      "builder": "sanity",
+                      "module": "card",
+                      "classes": [],
+                      "settings": {
+                        "_type": "card",
+                        "_key": "c2",
+                        "title": "B",
+                        "image": {
+                          "_type": "image",
+                          "asset": {
+                            "_type": "reference",
+                            "_ref": "image-d267af74a142296235941b40d70bc38113a0481e-800x600-jpg"
+                          },
+                          "alt": "Image 2"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "children": [],
+            "original": {
+              "builder": "sanity",
+              "module": "customCardCarousel",
+              "classes": [],
+              "settings": {
+                "_type": "customCardCarousel",
+                "_key": "f3",
+                "cards": [
+                  {
+                    "_type": "card",
+                    "_key": "c2",
+                    "title": "B",
+                    "image": {
+                      "_type": "image",
+                      "asset": {
+                        "_type": "reference",
+                        "_ref": "image-d267af74a142296235941b40d70bc38113a0481e-800x600-jpg"
+                      },
+                      "alt": "Image 2"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "kind": {
+              "type": "accordion"
+            },
+            "props": {
+              "items": {
+                "t": "layout",
+                "v": [
+                  {
+                    "kind": {
+                      "type": "raw"
+                    },
+                    "props": {
+                      "question": {
+                        "t": "text",
+                        "v": "Q?"
+                      },
+                      "answer": {
+                        "t": "text",
+                        "v": "A."
+                      }
+                    },
+                    "children": [],
+                    "original": {
+                      "builder": "sanity",
+                      "module": "item",
+                      "classes": [],
+                      "settings": {
+                        "_type": "item",
+                        "_key": "a1",
+                        "question": "Q?",
+                        "answer": "A."
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "children": [],
+            "original": {
+              "builder": "sanity",
+              "module": "accordion",
+              "classes": [],
+              "settings": {
+                "_type": "accordion",
+                "_key": "f4",
+                "items": [
+                  {
+                    "_type": "item",
+                    "_key": "a1",
+                    "question": "Q?",
+                    "answer": "A."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    "seo": {
+      "title": "Meta title",
+      "description": "Meta description",
+      "canonical": null,
+      "noindex": false,
+      "og_image": null,
+      "og_title": null,
+      "og_description": null
+    },
+    "created": "2024-01-01T00:00:00Z",
+    "updated": "2024-03-01T00:00:00Z",
+    "author": null,
+    "original": {
+      "_id": "drafts.hb-new",
+      "_type": "hotelBreak",
+      "_createdAt": "2024-01-01T00:00:00Z",
+      "_updatedAt": "2024-03-01T00:00:00Z",
+      "_rev": "r2",
+      "title": "Brand New Break",
+      "slug": {
+        "_type": "slug",
+        "current": "brand-new-break"
+      },
+      "mainImage": {
+        "_type": "image",
+        "asset": {
+          "_type": "reference",
+          "_ref": "image-d3dfdcf650653fee4a8b89c828ccad98a8406fdd-800x600-jpg"
+        },
+        "alt": "Image 1",
+        "hotspot": {
+          "_type": "sanity.imageHotspot",
+          "x": 0.3,
+          "y": 0.4,
+          "width": 0.6,
+          "height": 0.5
+        },
+        "crop": {
+          "_type": "sanity.imageCrop",
+          "top": 0.1,
+          "bottom": 0.1,
+          "left": 0.05,
+          "right": 0.05
+        }
+      },
+      "seo": {
+        "_type": "seoGroup",
+        "metaTitle": "Meta title",
+        "metaDescription": "Meta description"
+      },
+      "description": [
+        {
+          "_type": "block",
+          "_key": "b1",
+          "style": "normal",
+          "markDefs": [
+            {
+              "_type": "link",
+              "_key": "l1",
+              "href": "https://example.com"
+            }
+          ],
+          "children": [
+            {
+              "_type": "span",
+              "_key": "s1",
+              "text": "See ",
+              "marks": []
+            },
+            {
+              "_type": "span",
+              "_key": "s2",
+              "text": "this link",
+              "marks": [
+                "l1"
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "image",
+          "asset": {
+            "_type": "reference",
+            "_ref": "image-d267af74a142296235941b40d70bc38113a0481e-800x600-jpg"
+          },
+          "alt": "Image 2",
+          "_key": "i1"
+        }
+      ],
+      "city": {
+        "_type": "reference",
+        "_ref": "cityPage-ci1"
+      },
+      "flexibleContent": [
+        {
+          "_type": "hero",
+          "_key": "f1",
+          "heading": "Hello",
+          "image": {
+            "_type": "image",
+            "asset": {
+              "_type": "reference",
+              "_ref": "image-d3dfdcf650653fee4a8b89c828ccad98a8406fdd-800x600-jpg"
+            },
+            "alt": "Image 1"
+          }
+        },
+        {
+          "_type": "cardCarousel",
+          "_key": "f2",
+          "cards": [
+            {
+              "_type": "card",
+              "_key": "c1",
+              "title": "A"
+            }
+          ]
+        },
+        {
+          "_type": "customCardCarousel",
+          "_key": "f3",
+          "cards": [
+            {
+              "_type": "card",
+              "_key": "c2",
+              "title": "B",
+              "image": {
+                "_type": "image",
+                "asset": {
+                  "_type": "reference",
+                  "_ref": "image-d267af74a142296235941b40d70bc38113a0481e-800x600-jpg"
+                },
+                "alt": "Image 2"
+              }
+            }
+          ]
+        },
+        {
+          "_type": "accordion",
+          "_key": "f4",
+          "items": [
+            {
+              "_type": "item",
+              "_key": "a1",
+              "question": "Q?",
+              "answer": "A."
+            }
+          ]
+        }
+      ]
+    },
+    "source": {
+      "connector": "sanity",
+      "source_id": "hb-new",
+      "url": null
+    }
+  },
+  {
+    "id": "70429669-60e0-5bb0-aa4c-dfdc39c406e2",
+    "type": "siteSettings",
+    "status": "published",
+    "locale": null,
+    "translations": [],
+    "slug": "site",
+    "path": "/siteSettings/site/",
+    "parent": null,
+    "title": "Site",
+    "fields": {
+      "title": {
+        "t": "text",
+        "v": "Site"
+      },
+      "logo": {
+        "t": "media",
+        "v": "e813924a-45e0-5f87-9b3d-76323cfa31b0"
+      }
+    },
+    "seo": {
+      "title": null,
+      "description": null,
+      "canonical": null,
+      "noindex": false,
+      "og_image": null,
+      "og_title": null,
+      "og_description": null
+    },
+    "created": null,
+    "updated": null,
+    "author": null,
+    "original": {
+      "_id": "siteSettings",
+      "_type": "siteSettings",
+      "title": "Site",
+      "logo": {
+        "_type": "image",
+        "asset": {
+          "_type": "reference",
+          "_ref": "image-d3dfdcf650653fee4a8b89c828ccad98a8406fdd-800x600-jpg"
+        },
+        "alt": "Image 1"
+      }
+    },
+    "source": {
+      "connector": "sanity",
+      "source_id": "siteSettings",
+      "url": null
+    }
+  },
+  {
+    "id": "77c806ee-77a4-5bcd-8b12-a1cfb6c40522",
+    "type": "cityPage",
+    "status": "published",
+    "locale": null,
+    "translations": [],
+    "slug": "madrid",
+    "path": "/cityPage/madrid/",
+    "parent": null,
+    "title": "Madrid",
+    "fields": {
+      "title": {
+        "t": "text",
+        "v": "Madrid"
+      },
+      "seo": {
+        "t": "object",
+        "v": {
+          "metaTitle": {
+            "t": "text",
+            "v": "Meta title"
+          },
+          "metaDescription": {
+            "t": "text",
+            "v": "Meta description"
+          }
+        }
+      },
+      "country": {
+        "t": "doc",
+        "v": "37907a6a-5933-5242-99b1-d920aca8ec46"
+      },
+      "location": {
+        "t": "object",
+        "v": {
+          "lat": {
+            "t": "number",
+            "v": 40.4
+          },
+          "lng": {
+            "t": "number",
+            "v": -3.7
+          }
+        }
+      }
+    },
+    "seo": {
+      "title": "Meta title",
+      "description": "Meta description",
+      "canonical": null,
+      "noindex": false,
+      "og_image": null,
+      "og_title": null,
+      "og_description": null
+    },
+    "created": "2024-01-01T00:00:00Z",
+    "updated": "2024-02-01T00:00:00Z",
+    "author": null,
+    "original": {
+      "_id": "cityPage-ci1",
+      "_type": "cityPage",
+      "_createdAt": "2024-01-01T00:00:00Z",
+      "_updatedAt": "2024-02-01T00:00:00Z",
+      "_rev": "r1",
+      "title": "Madrid",
+      "slug": {
+        "_type": "slug",
+        "current": "madrid"
+      },
+      "seo": {
+        "_type": "seoGroup",
+        "metaTitle": "Meta title",
+        "metaDescription": "Meta description"
+      },
+      "country": {
+        "_type": "reference",
+        "_ref": "countryPage-c1"
+      },
+      "location": {
+        "_type": "geopoint",
+        "lat": 40.4,
+        "lng": -3.7
+      }
+    },
+    "source": {
+      "connector": "sanity",
+      "source_id": "cityPage-ci1",
+      "url": null
+    }
+  },
+  {
+    "id": "a503c96c-4e9c-518b-adb5-cbc4c358b57e",
+    "type": "cityPage",
+    "status": "published",
+    "locale": null,
+    "translations": [],
+    "slug": "lisbon",
+    "path": "/cityPage/lisbon/",
+    "parent": null,
+    "title": "Lisbon",
+    "fields": {
+      "title": {
+        "t": "text",
+        "v": "Lisbon"
+      },
+      "seo": {
+        "t": "object",
+        "v": {
+          "metaTitle": {
+            "t": "text",
+            "v": "Meta title"
+          },
+          "metaDescription": {
+            "t": "text",
+            "v": "Meta description"
+          }
+        }
+      },
+      "country": {
+        "t": "doc",
+        "v": "57ed7d5e-5dd3-59dd-8c6b-9e681ca474f9"
+      }
+    },
+    "seo": {
+      "title": "Meta title",
+      "description": "Meta description",
+      "canonical": null,
+      "noindex": false,
+      "og_image": null,
+      "og_title": null,
+      "og_description": null
+    },
+    "created": "2024-01-01T00:00:00Z",
+    "updated": "2024-02-01T00:00:00Z",
+    "author": null,
+    "original": {
+      "_id": "cityPage-ci2",
+      "_type": "cityPage",
+      "_createdAt": "2024-01-01T00:00:00Z",
+      "_updatedAt": "2024-02-01T00:00:00Z",
+      "_rev": "r1",
+      "title": "Lisbon",
+      "slug": {
+        "_type": "slug",
+        "current": "lisbon"
+      },
+      "seo": {
+        "_type": "seoGroup",
+        "metaTitle": "Meta title",
+        "metaDescription": "Meta description"
+      },
+      "country": {
+        "_type": "reference",
+        "_ref": "countryPage-c2"
+      }
+    },
+    "source": {
+      "connector": "sanity",
+      "source_id": "cityPage-ci2",
+      "url": null
+    }
+  },
+  {
+    "id": "b38eb548-1e04-5a00-9718-7a67bc92803b",
+    "type": "hotelBreak",
+    "status": "published",
+    "locale": null,
+    "translations": [],
+    "slug": "beach-break",
+    "path": "/hotelBreak/beach-break/",
+    "parent": null,
+    "title": "Beach Break",
+    "fields": {
+      "title": {
+        "t": "text",
+        "v": "Beach Break"
+      },
+      "mainImage": {
+        "t": "media",
+        "v": "e813924a-45e0-5f87-9b3d-76323cfa31b0"
+      },
+      "seo": {
+        "t": "object",
+        "v": {
+          "metaTitle": {
+            "t": "text",
+            "v": "Meta title"
+          },
+          "metaDescription": {
+            "t": "text",
+            "v": "Meta description"
+          }
+        }
+      },
+      "description": {
+        "t": "rich-text",
+        "v": {
+          "blocks": [
+            {
+              "type": "paragraph",
+              "inlines": [
+                {
+                  "type": "text",
+                  "text": "See ",
+                  "marks": {}
+                },
+                {
+                  "type": "link",
+                  "target": {
+                    "url": "https://example.com"
+                  },
+                  "new_tab": false,
+                  "inlines": [
+                    {
+                      "type": "text",
+                      "text": "this link",
+                      "marks": {}
+                    }
+                  ]
+                }
+              ],
+              "align": "none"
+            },
+            {
+              "type": "media",
+              "media": "f404ef39-8d2e-5737-8c0e-4117e2e254cd",
+              "caption": null,
+              "align": "none",
+              "width": null
+            }
+          ]
+        }
+      },
+      "city": {
+        "t": "doc",
+        "v": "77c806ee-77a4-5bcd-8b12-a1cfb6c40522"
+      },
+      "flexibleContent": {
+        "t": "layout",
+        "v": [
+          {
+            "kind": {
+              "type": "raw"
+            },
+            "props": {
+              "heading": {
+                "t": "text",
+                "v": "Hello"
+              },
+              "image": {
+                "t": "media",
+                "v": "e813924a-45e0-5f87-9b3d-76323cfa31b0"
+              }
+            },
+            "children": [],
+            "original": {
+              "builder": "sanity",
+              "module": "hero",
+              "classes": [],
+              "settings": {
+                "_type": "hero",
+                "_key": "f1",
+                "heading": "Hello",
+                "image": {
+                  "_type": "image",
+                  "asset": {
+                    "_type": "reference",
+                    "_ref": "image-d3dfdcf650653fee4a8b89c828ccad98a8406fdd-800x600-jpg"
+                  },
+                  "alt": "Image 1"
+                }
+              }
+            }
+          },
+          {
+            "kind": {
+              "type": "raw"
+            },
+            "props": {
+              "cards": {
+                "t": "layout",
+                "v": [
+                  {
+                    "kind": {
+                      "type": "raw"
+                    },
+                    "props": {
+                      "title": {
+                        "t": "text",
+                        "v": "A"
+                      }
+                    },
+                    "children": [],
+                    "original": {
+                      "builder": "sanity",
+                      "module": "card",
+                      "classes": [],
+                      "settings": {
+                        "_type": "card",
+                        "_key": "c1",
+                        "title": "A"
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "children": [],
+            "original": {
+              "builder": "sanity",
+              "module": "cardCarousel",
+              "classes": [],
+              "settings": {
+                "_type": "cardCarousel",
+                "_key": "f2",
+                "cards": [
+                  {
+                    "_type": "card",
+                    "_key": "c1",
+                    "title": "A"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "kind": {
+              "type": "raw"
+            },
+            "props": {
+              "cards": {
+                "t": "layout",
+                "v": [
+                  {
+                    "kind": {
+                      "type": "raw"
+                    },
+                    "props": {
+                      "title": {
+                        "t": "text",
+                        "v": "B"
+                      },
+                      "image": {
+                        "t": "media",
+                        "v": "f404ef39-8d2e-5737-8c0e-4117e2e254cd"
+                      }
+                    },
+                    "children": [],
+                    "original": {
+                      "builder": "sanity",
+                      "module": "card",
+                      "classes": [],
+                      "settings": {
+                        "_type": "card",
+                        "_key": "c2",
+                        "title": "B",
+                        "image": {
+                          "_type": "image",
+                          "asset": {
+                            "_type": "reference",
+                            "_ref": "image-d267af74a142296235941b40d70bc38113a0481e-800x600-jpg"
+                          },
+                          "alt": "Image 2"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "children": [],
+            "original": {
+              "builder": "sanity",
+              "module": "customCardCarousel",
+              "classes": [],
+              "settings": {
+                "_type": "customCardCarousel",
+                "_key": "f3",
+                "cards": [
+                  {
+                    "_type": "card",
+                    "_key": "c2",
+                    "title": "B",
+                    "image": {
+                      "_type": "image",
+                      "asset": {
+                        "_type": "reference",
+                        "_ref": "image-d267af74a142296235941b40d70bc38113a0481e-800x600-jpg"
+                      },
+                      "alt": "Image 2"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "kind": {
+              "type": "accordion"
+            },
+            "props": {
+              "items": {
+                "t": "layout",
+                "v": [
+                  {
+                    "kind": {
+                      "type": "raw"
+                    },
+                    "props": {
+                      "question": {
+                        "t": "text",
+                        "v": "Q?"
+                      },
+                      "answer": {
+                        "t": "text",
+                        "v": "A."
+                      }
+                    },
+                    "children": [],
+                    "original": {
+                      "builder": "sanity",
+                      "module": "item",
+                      "classes": [],
+                      "settings": {
+                        "_type": "item",
+                        "_key": "a1",
+                        "question": "Q?",
+                        "answer": "A."
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "children": [],
+            "original": {
+              "builder": "sanity",
+              "module": "accordion",
+              "classes": [],
+              "settings": {
+                "_type": "accordion",
+                "_key": "f4",
+                "items": [
+                  {
+                    "_type": "item",
+                    "_key": "a1",
+                    "question": "Q?",
+                    "answer": "A."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "related": {
+        "t": "list",
+        "v": [
+          {
+            "t": "doc",
+            "v": "a503c96c-4e9c-518b-adb5-cbc4c358b57e"
+          }
+        ]
+      }
+    },
+    "seo": {
+      "title": "Meta title",
+      "description": "Meta description",
+      "canonical": null,
+      "noindex": false,
+      "og_image": null,
+      "og_title": null,
+      "og_description": null
+    },
+    "created": "2024-01-01T00:00:00Z",
+    "updated": "2024-03-01T00:00:00Z",
+    "author": null,
+    "original": {
+      "_id": "hb-1",
+      "_type": "hotelBreak",
+      "_createdAt": "2024-01-01T00:00:00Z",
+      "_updatedAt": "2024-03-01T00:00:00Z",
+      "_rev": "r2",
+      "title": "Beach Break",
+      "slug": {
+        "_type": "slug",
+        "current": "beach-break"
+      },
+      "mainImage": {
+        "_type": "image",
+        "asset": {
+          "_type": "reference",
+          "_ref": "image-d3dfdcf650653fee4a8b89c828ccad98a8406fdd-800x600-jpg"
+        },
+        "alt": "Image 1",
+        "hotspot": {
+          "_type": "sanity.imageHotspot",
+          "x": 0.3,
+          "y": 0.4,
+          "width": 0.6,
+          "height": 0.5
+        },
+        "crop": {
+          "_type": "sanity.imageCrop",
+          "top": 0.1,
+          "bottom": 0.1,
+          "left": 0.05,
+          "right": 0.05
+        }
+      },
+      "seo": {
+        "_type": "seoGroup",
+        "metaTitle": "Meta title",
+        "metaDescription": "Meta description"
+      },
+      "description": [
+        {
+          "_type": "block",
+          "_key": "b1",
+          "style": "normal",
+          "markDefs": [
+            {
+              "_type": "link",
+              "_key": "l1",
+              "href": "https://example.com"
+            }
+          ],
+          "children": [
+            {
+              "_type": "span",
+              "_key": "s1",
+              "text": "See ",
+              "marks": []
+            },
+            {
+              "_type": "span",
+              "_key": "s2",
+              "text": "this link",
+              "marks": [
+                "l1"
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "image",
+          "asset": {
+            "_type": "reference",
+            "_ref": "image-d267af74a142296235941b40d70bc38113a0481e-800x600-jpg"
+          },
+          "alt": "Image 2",
+          "_key": "i1"
+        }
+      ],
+      "city": {
+        "_type": "reference",
+        "_ref": "cityPage-ci1"
+      },
+      "flexibleContent": [
+        {
+          "_type": "hero",
+          "_key": "f1",
+          "heading": "Hello",
+          "image": {
+            "_type": "image",
+            "asset": {
+              "_type": "reference",
+              "_ref": "image-d3dfdcf650653fee4a8b89c828ccad98a8406fdd-800x600-jpg"
+            },
+            "alt": "Image 1"
+          }
+        },
+        {
+          "_type": "cardCarousel",
+          "_key": "f2",
+          "cards": [
+            {
+              "_type": "card",
+              "_key": "c1",
+              "title": "A"
+            }
+          ]
+        },
+        {
+          "_type": "customCardCarousel",
+          "_key": "f3",
+          "cards": [
+            {
+              "_type": "card",
+              "_key": "c2",
+              "title": "B",
+              "image": {
+                "_type": "image",
+                "asset": {
+                  "_type": "reference",
+                  "_ref": "image-d267af74a142296235941b40d70bc38113a0481e-800x600-jpg"
+                },
+                "alt": "Image 2"
+              }
+            }
+          ]
+        },
+        {
+          "_type": "accordion",
+          "_key": "f4",
+          "items": [
+            {
+              "_type": "item",
+              "_key": "a1",
+              "question": "Q?",
+              "answer": "A."
+            }
+          ]
+        }
+      ],
+      "related": [
+        {
+          "_type": "reference",
+          "_ref": "cityPage-ci2",
+          "_key": "x1"
+        }
+      ]
+    },
+    "source": {
+      "connector": "sanity",
+      "source_id": "hb-1",
+      "url": null
+    }
+  },
+  {
+    "id": "d5c5de78-941b-52a8-baf7-d1ef6e8eae7e",
+    "type": "homepage",
+    "status": "published",
+    "locale": null,
+    "translations": [],
+    "slug": "home",
+    "path": "/homepage/home/",
+    "parent": null,
+    "title": "Home",
+    "fields": {
+      "title": {
+        "t": "text",
+        "v": "Home"
+      },
+      "brochure": {
+        "t": "media",
+        "v": "12acf959-6980-5f51-bfbe-9f7c94aa4c46"
+      },
+      "seo": {
+        "t": "object",
+        "v": {
+          "metaTitle": {
+            "t": "text",
+            "v": "Meta title"
+          },
+          "metaDescription": {
+            "t": "text",
+            "v": "Meta description"
+          }
+        }
+      }
+    },
+    "seo": {
+      "title": "Meta title",
+      "description": "Meta description",
+      "canonical": null,
+      "noindex": false,
+      "og_image": null,
+      "og_title": null,
+      "og_description": null
+    },
+    "created": null,
+    "updated": null,
+    "author": null,
+    "original": {
+      "_id": "homepage",
+      "_type": "homepage",
+      "title": "Home",
+      "brochure": {
+        "_type": "file",
+        "asset": {
+          "_type": "reference",
+          "_ref": "file-ca7fcf72964eb65f1a947189036a170a1489a0bb-pdf"
+        }
+      },
+      "seo": {
+        "_type": "seoGroup",
+        "metaTitle": "Meta title",
+        "metaDescription": "Meta description"
+      }
+    },
+    "source": {
+      "connector": "sanity",
+      "source_id": "homepage",
+      "url": null
+    }
+  },
+  {
+    "id": "d6720114-5e6c-5fd3-9abf-6f02db64dd96",
+    "type": "regionPage",
+    "status": "published",
+    "locale": null,
+    "translations": [],
+    "slug": "europe",
+    "path": "/regionPage/europe/",
+    "parent": null,
+    "title": "Europe",
+    "fields": {
+      "title": {
+        "t": "text",
+        "v": "Europe"
+      },
+      "seo": {
+        "t": "object",
+        "v": {
+          "metaTitle": {
+            "t": "text",
+            "v": "Meta title"
+          },
+          "metaDescription": {
+            "t": "text",
+            "v": "Meta description"
+          }
+        }
+      }
+    },
+    "seo": {
+      "title": "Meta title",
+      "description": "Meta description",
+      "canonical": null,
+      "noindex": false,
+      "og_image": null,
+      "og_title": null,
+      "og_description": null
+    },
+    "created": "2024-01-01T00:00:00Z",
+    "updated": "2024-02-01T00:00:00Z",
+    "author": null,
+    "original": {
+      "_id": "regionPage-r1",
+      "_type": "regionPage",
+      "_createdAt": "2024-01-01T00:00:00Z",
+      "_updatedAt": "2024-02-01T00:00:00Z",
+      "_rev": "r1",
+      "title": "Europe",
+      "slug": {
+        "_type": "slug",
+        "current": "europe"
+      },
+      "seo": {
+        "_type": "seoGroup",
+        "metaTitle": "Meta title",
+        "metaDescription": "Meta description"
+      }
+    },
+    "source": {
+      "connector": "sanity",
+      "source_id": "regionPage-r1",
+      "url": null
+    }
+  },
+  {
+    "id": "f42abb82-4f05-5893-a3b2-f2bfd175abd7",
+    "type": "hotelBreak",
+    "status": "published",
+    "locale": null,
+    "translations": [],
+    "slug": "city-break",
+    "path": "/hotelBreak/city-break/",
+    "parent": null,
+    "title": "City Break",
+    "fields": {
+      "title": {
+        "t": "text",
+        "v": "City Break"
+      },
+      "mainImage": {
+        "t": "media",
+        "v": "e813924a-45e0-5f87-9b3d-76323cfa31b0"
+      },
+      "seo": {
+        "t": "object",
+        "v": {
+          "metaTitle": {
+            "t": "text",
+            "v": "Meta title"
+          },
+          "metaDescription": {
+            "t": "text",
+            "v": "Meta description"
+          }
+        }
+      },
+      "description": {
+        "t": "rich-text",
+        "v": {
+          "blocks": [
+            {
+              "type": "paragraph",
+              "inlines": [
+                {
+                  "type": "text",
+                  "text": "See ",
+                  "marks": {}
+                },
+                {
+                  "type": "link",
+                  "target": {
+                    "url": "https://example.com"
+                  },
+                  "new_tab": false,
+                  "inlines": [
+                    {
+                      "type": "text",
+                      "text": "this link",
+                      "marks": {}
+                    }
+                  ]
+                }
+              ],
+              "align": "none"
+            },
+            {
+              "type": "media",
+              "media": "f404ef39-8d2e-5737-8c0e-4117e2e254cd",
+              "caption": null,
+              "align": "none",
+              "width": null
+            }
+          ]
+        }
+      },
+      "city": {
+        "t": "doc",
+        "v": "77c806ee-77a4-5bcd-8b12-a1cfb6c40522"
+      },
+      "flexibleContent": {
+        "t": "layout",
+        "v": [
+          {
+            "kind": {
+              "type": "raw"
+            },
+            "props": {
+              "heading": {
+                "t": "text",
+                "v": "Hello"
+              },
+              "image": {
+                "t": "media",
+                "v": "e813924a-45e0-5f87-9b3d-76323cfa31b0"
+              }
+            },
+            "children": [],
+            "original": {
+              "builder": "sanity",
+              "module": "hero",
+              "classes": [],
+              "settings": {
+                "_type": "hero",
+                "_key": "f1",
+                "heading": "Hello",
+                "image": {
+                  "_type": "image",
+                  "asset": {
+                    "_type": "reference",
+                    "_ref": "image-d3dfdcf650653fee4a8b89c828ccad98a8406fdd-800x600-jpg"
+                  },
+                  "alt": "Image 1"
+                }
+              }
+            }
+          },
+          {
+            "kind": {
+              "type": "raw"
+            },
+            "props": {
+              "cards": {
+                "t": "layout",
+                "v": [
+                  {
+                    "kind": {
+                      "type": "raw"
+                    },
+                    "props": {
+                      "title": {
+                        "t": "text",
+                        "v": "A"
+                      }
+                    },
+                    "children": [],
+                    "original": {
+                      "builder": "sanity",
+                      "module": "card",
+                      "classes": [],
+                      "settings": {
+                        "_type": "card",
+                        "_key": "c1",
+                        "title": "A"
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "children": [],
+            "original": {
+              "builder": "sanity",
+              "module": "cardCarousel",
+              "classes": [],
+              "settings": {
+                "_type": "cardCarousel",
+                "_key": "f2",
+                "cards": [
+                  {
+                    "_type": "card",
+                    "_key": "c1",
+                    "title": "A"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "kind": {
+              "type": "raw"
+            },
+            "props": {
+              "cards": {
+                "t": "layout",
+                "v": [
+                  {
+                    "kind": {
+                      "type": "raw"
+                    },
+                    "props": {
+                      "title": {
+                        "t": "text",
+                        "v": "B"
+                      },
+                      "image": {
+                        "t": "media",
+                        "v": "f404ef39-8d2e-5737-8c0e-4117e2e254cd"
+                      }
+                    },
+                    "children": [],
+                    "original": {
+                      "builder": "sanity",
+                      "module": "card",
+                      "classes": [],
+                      "settings": {
+                        "_type": "card",
+                        "_key": "c2",
+                        "title": "B",
+                        "image": {
+                          "_type": "image",
+                          "asset": {
+                            "_type": "reference",
+                            "_ref": "image-d267af74a142296235941b40d70bc38113a0481e-800x600-jpg"
+                          },
+                          "alt": "Image 2"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "children": [],
+            "original": {
+              "builder": "sanity",
+              "module": "customCardCarousel",
+              "classes": [],
+              "settings": {
+                "_type": "customCardCarousel",
+                "_key": "f3",
+                "cards": [
+                  {
+                    "_type": "card",
+                    "_key": "c2",
+                    "title": "B",
+                    "image": {
+                      "_type": "image",
+                      "asset": {
+                        "_type": "reference",
+                        "_ref": "image-d267af74a142296235941b40d70bc38113a0481e-800x600-jpg"
+                      },
+                      "alt": "Image 2"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "kind": {
+              "type": "accordion"
+            },
+            "props": {
+              "items": {
+                "t": "layout",
+                "v": [
+                  {
+                    "kind": {
+                      "type": "raw"
+                    },
+                    "props": {
+                      "question": {
+                        "t": "text",
+                        "v": "Q?"
+                      },
+                      "answer": {
+                        "t": "text",
+                        "v": "A."
+                      }
+                    },
+                    "children": [],
+                    "original": {
+                      "builder": "sanity",
+                      "module": "item",
+                      "classes": [],
+                      "settings": {
+                        "_type": "item",
+                        "_key": "a1",
+                        "question": "Q?",
+                        "answer": "A."
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "children": [],
+            "original": {
+              "builder": "sanity",
+              "module": "accordion",
+              "classes": [],
+              "settings": {
+                "_type": "accordion",
+                "_key": "f4",
+                "items": [
+                  {
+                    "_type": "item",
+                    "_key": "a1",
+                    "question": "Q?",
+                    "answer": "A."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "dangling": {
+        "t": "null"
+      },
+      "weakDangling": {
+        "t": "null"
+      }
+    },
+    "seo": {
+      "title": "Meta title",
+      "description": "Meta description",
+      "canonical": null,
+      "noindex": false,
+      "og_image": null,
+      "og_title": null,
+      "og_description": null
+    },
+    "created": "2024-01-01T00:00:00Z",
+    "updated": "2024-03-01T00:00:00Z",
+    "author": null,
+    "original": {
+      "_id": "hb-2",
+      "_type": "hotelBreak",
+      "_createdAt": "2024-01-01T00:00:00Z",
+      "_updatedAt": "2024-03-01T00:00:00Z",
+      "_rev": "r2",
+      "title": "City Break",
+      "slug": {
+        "_type": "slug",
+        "current": "city-break"
+      },
+      "mainImage": {
+        "_type": "image",
+        "asset": {
+          "_type": "reference",
+          "_ref": "image-d3dfdcf650653fee4a8b89c828ccad98a8406fdd-800x600-jpg"
+        },
+        "alt": "Image 1",
+        "hotspot": {
+          "_type": "sanity.imageHotspot",
+          "x": 0.3,
+          "y": 0.4,
+          "width": 0.6,
+          "height": 0.5
+        },
+        "crop": {
+          "_type": "sanity.imageCrop",
+          "top": 0.1,
+          "bottom": 0.1,
+          "left": 0.05,
+          "right": 0.05
+        }
+      },
+      "seo": {
+        "_type": "seoGroup",
+        "metaTitle": "Meta title",
+        "metaDescription": "Meta description"
+      },
+      "description": [
+        {
+          "_type": "block",
+          "_key": "b1",
+          "style": "normal",
+          "markDefs": [
+            {
+              "_type": "link",
+              "_key": "l1",
+              "href": "https://example.com"
+            }
+          ],
+          "children": [
+            {
+              "_type": "span",
+              "_key": "s1",
+              "text": "See ",
+              "marks": []
+            },
+            {
+              "_type": "span",
+              "_key": "s2",
+              "text": "this link",
+              "marks": [
+                "l1"
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "image",
+          "asset": {
+            "_type": "reference",
+            "_ref": "image-d267af74a142296235941b40d70bc38113a0481e-800x600-jpg"
+          },
+          "alt": "Image 2",
+          "_key": "i1"
+        }
+      ],
+      "city": {
+        "_type": "reference",
+        "_ref": "cityPage-ci1"
+      },
+      "flexibleContent": [
+        {
+          "_type": "hero",
+          "_key": "f1",
+          "heading": "Hello",
+          "image": {
+            "_type": "image",
+            "asset": {
+              "_type": "reference",
+              "_ref": "image-d3dfdcf650653fee4a8b89c828ccad98a8406fdd-800x600-jpg"
+            },
+            "alt": "Image 1"
+          }
+        },
+        {
+          "_type": "cardCarousel",
+          "_key": "f2",
+          "cards": [
+            {
+              "_type": "card",
+              "_key": "c1",
+              "title": "A"
+            }
+          ]
+        },
+        {
+          "_type": "customCardCarousel",
+          "_key": "f3",
+          "cards": [
+            {
+              "_type": "card",
+              "_key": "c2",
+              "title": "B",
+              "image": {
+                "_type": "image",
+                "asset": {
+                  "_type": "reference",
+                  "_ref": "image-d267af74a142296235941b40d70bc38113a0481e-800x600-jpg"
+                },
+                "alt": "Image 2"
+              }
+            }
+          ]
+        },
+        {
+          "_type": "accordion",
+          "_key": "f4",
+          "items": [
+            {
+              "_type": "item",
+              "_key": "a1",
+              "question": "Q?",
+              "answer": "A."
+            }
+          ]
+        }
+      ],
+      "dangling": {
+        "_type": "reference",
+        "_ref": "missing-doc"
+      },
+      "weakDangling": {
+        "_type": "reference",
+        "_ref": "gone-doc",
+        "_weak": true
+      }
+    },
+    "source": {
+      "connector": "sanity",
+      "source_id": "hb-2",
+      "url": null
+    }
+  }
+]

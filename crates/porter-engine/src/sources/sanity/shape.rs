@@ -22,8 +22,6 @@ fn ty(v: &Value) -> Option<&str> {
     v.get("_type")?.as_str()
 }
 
-// used by normalise (Task 6)
-#[allow(dead_code)]
 pub(crate) fn shape(v: &Value) -> Shape {
     match v {
         Value::String(s) => parse_date(s).map_or(Shape::Scalar, Shape::Date),
