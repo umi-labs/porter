@@ -207,3 +207,202 @@ async fn drafts_keep_their_prefix_in_raw_rows() {
     assert_eq!(status("hb-1"), Some(Some("published".into())));
     assert!(r.iter().all(|x| !x.0.starts_with("image-")));
 }
+
+// ---- asset fetch ----
+
+fn asset_bytes(n: u8) -> Vec<u8> {
+    format!("asset-{n}").into_bytes()
+}
+
+/// URL paths of the fixture's four assets, in `asset-1`..`asset-4` order.
+const ASSET_PATHS: [&str; 4] = [
+    "/images/abc/production/d3dfdcf650653fee4a8b89c828ccad98a8406fdd-800x600.jpg",
+    "/images/abc/production/d267af74a142296235941b40d70bc38113a0481e-800x600.jpg",
+    "/images/abc/production/365899501b2366f3fc75a025658705cc0f32deba-800x600.jpg",
+    "/files/abc/production/ca7fcf72964eb65f1a947189036a170a1489a0bb.pdf",
+];
+
+/// A `sanity-export` project over a folder holding the fixture with `cdn.test` rewritten to
+/// `cdn`. Returns the project and the folder's guard.
+fn asset_project(cdn: &str, assets: SanityAssets) -> (Fx, tempfile::TempDir) {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("data.ndjson"),
+        fixture().replace("http://cdn.test", cdn),
+    )
+    .unwrap();
+    let fx = project(ConnectorConfig::SanityExport {
+        path: d.path().to_path_buf(),
+        assets,
+    });
+    (fx, d)
+}
+
+async fn serve(server: &MockServer, which: &[usize]) {
+    for &i in which {
+        Mock::given(method("GET"))
+            .and(path(ASSET_PATHS[i]))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(asset_bytes(i as u8 + 1)))
+            .mount(server)
+            .await;
+    }
+}
+
+fn asset_statuses(fx: &Fx) -> Vec<porter_model::ItemStatus> {
+    fx.p.store()
+        .statuses(Stage::Extract)
+        .unwrap()
+        .into_iter()
+        .map(|(_, s)| s)
+        .collect()
+}
+
+#[tokio::test]
+async fn assets_fetches_only_referenced_by_default() {
+    let server = MockServer::start().await;
+    serve(&server, &[0, 1, 2, 3]).await;
+    let (fx, _d) = asset_project(&server.uri(), SanityAssets::Referenced);
+    stage(&fx, Stage::Extract).await.unwrap();
+    // 3 referenced assets downloaded, the unreferenced image (asset-3) left alone.
+    assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    assert_eq!(
+        fx.p.store()
+            .items::<porter_model::Media>(ItemKind::Media)
+            .unwrap()
+            .len(),
+        3
+    );
+    let m =
+        fx.p.store()
+            .items::<porter_model::Media>(ItemKind::Media)
+            .unwrap();
+    let f1 = m
+        .iter()
+        .find(|(_, _, m)| m.filename == "file1.jpg")
+        .unwrap();
+    assert_eq!((f1.2.width, f1.2.height), (Some(800), Some(600)));
+    assert_eq!(f1.2.mime, "image/jpeg");
+
+    let (fx, _d) = asset_project(&server.uri(), SanityAssets::All);
+    server.reset().await;
+    serve(&server, &[0, 1, 2, 3]).await;
+    stage(&fx, Stage::Extract).await.unwrap();
+    assert_eq!(server.received_requests().await.unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn assets_retries_a_500_then_succeeds() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(ASSET_PATHS[0]))
+        .respond_with(ResponseTemplate::new(500))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    serve(&server, &[0, 1, 3]).await;
+    let (fx, _d) = asset_project(&server.uri(), SanityAssets::Referenced);
+    let s = stage(&fx, Stage::Extract).await.unwrap();
+    assert_eq!(s.failed, 0);
+    assert_eq!(server.received_requests().await.unwrap().len(), 4);
+    assert!(
+        asset_statuses(&fx)
+            .iter()
+            .all(|s| *s == porter_model::ItemStatus::Done)
+    );
+}
+
+#[tokio::test]
+async fn assets_sha1_mismatch_is_an_error() {
+    let server = MockServer::start().await;
+    serve(&server, &[0, 1, 3]).await;
+    // asset-1 is served corrupted.
+    server.reset().await;
+    serve(&server, &[1, 3]).await;
+    Mock::given(method("GET"))
+        .and(path(ASSET_PATHS[0]))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"corrupt".to_vec()))
+        .mount(&server)
+        .await;
+    let (fx, _d) = asset_project(&server.uri(), SanityAssets::Referenced);
+    let s = stage(&fx, Stage::Extract).await.unwrap();
+    assert_eq!((s.failed, s.errors), (1, 1));
+    let issues = fx.p.store().issues(&Default::default()).unwrap();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].kind, porter_model::IssueKind::MissingMedia);
+    assert_eq!(issues[0].severity, porter_model::Severity::Error);
+    assert_eq!(
+        issues[0].message,
+        "image-d3dfdcf650653fee4a8b89c828ccad98a8406fdd-800x600-jpg: downloaded file doesn't match Sanity's SHA-1"
+    );
+    // Nothing from the bad download was stored.
+    assert_eq!(
+        fx.p.store()
+            .items::<porter_model::Media>(ItemKind::Media)
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn assets_second_extract_skips_downloaded() {
+    let server = MockServer::start().await;
+    serve(&server, &[0, 1, 3]).await;
+    let (fx, _d) = asset_project(&server.uri(), SanityAssets::Referenced);
+    stage(&fx, Stage::Extract).await.unwrap();
+    server.reset().await;
+    let s = stage(&fx, Stage::Extract).await.unwrap();
+    assert_eq!(server.received_requests().await.unwrap().len(), 0);
+    assert_eq!((s.skipped, s.done, s.failed), (3, 0, 0));
+}
+
+#[tokio::test]
+async fn assets_cancel_marks_remaining_partial() {
+    let server = MockServer::start().await;
+    serve(&server, &[0]).await;
+    for i in [1, 3] {
+        Mock::given(method("GET"))
+            .and(path(ASSET_PATHS[i]))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(asset_bytes(i as u8 + 1))
+                    .set_delay(std::time::Duration::from_secs(5)),
+            )
+            .mount(&server)
+            .await;
+    }
+    let (fx, _d) = asset_project(&server.uri(), SanityAssets::Referenced);
+    let cancel = CancellationToken::new();
+    let c2 = cancel.clone();
+    let p2 = fx.p.clone();
+    tokio::spawn(async move {
+        // Cancel once the first asset has landed.
+        while p2
+            .store()
+            .items::<porter_model::Media>(ItemKind::Media)
+            .unwrap()
+            .is_empty()
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        c2.cancel();
+    });
+    let cfg = Arc::new(fx.p.config().clone());
+    let s = run_stage(
+        fx.p.clone(),
+        cfg,
+        EventSink::new(4096),
+        cancel,
+        Stage::Extract,
+        |ctx| async move {
+            for c in SanitySource.connectors(&ctx.config)? {
+                c.extract(&ctx).await?;
+            }
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+    assert!(s.interrupted);
+    assert_eq!((s.done, s.partial), (1, 2));
+}

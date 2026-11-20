@@ -77,8 +77,6 @@ fn parse_date(s: &str) -> Option<DateTime<Utc>> {
 }
 
 /// An image/file object's asset reference (`image-<sha1>-<w>x<h>-<ext>`).
-// used by normalise (Task 6)
-#[allow(dead_code)]
 pub(crate) fn asset_ref(v: &Value) -> Option<&str> {
     v.get("asset")?.get("_ref")?.as_str()
 }

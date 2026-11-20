@@ -1,6 +1,7 @@
 //! Sanity source: reads a dataset through the API or from a `sanity dataset export`.
 //! Normalise and assets land in later tasks.
 
+mod assets;
 mod export;
 mod portable_text;
 mod shape;
@@ -164,7 +165,14 @@ impl Connector for SanityConnector {
         if ctx.refresh || !ctx.project.raw_dir(CANON).join(DATA_FILE).is_file() {
             self.read_export(ctx).await?;
         }
-        // Asset download lands in a later task.
+        let which = match &self.cfg {
+            ConnectorConfig::SanityApi { assets, .. }
+            | ConnectorConfig::SanityExport { assets, .. } => *assets,
+            _ => bail!("not a sanity connector"),
+        };
+        let ex = export::load(&ctx.project.raw_dir(CANON))?;
+        let s = assets::fetch(ctx, &ex, which).await?;
+        ctx.progress(s.fetched + s.skipped + s.failed, None, "assets");
         Ok(())
     }
 }

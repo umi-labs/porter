@@ -24,12 +24,9 @@ pub(crate) struct Export {
     /// Every non-asset document, drafts included.
     pub docs: Vec<Value>,
     /// Asset documents keyed by `_id`.
-    #[allow(dead_code)]
     pub assets: HashMap<String, AssetDoc>,
 }
 
-// Read by the asset fetch (a later task).
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct AssetDoc {
     pub id: String,
