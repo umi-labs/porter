@@ -71,6 +71,25 @@ pub(super) async fn load(l: &mut Loader<'_>) -> Result<()> {
             }
         }
     }
+    // Data in a field the mapping has no entry for is never left behind silently: one
+    // warning per type and field, with how many documents hold some.
+    let mut unlisted: indexmap::IndexMap<(&str, &str), usize> = indexmap::IndexMap::new();
+    for (d, tm, _) in &todo {
+        for (k, v) in &d.fields {
+            if !matches!(v, FieldValue::Null) && !tm.fields.contains_key(k) {
+                *unlisted.entry((&d.doc_type, k)).or_default() += 1;
+            }
+        }
+    }
+    for ((ty, field), n) in unlisted {
+        l.ctx.issue(
+            IssueKind::UnmappedField,
+            Severity::Warning,
+            None,
+            format!("`{ty}.{field}` holds data in {n} document(s) but has no mapping entry: not loaded; map it or set drop = true"),
+            json!({"type": ty, "field": field, "count": n}),
+        )?;
+    }
     for (ty, n) in unmapped {
         l.ctx.issue(
             IssueKind::UnmappedField,

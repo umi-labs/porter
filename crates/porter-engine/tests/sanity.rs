@@ -1417,6 +1417,82 @@ fields = { "customCardCarousel.cards" = "items" }
         }
     }
 
+    /// R18: under an enabled rule, a field (or block prop) holding data with no mapping
+    /// entry and no drop is an error that blocks load.
+    #[tokio::test]
+    async fn unlisted_field_with_data_blocks_load() {
+        let fx = fx(|_| {}).await;
+        let mut cfg = fx.p.config().clone();
+        cfg.mapping
+            .types
+            .get_mut("cityPage")
+            .unwrap()
+            .fields
+            .shift_remove("location");
+        let card = cfg
+            .mapping
+            .blocks
+            .iter_mut()
+            .find(|b| b.r#match.module.as_deref() == Some("cardCarousel"))
+            .unwrap();
+        card.fields.shift_remove("cards");
+        let out = account(fx.p.store(), &cfg, None).unwrap();
+        assert_eq!(
+            out[0].problems,
+            vec![Problem::Unlisted {
+                item_type: "cityPage".into(),
+                field: "location".into(),
+                count: 1
+            }]
+        );
+        assert_eq!(
+            out[1].problems,
+            vec![Problem::Unlisted {
+                item_type: "cardCarousel".into(),
+                field: "cards".into(),
+                count: 3
+            }]
+        );
+        assert_eq!(
+            out[0].problems[0].message("destinations"),
+            "tidy \"destinations\": cityPage.location holds data in 1 item(s) but has no mapping entry; map it or drop it"
+        );
+    }
+
+    /// R18: outside tidy rules, unmapped data is a warning per type and field, with a count.
+    #[tokio::test]
+    async fn straight_move_warns_on_unmapped_data() {
+        let fx = fx(|_| {}).await;
+        let mut cfg = fx.p.config().clone();
+        cfg.tidy.clear();
+        cfg.mapping
+            .types
+            .get_mut("hotelBreak")
+            .unwrap()
+            .fields
+            .shift_remove("city");
+        std::fs::write(
+            fx.d.path().join("porter.toml"),
+            toml::to_string(&cfg).unwrap(),
+        )
+        .unwrap();
+        let fx = Fx {
+            p: Arc::new(Project::open(fx.d.path()).unwrap()),
+            d: fx.d,
+        };
+        dry_run(&fx).await;
+        let w: Vec<_> = all_issues(&fx)
+            .into_iter()
+            .filter(|i| i.kind == IssueKind::UnmappedField && i.message.contains("hotelBreak.city"))
+            .collect();
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert_eq!(w[0].severity, Severity::Warning);
+        assert_eq!(
+            w[0].message,
+            "`hotelBreak.city` holds data in 3 document(s) but has no mapping entry: not loaded; map it or set drop = true"
+        );
+    }
+
     #[tokio::test]
     async fn accounting_counts_in_out() {
         let fx = fx(|_| {}).await;

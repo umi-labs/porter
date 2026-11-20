@@ -37,6 +37,14 @@ pub enum Problem {
     },
     /// A carried field the existing destination `dest` has no field for.
     Unaccounted { field: String, dest: String },
+    /// A field (or block prop) of a merged type holding data in `count` items, with no
+    /// mapping entry and no drop: it would be left behind without a word.
+    Unlisted {
+        #[serde(rename = "type")]
+        item_type: String,
+        field: String,
+        count: u64,
+    },
 }
 
 impl Problem {
@@ -54,6 +62,13 @@ impl Problem {
             Problem::Unaccounted { field, dest } => {
                 format!("tidy \"{rule}\": {dest} has no field {field}")
             }
+            Problem::Unlisted {
+                item_type,
+                field,
+                count,
+            } => format!(
+                "tidy \"{rule}\": {item_type}.{field} holds data in {count} item(s) but has no mapping entry; map it or drop it"
+            ),
         }
     }
 }
@@ -91,6 +106,18 @@ fn conflicts(seen: &[(String, String, String)]) -> Vec<Problem> {
         }
     }
     out
+}
+
+/// One `Unlisted` per `(type, field)` counted, in first-seen order.
+fn unlisted(counts: indexmap::IndexMap<(String, String), u64>) -> Vec<Problem> {
+    counts
+        .into_iter()
+        .map(|((item_type, field), count)| Problem::Unlisted {
+            item_type,
+            field,
+            count,
+        })
+        .collect()
 }
 
 fn unaccounted(out: &mut Vec<Problem>, field: &str, dest: &str) {
@@ -176,6 +203,7 @@ pub fn account(
                 }
                 o.problems = conflicts(&seen);
                 o.problems.extend(missing);
+                let mut unmapped = indexmap::IndexMap::new();
                 for d in docs.iter().filter(|d| from.contains(&d.doc_type)) {
                     let Some(tm) = m.types.get(&d.doc_type) else {
                         continue;
@@ -193,10 +221,13 @@ pub fn account(
                             Some(fm) if fm.drop => o.dropped += 1,
                             Some(fm) if &fm.to == k => o.carried += 1,
                             Some(_) => o.renamed += 1,
-                            None => {}
+                            None => {
+                                *unmapped.entry((d.doc_type.clone(), k.clone())).or_insert(0) += 1
+                            }
                         }
                     }
                 }
+                o.problems.extend(unlisted(unmapped));
             }
             TidyKind::MergeBlocks {
                 from, into, drop, ..
@@ -234,6 +265,7 @@ pub fn account(
                 }
                 o.problems = conflicts(&seen);
                 o.problems.extend(missing);
+                let mut unmapped = indexmap::IndexMap::new();
                 let mut all = vec![];
                 for d in &docs {
                     d.fields.values().for_each(|v| blocks(v, &mut all));
@@ -258,10 +290,11 @@ pub fn account(
                             Some(to) if to == k => o.carried += 1,
                             Some(_) => o.renamed += 1,
                             None if drop.contains_key(&format!("{md}.{k}")) => o.dropped += 1,
-                            None => {}
+                            None => *unmapped.entry((md.to_string(), k.clone())).or_insert(0) += 1,
                         }
                     }
                 }
+                o.problems.extend(unlisted(unmapped));
             }
         }
         out.push(o);
