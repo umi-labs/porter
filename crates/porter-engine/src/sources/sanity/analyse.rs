@@ -265,6 +265,9 @@ impl Analysis {
     /// submission types (listed under `forms`), and maps every builder block to a kebab slug.
     fn seed(&self, m: &mut MappingConfig) {
         m.types.retain(|t, _| self.types.contains_key(t));
+        // Sanity holds no URLs: no seeded pattern, so normalise writes no routes until the
+        // user enters a real one.
+        m.types.values_mut().for_each(|t| t.path = None);
         for t in &self.submission_types {
             m.types.insert(
                 t.clone(),
@@ -480,10 +483,17 @@ mod tests {
         let a = fixture_analysis(2);
         let mut m = MappingConfig::default();
         for t in ["hotelBreak", "enquiryForm", "media.tag"] {
-            m.types.insert(t.into(), TypeMap::default());
+            m.types.insert(
+                t.into(),
+                TypeMap {
+                    path: Some("/{slug}/".into()),
+                    ..TypeMap::default()
+                },
+            );
         }
         a.seed(&mut m);
         assert!(!m.types.contains_key("media.tag"));
+        assert!(m.types.values().all(|t| t.path.is_none()));
         let enq = &m.types["enquiryForm"];
         assert_eq!(enq.to, None);
         assert_eq!(enq.drop_reason.as_deref(), Some(SUBMISSION_DROP));
