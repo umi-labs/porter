@@ -380,6 +380,8 @@ async fn media_pages_canonical_live_only() {
             title: None,
             credit: None,
             folder: None,
+            focal_x: None,
+            focal_y: None,
             usages: vec![],
         };
         store.put_item(ItemKind::Media, id, &src, &m).unwrap();

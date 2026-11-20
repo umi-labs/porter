@@ -748,6 +748,53 @@ async fn media_uploads_collide_then_go_one_at_a_time() {
     assert_eq!(f.p.store().dest_ids().unwrap().len(), 5);
 }
 
+#[tokio::test]
+async fn upload_sends_focal_point() {
+    use porter_model::Media;
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let f = fx(&s.uri());
+    let h =
+        f.p.store()
+            .put_media_bytes(b"bytes", "https://old.example.test/m.png", "m.png")
+            .unwrap();
+    let mut m: Media = f.p.store().get_item(h.id).unwrap().unwrap();
+    m.focal_x = Some(30.0);
+    m.focal_y = Some(60.0);
+    let src = SourceRef {
+        connector: "media".into(),
+        source_id: m.hash.clone(),
+        url: None,
+    };
+    f.p.store()
+        .put_item(ItemKind::Media, m.id, &src, &m)
+        .unwrap();
+    let sum = f.load(true, CancellationToken::new()).await;
+    assert_eq!(exit_code(&sum), 0, "{sum:?}");
+    {
+        let st = fake.0.lock().unwrap();
+        let post = st
+            .log
+            .iter()
+            .find(|(m, p, _)| m == "POST" && p == "media")
+            .unwrap();
+        assert_eq!(
+            (&post.2["focalX"], &post.2["focalY"]),
+            (&json!(30.0), &json!(60.0))
+        );
+    }
+    // Existing doc with a different focal point: PATCHed.
+    {
+        let mut st = fake.0.lock().unwrap();
+        st.log.clear();
+        st.docs[0].1["focalX"] = json!(50.0);
+    }
+    f.load(true, CancellationToken::new()).await;
+    let st = fake.0.lock().unwrap();
+    let patch = st.log.iter().find(|(m, ..)| m == "PATCH").unwrap();
+    assert_eq!(patch.2["focalX"], json!(30.0));
+}
+
 /// A Payload config for `pages` and `posts`, written to a temp dir.
 fn site(fields: &str, blocks: &str) -> tempfile::TempDir {
     let site = tempfile::tempdir().unwrap();
@@ -980,6 +1027,8 @@ async fn dry_run_reports_media_without_a_file() {
         title: None,
         credit: None,
         folder: None,
+        focal_x: None,
+        focal_y: None,
         usages: vec![],
     };
     f.p.store()

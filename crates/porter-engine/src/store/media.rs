@@ -79,6 +79,8 @@ impl Store {
                 title: None,
                 credit: None,
                 folder: None,
+                focal_x: None,
+                focal_y: None,
                 usages: vec![],
             };
             self.put_item(ItemKind::Media, id, &src, &media)?;

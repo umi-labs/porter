@@ -1,6 +1,6 @@
 //! Media folders, then media: uploaded keyed by `legacyId` = the media item id, 4 at a
 //! time until a filename collision (parallel uploads of one name race in Payload), then
-//! one at a time. Existing media get changed alt/caption/title/folder PATCHed.
+//! one at a time. Existing media get changed alt/caption/title/folder/focal point PATCHed.
 
 use super::Loader;
 use crate::destinations::payload::client::PayloadClient;
@@ -75,6 +75,11 @@ pub(super) async fn load(l: &mut Loader<'_>) -> Result<()> {
                 None => Value::Null,
             };
             data.insert(k.into(), v);
+        }
+        for (k, v) in [("focalX", m.focal_x), ("focalY", m.focal_y)] {
+            if let Some(v) = v {
+                data.insert(k.into(), json!(v));
+            }
         }
         if let Some(dir) = m.folder.as_deref().filter(|_| want_folders) {
             match folders.get(dir) {
