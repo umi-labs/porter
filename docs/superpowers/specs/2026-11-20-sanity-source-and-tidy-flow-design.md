@@ -283,7 +283,7 @@ A fresh reviewer read this design as a builder would and raised six questions. I
 
 1. **Serving old URLs on the new site (Claude's call, Isaac to confirm).**
    - Every generated collection gets a `path` text field (indexed, unique per collection), which load fills from the mapping's path pattern.
-   - Porter still writes no frontend code. `porter schema generate --into` *prints* a one-file catch-all Next route (`app/(frontend)/[...path]/page.tsx`) that looks a path up across the generated collections and renders title, fields and rich text plainly. Pasting it is part of the Kirker day; it's minutes, not hours.
+   - Porter still writes no frontend code. `porter schema generate --into` *prints* a one-file catch-all Next route (`app/(frontend)/[[...path]]/page.tsx`) that looks a path up across the generated collections and renders title, fields and rich text plainly. Pasting it is part of the Kirker day; it's minutes, not hours.
    - Old URLs aren't redirected to template routes.
 2. **Where the old URLs come from (Claude's call).**
    - A Sanity project may also have a `crawl` connector (the existing public-site connector) pointed at the live site's sitemap.
