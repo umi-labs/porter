@@ -19,6 +19,8 @@ Last updated 2026-11-11. This is the single place to pick work back up. The deta
 | Hub (Next.js + Better Auth, Docker/Dokploy) | Built and reviewed; production compose smoke passed locally; not deployed (RULINGS-hub.md: decisions D2–D10 open) |
 | Design (Isaac's Claude Design boards) | Applied to desktop and hub, plus engine stage views and config fingerprints (RULINGS-design.md) |
 | Merge `porter-2.0` / release 2.0 | Not done; Isaac's call |
+| Porter 2.0 release | **Released 2026-11-19**: v2.0.0 on GitHub + Homebrew (`umi-labs/tap/porter`), desktop DMGs + cask `porter-desktop` (unsigned, unnotarised) |
+| Sanity source + tidy-ups + flow graph (engine + CLI) | Built and reviewed 2026-11-20 on local branch `sanity-source`, not merged or pushed (RULINGS-sanity.md). Hub Flow tab and desktop Flow view not started |
 | Later engine phases (other sources/destinations) | Not planned yet; listed below |
 
 ## The vision (in Isaac's words, condensed)
