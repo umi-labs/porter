@@ -52,17 +52,38 @@ pub(crate) fn pt_to_richtext(blocks: &[Value], cx: &mut PtCx) -> RichText {
         match ty {
             Some("block") => out.push(styled(item, cx)),
             Some("image") => {
+                // alt has no slot here; normalise (Task 6) sets Media.alt from the asset's first use.
                 let Some(aref) = asset_ref(item) else {
+                    cx.warn(
+                        IssueKind::MissingMedia,
+                        "image has no asset reference".to_string(),
+                        json!({}),
+                    );
                     continue;
                 };
                 match (cx.resolve_asset)(aref) {
-                    Some(media) => out.push(RtBlock::Media {
-                        media,
-                        caption: None,
-                        align: Align::default(),
-                        width: None,
-                        link: None,
-                    }),
+                    Some(media) => {
+                        let caption = match item.get("caption") {
+                            Some(Value::String(s)) if !s.is_empty() => Some(RichText {
+                                blocks: vec![RtBlock::Paragraph {
+                                    inlines: vec![Inline::Text {
+                                        text: s.clone(),
+                                        marks: Marks::default(),
+                                    }],
+                                    align: Align::default(),
+                                }],
+                            }),
+                            Some(Value::Array(a)) if !a.is_empty() => Some(pt_to_richtext(a, cx)),
+                            _ => None,
+                        };
+                        out.push(RtBlock::Media {
+                            media,
+                            caption,
+                            align: Align::default(),
+                            width: None,
+                            link: None,
+                        })
+                    }
                     None => cx.warn(
                         IssueKind::MissingMedia,
                         format!("image asset {aref} not found"),
@@ -425,6 +446,23 @@ mod tests {
             ]
         );
         assert!(issues[0].message.contains("gone"));
+    }
+
+    #[test]
+    fn pt_image_without_ref_warns_and_caption_is_carried() {
+        let (rt, issues) = run(vec![
+            json!({"_type":"image","alt":"x"}),
+            json!({"_type":"image","asset":{"_ref":"image-abc-1x1-png"},"caption":"Hi"}),
+        ]);
+        assert_eq!(rt.blocks.len(), 1);
+        assert!(matches!(
+            &rt.blocks[0],
+            RtBlock::Media { caption: Some(c), .. }
+                if c.blocks == vec![p(vec![t("Hi", Marks::default())])]
+        ));
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].kind, IssueKind::MissingMedia);
+        assert_eq!(issues[0].severity, Severity::Warning);
     }
 
     #[test]
