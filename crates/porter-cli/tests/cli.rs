@@ -667,3 +667,144 @@ fn flow_json_is_one_line_and_normalise_wrote_it() {
         .success()
         .stdout(predicate::str::contains("Tidy-ups").and(predicate::str::contains("not counted")));
 }
+
+// ---- Sanity end to end, against a mock API and CDN ----
+
+const ASSET_PATHS: [&str; 4] = [
+    "/images/abc/production/d3dfdcf650653fee4a8b89c828ccad98a8406fdd-800x600.jpg",
+    "/images/abc/production/d267af74a142296235941b40d70bc38113a0481e-800x600.jpg",
+    "/images/abc/production/365899501b2366f3fc75a025658705cc0f32deba-800x600.jpg",
+    "/files/abc/production/ca7fcf72964eb65f1a947189036a170a1489a0bb.pdf",
+];
+
+/// `porter` against `dir`, with the Sanity token and API base set on the child only.
+fn sanity_porter(dir: &std::path::Path, base: &str) -> Command {
+    let mut c = Command::cargo_bin("porter").unwrap();
+    c.arg("--project")
+        .arg(dir)
+        .timeout(Duration::from_secs(60))
+        .env("PORTER_SANITY_TOKEN", "t0ken")
+        .env("PORTER_SANITY_API_BASE", base);
+    c
+}
+
+fn sanity_api_project(base: &str) -> tempfile::TempDir {
+    let d = tempfile::tempdir().unwrap();
+    sanity_porter(d.path(), base)
+        .args(["init", "kirker", "--adapter", "sanity"])
+        .write_stdin("")
+        .assert()
+        .success();
+    let f = d.path().join("porter.toml");
+    let mut t = std::fs::read_to_string(&f).unwrap();
+    t.push_str(
+        "\n[[connectors]]\nkind = \"sanity-api\"\nproject_id = \"proj1\"\ndataset = \"production\"\n",
+    );
+    std::fs::write(&f, t).unwrap();
+    d
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sanity_end_to_end_cli() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../porter-engine/tests/fixtures/sanity/data.ndjson");
+    let data = std::fs::read_to_string(fixture)
+        .unwrap()
+        .replace("http://cdn.test", &server.uri());
+    Mock::given(method("GET"))
+        .and(path("/v2021-06-07/data/export/production"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(data))
+        .mount(&server)
+        .await;
+    for (i, p) in ASSET_PATHS.iter().enumerate() {
+        Mock::given(method("GET"))
+            .and(path(*p))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(format!("asset-{}", i + 1)))
+            .mount(&server)
+            .await;
+    }
+    let base = server.uri();
+    let d = sanity_api_project(&base);
+    let ok = predicate::in_iter([0, 2]);
+    let run = |stage: &str| {
+        sanity_porter(d.path(), &base)
+            .arg(stage)
+            .assert()
+            .code(ok.clone());
+    };
+    run("analyse");
+    // `enquiryForm` has 3 documents, under the detection threshold of 50, so list it. This
+    // goes in after analyse, which seeds an empty `[mapping.forms]` only while the file has
+    // no `[mapping]`.
+    let f = d.path().join("porter.toml");
+    let t = std::fs::read_to_string(&f).unwrap().replace(
+        "[mapping.forms]\n",
+        "[mapping.forms]\nsubmission_types = [\"enquiryForm\"]\n",
+    );
+    std::fs::write(&f, t).unwrap();
+    run("extract");
+    run("normalise");
+    // The suggested merge of the page types: its id isn't fixed, so read it from the list.
+    let out = sanity_porter(d.path(), &base)
+        .args(["--json", "tidy", "list"])
+        .output()
+        .unwrap();
+    let rules: Vec<serde_json::Value> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let merge = rules
+        .iter()
+        .find(|r| r["from"] == serde_json::json!(["countryPage", "regionPage"]))
+        .expect("a merge-types suggestion over the page types");
+    let id = merge["id"].as_str().unwrap().to_string();
+    assert_eq!(merge["enabled"], false);
+    sanity_porter(d.path(), &base)
+        .args(["tidy", "enable", &id])
+        .assert()
+        .success();
+    let out = sanity_porter(d.path(), &base)
+        .args(["--json", "flow"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let node = v["graph"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == format!("tidy:{id}"))
+        .expect("the rule's flow node");
+    assert_eq!(node["enabled"], true);
+    // The submission type is counted, never shown.
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(!s.contains("person1@") && !s.contains("Person 1"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sanity_401_exits_1_naming_the_token_var() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+    let base = server.uri();
+    let d = sanity_api_project(&base);
+    sanity_porter(d.path(), &base)
+        .arg("analyse")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("PORTER_SANITY_TOKEN"));
+}
