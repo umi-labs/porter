@@ -59,7 +59,7 @@ fn sections(cfg: &ProjectConfig, stage: Stage) -> Vec<(&'static str, String)> {
     );
     let destination = ("destination", h(&cfg.destination));
     match stage {
-        Stage::Analyse | Stage::Extract => return vec![source, ("connectors", h(&cfg.connectors))],
+        Stage::Analyse | Stage::Extract => vec![source, ("connectors", h(&cfg.connectors))],
         Stage::Normalise => vec![
             source,
             ("connectors", h(&cfg.connectors)),
