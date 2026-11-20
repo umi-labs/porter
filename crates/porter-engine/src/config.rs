@@ -274,13 +274,30 @@ impl ProjectConfig {
             }
         }
         for (i, c) in self.connectors.iter().enumerate() {
-            if let ConnectorConfig::SanityApi { token_env, .. } = c
-                && !is_env_var_name(token_env)
-            {
-                // Never echoed: a value that is not a name may be the token itself.
-                errs.push(format!(
-                    "connectors[{i}].token_env must be the NAME of an env var (letters, digits, underscore), not a token"
-                ));
+            match c {
+                ConnectorConfig::SanityApi {
+                    project_id,
+                    dataset,
+                    token_env,
+                    ..
+                } => {
+                    if project_id.trim().is_empty() {
+                        errs.push(format!("connectors[{i}].project_id is missing"));
+                    }
+                    if dataset.trim().is_empty() {
+                        errs.push(format!("connectors[{i}].dataset is missing"));
+                    }
+                    if !is_env_var_name(token_env) {
+                        // Never echoed: a value that is not a name may be the token itself.
+                        errs.push(format!(
+                            "connectors[{i}].token_env must be the NAME of an env var (letters, digits, underscore), not a token"
+                        ));
+                    }
+                }
+                ConnectorConfig::SanityExport { path, .. } if path.as_os_str().is_empty() => {
+                    errs.push(format!("connectors[{i}].path is missing"));
+                }
+                _ => {}
             }
         }
         for (i, r) in self.redirects.iter().enumerate() {
@@ -408,6 +425,26 @@ mod sanity_tests {
                 assert_eq!(*assets, SanityAssets::Referenced);
             }
             other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn sanity_empty_ids_and_path_are_rejected() {
+        let c: ProjectConfig = toml::from_str(
+            "[[connectors]]\nkind = \"sanity-api\"\nproject_id = \" \"\ndataset = \"\"\n\n[[connectors]]\nkind = \"sanity-export\"\npath = \"\"\n",
+        )
+        .unwrap();
+        let errs = c.validate();
+        for k in [
+            "connectors[0].project_id",
+            "connectors[0].dataset",
+            "connectors[1].path",
+        ] {
+            assert!(
+                errs.iter()
+                    .any(|e| e.starts_with(k) && e.contains("missing")),
+                "{k}: {errs:?}"
+            );
         }
     }
 
