@@ -8,6 +8,8 @@ mod normalise;
 mod portable_text;
 mod shape;
 
+pub use analyse::seed as seed_mapping;
+
 use crate::config::ConnectorConfig;
 use crate::connectors::RawItem;
 use crate::connectors::crawl::CrawlConnector;
@@ -144,6 +146,7 @@ impl Connector for SanityConnector {
     async fn analyse(&self, ctx: &StageCtx) -> Result<()> {
         self.read_export(ctx).await?;
         let ex = export::load(&ctx.project.raw_dir(CANON))?;
+        analyse::write(&ctx.project, &ex)?;
         for doc in &ex.docs {
             let Some(sid) = doc.get("_id").and_then(Value::as_str) else {
                 continue;

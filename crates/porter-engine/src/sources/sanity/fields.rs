@@ -285,7 +285,7 @@ impl Cx<'_> {
 }
 
 /// An array item's path: `<array path>[<item _type>]`.
-fn item_path(path: &str, item: &Value) -> String {
+pub(super) fn item_path(path: &str, item: &Value) -> String {
     let ty = item
         .get("_type")
         .and_then(Value::as_str)

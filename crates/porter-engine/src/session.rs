@@ -766,7 +766,12 @@ impl Env {
     /// After a successful analyse: writes a `[mapping]` starting point if the user has
     /// none, and runs the rest of the plan with it (`out.seeded` says it wrote one).
     fn seed(&self, out: &Mutex<RunOutcome>) {
-        let seed = MappingConfig::seed_from(self.project.store());
+        let mut seed = MappingConfig::seed_from(self.project.store());
+        if let Err(e) = crate::sources::sanity::seed_mapping(&self.project, &mut seed) {
+            lock_out(out)
+                .messages
+                .push(format!("warning: could not read sanity analysis: {e:#}"));
+        }
         match write_seed_if_empty(self.project.dir(), &seed) {
             Ok(false) => {}
             Ok(true) => {

@@ -831,3 +831,33 @@ async fn crawl_urls_merge_with_pattern_routes() {
         "{info:?}"
     );
 }
+
+#[tokio::test]
+async fn coverage_platform_is_sanity() {
+    let fx = project(export(fixture_path().parent().unwrap().to_path_buf()));
+    stage(&fx, Stage::Analyse).await.unwrap();
+    let c = porter_engine::report::read_coverage(&fx.p)
+        .unwrap()
+        .unwrap();
+    assert_eq!(c.platform.as_deref(), Some("sanity"));
+    let k = &c.connectors[0];
+    assert_eq!(k.name, "sanity");
+    // Published: regionPage 1 + countryPage 2 + cityPage 3 + hotelBreak 2 + siteSettings 1
+    // + homepage 1 + enquiryForm 3 = 13; 2 drafts; 4 assets.
+    assert_eq!(k.contributed["documents"], 13);
+    assert_eq!(k.contributed["drafts"], 2);
+    assert_eq!(k.contributed["assets"], 4);
+    assert_eq!(k.gaps.len(), 2);
+    let a: Value = serde_json::from_str(
+        &std::fs::read_to_string(fx.p.raw_dir("sanity").join("analysis.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(a["skipped_types"]["media.tag"], 1);
+    assert!(a["types"].get("media.tag").is_none());
+    // Sanity's seed leaves other platforms' seeds alone and drops plugin types.
+    let mut m = porter_engine::mapping::MappingConfig::seed_from(fx.p.store());
+    assert!(m.types.contains_key("media.tag"));
+    porter_engine::sources::sanity::seed_mapping(&fx.p, &mut m).unwrap();
+    assert!(!m.types.contains_key("media.tag"));
+    assert_eq!(m.blocks.len(), 4);
+}
