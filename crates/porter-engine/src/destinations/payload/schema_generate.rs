@@ -297,7 +297,8 @@ pub struct IntoReport {
 pub const CONFIG_LINES: &str = "import { porterCollections } from './collections/porter'\n\
 collections: [/* your collections */, ...porterCollections],\n";
 
-/// `app/(frontend)/[...path]/page.tsx`: a plain page for each document `--into` loaded.
+/// `app/(frontend)/[[...path]]/page.tsx`: a plain page for each document `--into` loaded,
+/// `/` included (no segments).
 pub const CATCH_ALL_ROUTE: &str = r#"import config from '@payload-config'
 import { RichText } from '@payloadcms/richtext-lexical/react'
 import { notFound } from 'next/navigation'
@@ -306,8 +307,8 @@ import { porterCollections } from '@/collections/porter'
 
 const HIDDEN = ['id', 'title', 'slug', 'path', 'legacyId', 'createdAt', 'updatedAt', '_status']
 
-export default async function Page({ params }: { params: Promise<{ path: string[] }> }) {
-  const want = '/' + (await params).path.join('/')
+export default async function Page({ params }: { params: Promise<{ path?: string[] }> }) {
+  const want = '/' + ((await params).path ?? []).join('/')
   const payload = await getPayload({ config })
   for (const { slug } of porterCollections) {
     const { docs } = await payload.find({

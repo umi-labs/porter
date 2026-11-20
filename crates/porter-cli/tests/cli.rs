@@ -500,8 +500,10 @@ fn schema_generate_into_prints_config_lines_and_route() {
             "import { porterCollections } from './collections/porter'",
         ))
         .stdout(predicate::str::contains("...porterCollections"))
+        // Optional catch-all: no segments is the home page, `/`.
+        .stdout(predicate::str::contains("params).path ?? []"))
         .stdout(predicate::str::contains(
-            "app/(frontend)/[...path]/page.tsx",
+            "app/(frontend)/[[...path]]/page.tsx",
         ));
     assert!(
         repo.path()

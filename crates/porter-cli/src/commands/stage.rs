@@ -149,7 +149,7 @@ pub async fn generate_into(dir: &Path, json: bool, repo: &Path) -> Result<i32> {
     use porter_engine::destinations::payload::schema_generate::{
         CATCH_ALL_ROUTE, CONFIG_LINES, generate_into,
     };
-    const ROUTE_FILE: &str = "app/(frontend)/[...path]/page.tsx";
+    const ROUTE_FILE: &str = "app/(frontend)/[[...path]]/page.tsx";
     let project = std::sync::Arc::new(porter_engine::project::Project::open(dir)?);
     let cfg = std::sync::Arc::new(project.config().clone());
     if cfg.destination.adapter != "payload" {
