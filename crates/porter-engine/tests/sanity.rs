@@ -730,6 +730,37 @@ async fn top_up_adds_only_unmentioned_fields() {
     );
 }
 
+/// R19: a configured pattern giving two documents of one collection the same path is an
+/// error naming both (Payload's unique `path` would reject the second).
+#[tokio::test]
+async fn duplicate_pattern_paths_are_errors() {
+    use porter_engine::mapping::TypeMap;
+    use porter_model::Severity;
+    let fx = normalised_with(|c| {
+        c.mapping.types.insert(
+            "hotelBreak".into(),
+            TypeMap {
+                to: Some("breaks".into()),
+                path: Some("/breaks/".into()),
+                ..Default::default()
+            },
+        );
+    })
+    .await;
+    let errs: Vec<String> = all_issues(&fx)
+        .into_iter()
+        .filter(|i| i.severity == Severity::Error && i.message.contains("unique path"))
+        .map(|i| i.message)
+        .collect();
+    assert_eq!(
+        errs,
+        [
+            "hotelBreak \"City Break\": path /breaks/ in breaks is also hotelBreak \"Beach Break\"'s (hb-1); Payload's unique path index would reject it: make the pattern unique",
+            "hotelBreak \"Brand New Break\": path /breaks/ in breaks is also hotelBreak \"Beach Break\"'s (hb-1); Payload's unique path index would reject it: make the pattern unique",
+        ]
+    );
+}
+
 #[tokio::test]
 async fn path_pattern_follows_references() {
     use porter_engine::mapping::TypeMap;
@@ -1490,6 +1521,29 @@ fields = { "customCardCarousel.cards" = "items" }
         assert_eq!(
             w[0].message,
             "`hotelBreak.city` holds data in 3 document(s) but has no mapping entry: not loaded; map it or set drop = true"
+        );
+    }
+
+    /// R19: fallback paths are porter's own, so a later duplicate (by source id) gets `-2`.
+    #[tokio::test]
+    async fn duplicate_fallback_paths_get_a_suffix() {
+        let fx = fx(|v| {
+            if v["_id"] == "hb-2" {
+                v["slug"]["current"] = json_str("beach-break");
+            }
+        })
+        .await;
+        assert_eq!(sdoc(&fx, "hb-1").path, "/hotelBreak/beach-break/");
+        assert_eq!(sdoc(&fx, "hb-2").path, "/hotelBreak/beach-break-2/");
+        let infos: Vec<_> = all_issues(&fx)
+            .into_iter()
+            .filter(|i| i.message.contains("beach-break-2"))
+            .collect();
+        assert_eq!(infos.len(), 1, "{infos:?}");
+        assert_eq!(infos[0].severity, Severity::Info);
+        assert_eq!(
+            infos[0].message,
+            "hotelBreak \"City Break\": path /hotelBreak/beach-break/ is also hotelBreak \"Beach Break\"'s (hb-1); using /hotelBreak/beach-break-2/"
         );
     }
 

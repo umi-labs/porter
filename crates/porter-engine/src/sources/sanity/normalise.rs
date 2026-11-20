@@ -311,7 +311,8 @@ fn normalise(ctx: &StageCtx) -> Result<()> {
         docs: &by_id,
         lookups: &cfg.mapping.lookups,
     };
-    for (d, issues, _, label) in &mut finished {
+    let mut patterned = vec![false; finished.len()];
+    for (i, (d, issues, _, label)) in finished.iter_mut().enumerate() {
         let mut routable = false;
         if let Some(p) = cfg
             .mapping
@@ -323,6 +324,7 @@ fn normalise(ctx: &StageCtx) -> Result<()> {
                 Ok(path) => {
                     d.path = path;
                     routable = true;
+                    patterned[i] = true;
                 }
                 Err(why) => issues.push(PendingIssue {
                     kind: IssueKind::UnresolvedRelation,
@@ -336,6 +338,7 @@ fn normalise(ctx: &StageCtx) -> Result<()> {
             .filter(|_| routable && d.status == DocStatus::Published)
             .map(|s| format!("{s}{}", d.path));
     }
+    unique_paths(cfg, &mut finished, &patterned);
     // Live HTML pages from a crawl connector (2xx only), keyed by path.
     let crawl = cfg
         .connectors
@@ -424,6 +427,79 @@ fn normalise(ctx: &StageCtx) -> Result<()> {
     submissions(ctx, &subs, &mut written)?;
     redirects(ctx, &mut written)?;
     drop_stale(ctx, &written)
+}
+
+/// Payload's `path` is unique per collection. Per destination collection (the effective
+/// mapping's `to`; an unmapped type its own name, as the seed maps it; dropped types are
+/// never loaded): a pattern path another document already has is an Error naming both,
+/// since the pattern is the user's; a fallback path (`/{type}/{slug}/`, porter's own)
+/// gets `-2`, `-3`... with an Info. Pattern paths claim theirs first, then fallbacks,
+/// each in source id order.
+fn unique_paths(
+    cfg: &crate::config::ProjectConfig,
+    finished: &mut [(Document, Vec<PendingIssue>, ItemStatus, String)],
+    patterned: &[bool],
+) {
+    let m = crate::tidy::effective_mapping(cfg).unwrap_or_else(|_| cfg.mapping.clone());
+    let coll = |ty: &str| match m.types.get(ty) {
+        Some(tm) => tm.to.clone(),
+        None => Some(ty.to_string()),
+    };
+    let mut order: Vec<usize> = (0..finished.len()).collect();
+    order.sort_by(|&a, &b| {
+        (!patterned[a], &finished[a].0.source.source_id)
+            .cmp(&(!patterned[b], &finished[b].0.source.source_id))
+    });
+    // (collection, path) -> the label and source id that has it.
+    let mut taken: HashMap<(String, String), (String, String)> = HashMap::new();
+    for i in order {
+        let (d, issues, _, label) = &mut finished[i];
+        let Some(c) = coll(&d.doc_type) else {
+            continue;
+        };
+        let Some((other, sid)) = taken.get(&(c.clone(), d.path.clone())).cloned() else {
+            taken.insert(
+                (c, d.path.clone()),
+                (label.clone(), d.source.source_id.clone()),
+            );
+            continue;
+        };
+        if patterned[i] {
+            issues.push(PendingIssue {
+                kind: IssueKind::SchemaMismatch,
+                severity: Severity::Error,
+                message: format!(
+                    "{label}: path {} in {c} is also {other}'s ({sid}); Payload's unique path index would reject it: make the pattern unique",
+                    d.path
+                ),
+                details: json!({"path": d.path, "collection": c, "other": sid}),
+            });
+            continue;
+        }
+        let (base, end) = match d.path.strip_suffix('/') {
+            Some(b) => (b.to_string(), "/"),
+            None => (d.path.clone(), ""),
+        };
+        let mut n = 2;
+        let new = loop {
+            let p = format!("{base}-{n}{end}");
+            if !taken.contains_key(&(c.clone(), p.clone())) {
+                break p;
+            }
+            n += 1;
+        };
+        issues.push(PendingIssue {
+            kind: IssueKind::SchemaMismatch,
+            severity: Severity::Info,
+            message: format!(
+                "{label}: path {} is also {other}'s ({sid}); using {new}",
+                d.path
+            ),
+            details: json!({"path": d.path, "new": new, "collection": c, "other": sid}),
+        });
+        d.path = new.clone();
+        taken.insert((c, new), (label.clone(), d.source.source_id.clone()));
+    }
 }
 
 /// First-use focal point, alt and caption onto each media item; the asset's `altText` wins.
