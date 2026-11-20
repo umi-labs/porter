@@ -59,7 +59,7 @@ pub fn suggest_in(
                 .fold(sets[0].clone(), |a, s| a.intersection(s).cloned().collect());
             let all: BTreeSet<&String> = sets.iter().flat_map(|s| s.iter()).collect();
             let from: Vec<String> = names.iter().map(|n| n.to_string()).collect();
-            let into = into_name(&from);
+            let into = free_into(into_name(&from), &from, is_types, mapping, existing, &rules);
             let id = unique(&mut ids, &into);
             let kind = if is_types {
                 TidyKind::MergeTypes {
@@ -272,6 +272,58 @@ fn into_name(from: &[String]) -> String {
     w.join("-")
 }
 
+/// `into`, unless a collection (or block) something outside `from` already goes to has
+/// that name: other types' (or block maps') `to`, and other rules' `into`. Then
+/// `<into>-merged`, `<into>-merged-2`... A suggestion must never put merged content
+/// into an unrelated collection.
+fn free_into(
+    into: String,
+    from: &[String],
+    is_types: bool,
+    mapping: &MappingConfig,
+    existing: &[TidyRule],
+    new: &[TidyRule],
+) -> String {
+    let mut taken: BTreeSet<&str> = if is_types {
+        mapping
+            .types
+            .iter()
+            .filter(|(t, _)| !from.contains(t))
+            .filter_map(|(_, m)| m.to.as_deref())
+            .collect()
+    } else {
+        mapping
+            .blocks
+            .iter()
+            .filter(|b| {
+                b.r#match
+                    .module
+                    .as_ref()
+                    .is_none_or(|md| !from.contains(md))
+            })
+            .map(|b| b.to.as_str())
+            .collect()
+    };
+    for r in existing.iter().chain(new) {
+        match &r.kind {
+            TidyKind::MergeTypes { into, .. } if is_types => taken.insert(into),
+            TidyKind::MergeBlocks { into, .. } if !is_types => taken.insert(into),
+            _ => false,
+        };
+    }
+    if !taken.contains(into.as_str()) {
+        return into;
+    }
+    let base = format!("{into}-merged");
+    let mut name = base.clone();
+    let mut n = 2;
+    while taken.contains(name.as_str()) {
+        name = format!("{base}-{n}");
+        n += 1;
+    }
+    name
+}
+
 /// A free id from `base`: `base`, then `base-2`, `base-3`...
 fn unique(ids: &mut BTreeSet<String>, base: &str) -> String {
     let mut id = base.to_string();
@@ -430,6 +482,38 @@ mod tests {
             drop: IndexMap::new(),
         };
         assert_eq!(suggest(&summary(), &other)[0].id, "pages-2");
+    }
+
+    /// R21: `homepage` already goes to `pages`, so the merge can't land there too.
+    #[test]
+    fn into_never_lands_in_a_collection_another_type_uses() {
+        let mut m = MappingConfig::default();
+        for (ty, to) in [("homepage", "pages"), ("regionPage", "regionPage")] {
+            m.types.insert(
+                ty.into(),
+                crate::mapping::TypeMap {
+                    to: Some(to.into()),
+                    ..Default::default()
+                },
+            );
+        }
+        let r = suggest_in(&summary(), &[], &m);
+        let TidyKind::MergeTypes { into, .. } = &r[0].kind else {
+            panic!("not a type merge")
+        };
+        assert_eq!(into, "pages-merged");
+        assert_eq!(r[0].id, "pages-merged");
+        m.types.insert(
+            "landing".into(),
+            crate::mapping::TypeMap {
+                to: Some("pages-merged".into()),
+                ..Default::default()
+            },
+        );
+        let TidyKind::MergeTypes { into, .. } = &suggest_in(&summary(), &[], &m)[0].kind else {
+            panic!("not a type merge")
+        };
+        assert_eq!(into, "pages-merged-2");
     }
 
     #[test]
