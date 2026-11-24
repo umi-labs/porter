@@ -114,6 +114,24 @@ async fn first_run_all_is_not_stale() {
     }
     let cfg = ProjectConfig::load(&d.path().join("porter.toml")).unwrap();
     assert!(!cfg.mapping.types.is_empty(), "seeded");
+    // The dry-run load rewrote the flow graph with its counts.
+    let flow: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(s.project().reports_dir().join("flow.json")).unwrap(),
+    )
+    .unwrap();
+    let load = s
+        .project()
+        .store()
+        .runs(Stage::Load)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(
+        flow["counted_at"].as_str(),
+        load.ended_at.as_deref(),
+        "{flow}"
+    );
+    assert_eq!(flow["edges"][0]["count"], 1, "{flow}");
     for stage in [Stage::Schema, Stage::Load] {
         let run = s.project().store().runs(stage).unwrap().pop();
         let run = run.unwrap_or_else(|| panic!("{stage:?} started: {out:?}"));
@@ -380,6 +398,8 @@ async fn media_pages_canonical_live_only() {
             title: None,
             credit: None,
             folder: None,
+            focal_x: None,
+            focal_y: None,
             usages: vec![],
         };
         store.put_item(ItemKind::Media, id, &src, &m).unwrap();

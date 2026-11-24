@@ -37,6 +37,10 @@ pub struct MappingConfig {
     pub menus: MenusMap,
     #[serde(skip_serializing_if = "SettingsMap::is_empty")]
     pub settings: SettingsMap,
+    /// Named value maps for path patterns: `{field|lookup:<table>}` maps the field's value
+    /// through `lookups.<table>`.
+    #[serde(skip_serializing_if = "IndexMap::is_empty")]
+    pub lookups: IndexMap<String, IndexMap<String, String>>,
 }
 
 /// Where menus go: a `collection` (one doc per menu: `title`, `items`), or a `global`
@@ -93,6 +97,13 @@ pub struct TypeMap {
     /// URL pattern, e.g. `/{type}/{slug}/`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Source field holding the title, tried before the adapter's defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_field: Option<String>,
+    /// Reference field whose target becomes the document's parent, in place of the
+    /// source's own (set by a `merge-types` tidy rule's `parent`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
     pub key_field: String,
     pub key_type: KeyType,
     /// Source status -> destination status, e.g. `private = "draft"`; `"skip"` leaves
@@ -110,6 +121,8 @@ impl Default for TypeMap {
             to: None,
             drop_reason: None,
             path: None,
+            title_field: None,
+            parent: None,
             key_field: "legacyId".into(),
             key_type: KeyType::Text,
             status: IndexMap::new(),
@@ -200,6 +213,20 @@ pub fn block_kind_name(k: &BlockKind) -> String {
         .unwrap_or_default()
 }
 
+/// Sets each document's parent from its type's `parent` field, where the mapping names
+/// one: the document that field references, else none. Normalise output is untouched;
+/// this is the load-side view.
+pub fn mapped_parents(docs: &mut [Document], m: &MappingConfig) {
+    for d in docs {
+        if let Some(f) = m.types.get(&d.doc_type).and_then(|t| t.parent.as_deref()) {
+            d.parent = match lookup(d, f) {
+                FieldValue::Doc(id) => Some(id),
+                _ => None,
+            };
+        }
+    }
+}
+
 /// Paths `lookup` answers from the document itself when no custom field has that name.
 pub const DOC_PATHS: [&str; 9] = [
     "seo.title",
@@ -269,6 +296,9 @@ pub struct FormsMap {
     /// Form titles not to load.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub retire: Vec<String>,
+    /// Source types whose documents are form submissions (Sanity), beside detected ones.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub submission_types: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -371,6 +401,50 @@ impl MappingConfig {
             ..MappingConfig::default()
         }
     }
+}
+
+/// After normalise: gives each mapped type (`to` set) an identity entry for every field
+/// its normalised documents hold that `[mapping.types.<t>.fields]` doesn't mention at all,
+/// nor any `[[tidy]]` rule's `drop`. Existing entries, drops included, are never changed.
+/// Comments survive (edited through `MappingDoc`). Returns `"<type>.<field>"` per entry added.
+pub fn top_up_fields(project_dir: &Path, store: &Store) -> Result<Vec<String>> {
+    let path = project_dir.join("porter.toml");
+    let mut doc = edit::MappingDoc::open(&path)?;
+    let cfg = doc.config()?;
+    let tidy_drops: std::collections::HashSet<&String> = cfg
+        .tidy
+        .iter()
+        .flat_map(|r| match &r.kind {
+            crate::tidy::TidyKind::MergeTypes { drop, .. } => drop.keys(),
+            crate::tidy::TidyKind::MergeBlocks { drop, .. } => drop.keys(),
+        })
+        .collect();
+    let mut added = vec![];
+    for (_, _, d) in store.items_decodable::<Document>(ItemKind::Document)? {
+        let Some(tm) = cfg.mapping.types.get(&d.doc_type) else {
+            continue;
+        };
+        if tm.to.is_none() {
+            continue;
+        }
+        for k in d.fields.keys() {
+            let key = format!("{}.{k}", d.doc_type);
+            if tm.fields.contains_key(k) || tidy_drops.contains(&key) {
+                continue;
+            }
+            if doc.add_identity_field(&d.doc_type, k) {
+                added.push(key);
+            }
+        }
+    }
+    if added.is_empty() {
+        return Ok(added);
+    }
+    let problems = doc.save();
+    if !problems.is_empty() {
+        anyhow::bail!("{}", problems.join("; "));
+    }
+    Ok(added)
 }
 
 /// Appends `[mapping]` to `<project_dir>/porter.toml` unless it already has a non-empty

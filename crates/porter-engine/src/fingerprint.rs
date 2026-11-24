@@ -34,6 +34,10 @@ fn canonical(v: Value) -> Value {
 /// - schema: `[mapping]`, `[destination]`
 /// - load: `[source]`, `[mapping]`, `[destination]`
 /// - verify: load's, plus `[verify]`
+///
+/// `mapping` is the effective mapping (`[mapping]` with the enabled `[[tidy]]` rules
+/// compiled in), so a disabled suggestion, or a label edit, stales nothing, and projects
+/// without rules keep their recorded fingerprints. Normalise doesn't read `[[tidy]]`.
 fn sections(cfg: &ProjectConfig, stage: Stage) -> Vec<(&'static str, String)> {
     fn h(v: &impl Serialize) -> String {
         // ponytail: an unserialisable section hashes as null; every section is plain data.
@@ -45,7 +49,14 @@ fn sections(cfg: &ProjectConfig, stage: Stage) -> Vec<(&'static str, String)> {
             .collect()
     }
     let source = ("source", h(&cfg.source));
-    let mapping = ("mapping", h(&cfg.mapping));
+    // A rule that doesn't compile stops those stages anyway; hash what is written then.
+    let mapping = (
+        "mapping",
+        match crate::tidy::effective_mapping(cfg) {
+            Ok(m) => h(&m),
+            Err(_) => h(&(&cfg.mapping, &cfg.tidy)),
+        },
+    );
     let destination = ("destination", h(&cfg.destination));
     match stage {
         Stage::Analyse | Stage::Extract => vec![source, ("connectors", h(&cfg.connectors))],
@@ -84,12 +95,17 @@ pub fn changed(recorded: Option<&str>, cfg: &ProjectConfig, stage: Stage) -> Opt
         return Some(NOT_RECORDED.into());
     };
     let old: Vec<&str> = recorded.split(';').collect();
-    for (k, v) in sections(cfg, stage) {
+    let now = sections(cfg, stage);
+    for (k, v) in &now {
         if !old.contains(&format!("{k}={v}").as_str()) {
             return Some(format!("{k} changed since"));
         }
     }
-    None
+    // A section recorded then but gone now (`tidy`, recorded by older porters).
+    old.iter()
+        .filter_map(|o| o.split_once('=').map(|(k, _)| k))
+        .find(|k| !now.iter().any(|(n, _)| n == k))
+        .map(|k| format!("{k} changed since"))
 }
 
 #[cfg(test)]
@@ -186,5 +202,45 @@ to = "posts"
             .as_deref(),
             Some("mapping changed since")
         );
+    }
+
+    /// R22: what a rule changes is the effective mapping, so only enabled rules count, and
+    /// only for schema, load and verify; normalise never reads `[[tidy]]`.
+    #[test]
+    fn only_enabled_tidy_rules_stale_and_only_mapping_stages() {
+        let rule = |enabled: bool, label: &str| {
+            cfg(&format!(
+                "{BASE}\n[[tidy]]\nid = \"m\"\nkind = \"merge-types\"\nenabled = {enabled}\nlabel = \"{label}\"\nfrom = [\"post\"]\ninto = \"posts-merged\"\n"
+            ))
+        };
+        let a = cfg(BASE);
+        let off = rule(false, "x");
+        let on = rule(true, "x");
+        for st in [
+            Stage::Analyse,
+            Stage::Extract,
+            Stage::Normalise,
+            Stage::Schema,
+            Stage::Load,
+            Stage::Verify,
+        ] {
+            let fp = fingerprint(&a, st);
+            // A disabled suggestion (or editing its label) changes nothing anywhere.
+            assert_eq!(changed(Some(&fp), &off, st), None, "{st:?}");
+            assert_eq!(
+                changed(Some(&fingerprint(&off, st)), &rule(false, "y"), st),
+                None,
+                "{st:?}"
+            );
+            let want = matches!(st, Stage::Schema | Stage::Load | Stage::Verify)
+                .then_some("mapping changed since");
+            assert_eq!(changed(Some(&fp), &on, st).as_deref(), want, "{st:?}");
+            // Turning it off again is a change back.
+            assert_eq!(
+                changed(Some(&fingerprint(&on, st)), &off, st).as_deref(),
+                want,
+                "{st:?}"
+            );
+        }
     }
 }

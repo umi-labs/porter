@@ -91,7 +91,7 @@ impl Destination for PayloadDestination {
 
     async fn schema(&self, mode: SchemaMode, ctx: &StageCtx) -> Result<()> {
         let summary = TypeSummary::from_store(ctx.project.store())?;
-        let mapping = &ctx.config.mapping;
+        let mapping = &crate::tidy::effective_mapping(&ctx.config)?;
         let project = ctx.project.dir();
         let config_dir = self.cfg.config_dir.as_ref().map(|d| project.join(d));
         let reports = ctx.project.reports_dir();
@@ -125,7 +125,17 @@ impl Destination for PayloadDestination {
             }
             SchemaMode::Generate => {
                 let out = generated_dir(project);
-                written = schema_generate::generate(&summary, mapping, &out)?;
+                let g = schema_generate::generate(&summary, mapping, &out)?;
+                for i in g.infos {
+                    ctx.issue(
+                        porter_model::IssueKind::SchemaMismatch,
+                        porter_model::Severity::Info,
+                        None,
+                        i,
+                        serde_json::json!({}),
+                    )?;
+                }
+                written = g.files;
             }
             SchemaMode::Prompt => {
                 let dest = config_dir.unwrap_or_else(|| project.join("<payload site>"));

@@ -135,6 +135,8 @@ fn media_path_rejects_bad_hashes() {
             title: None,
             credit: None,
             folder: None,
+            focal_x: None,
+            focal_y: None,
             usages: vec![],
         };
         s.put_item(ItemKind::Media, id, &src, &m).unwrap();

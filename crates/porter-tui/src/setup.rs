@@ -44,6 +44,9 @@ fn destinations() -> &'static [&'static str] {
 fn yes_no() -> &'static [&'static str] {
     &["no", "yes"]
 }
+fn sanity_assets() -> &'static [&'static str] {
+    &["", "referenced", "all"]
+}
 fn auths() -> &'static [&'static str] {
     &["", "basic", "bearer", "apikey"]
 }
@@ -82,6 +85,8 @@ pub const SECTIONS: &[Section] = &[
     s("wp-rest", "Connector: WordPress REST API", true),
     s("wp-db", "Connector: WordPress database dump", true),
     s("umbraco-json", "Connector: Umbraco JSON export", true),
+    s("sanity-api", "Connector: Sanity API", true),
+    s("sanity-export", "Connector: Sanity dataset export", true),
     s("destination", "Destination", false),
 ];
 
@@ -193,6 +198,70 @@ pub const FIELDS: &[Field] = &[
         Kind::List,
         true,
         "a.json, b.json",
+    ),
+    f(
+        "sanity-api.use",
+        "sanity-api",
+        "use",
+        Kind::Choice(yes_no),
+        false,
+        "",
+    ),
+    f(
+        "sanity-api.project_id",
+        "sanity-api",
+        "project id",
+        Kind::Text,
+        true,
+        "abc123",
+    ),
+    f(
+        "sanity-api.dataset",
+        "sanity-api",
+        "dataset",
+        Kind::Text,
+        true,
+        "production",
+    ),
+    f(
+        "sanity-api.token_env",
+        "sanity-api",
+        "token env var NAME",
+        Kind::Text,
+        false,
+        "PORTER_SANITY_TOKEN",
+    ),
+    f(
+        "sanity-api.assets",
+        "sanity-api",
+        "assets",
+        Kind::Choice(sanity_assets),
+        false,
+        "",
+    ),
+    f(
+        "sanity-export.use",
+        "sanity-export",
+        "use",
+        Kind::Choice(yes_no),
+        false,
+        "",
+    ),
+    f(
+        "sanity-export.path",
+        "sanity-export",
+        "export archive",
+        Kind::Path,
+        true,
+        "production.tar.gz",
+    ),
+    f(
+        "sanity-export.assets",
+        "sanity-export",
+        "assets",
+        Kind::Choice(sanity_assets),
+        false,
+        "",
     ),
     f(
         "destination.adapter",
@@ -397,6 +466,18 @@ impl Setup {
                 _ => {}
             }
         }
+        if self.section_on("sanity-api") {
+            let var = self.get("sanity-api.token_env").trim();
+            // Blank means the default; an invalid name may be a pasted token: never shown.
+            let var = if var.is_empty() {
+                "PORTER_SANITY_TOKEN"
+            } else {
+                var
+            };
+            if is_env_var_name(var) {
+                add("sanity-api", var);
+            }
+        }
         let name = self.get("destination.api_key_env").trim();
         // An invalid name may be a pasted key: never shown (see `ui::form`).
         if is_env_var_name(name) {
@@ -454,6 +535,15 @@ impl Setup {
                 self.opt(&mut t, "dump", &id("dump"));
                 self.opt(&mut t, "wp_root", &id("wp_root"));
                 self.opt(&mut t, "uploads_dir", &id("uploads_dir"));
+            }
+            "sanity-api" => {
+                for k in ["project_id", "dataset", "token_env", "assets"] {
+                    self.opt(&mut t, k, &id(k));
+                }
+            }
+            "sanity-export" => {
+                self.opt(&mut t, "path", &id("path"));
+                self.opt(&mut t, "assets", &id("assets"));
             }
             _ => t["paths"] = value(arr(self.list(&id("paths")))),
         }
@@ -634,6 +724,11 @@ mod tests {
     #[test]
     fn setup_never_has_secret_fields() {
         for f in FIELDS {
+            // `token_env` holds the NAME of an env var, and its label says so.
+            if f.id.ends_with("_env") {
+                assert!(f.label.contains("NAME"), "{}", f.id);
+                continue;
+            }
             let name = format!("{} {}", f.id, f.label).to_lowercase();
             for bad in ["password", "token", "secret", "key-value"] {
                 assert!(!name.contains(bad), "{name}");
@@ -734,6 +829,19 @@ mod tests {
                 ],
             ),
             ("umbraco-json", &[("paths", "a.json, b.json")]),
+            (
+                "sanity-api",
+                &[
+                    ("project_id", "abc123"),
+                    ("dataset", "production"),
+                    ("token_env", "MY_SANITY_TOKEN"),
+                    ("assets", "all"),
+                ],
+            ),
+            (
+                "sanity-export",
+                &[("path", "export.tar.gz"), ("assets", "all")],
+            ),
         ];
         let offered: Vec<_> = SECTIONS
             .iter()
@@ -770,6 +878,27 @@ mod tests {
                     assert_eq!(uploads_dir.as_deref().and_then(|p| p.to_str()), Some("up"));
                 }
                 (C::UmbracoJson { paths }, "umbraco-json") => assert_eq!(paths.len(), 2),
+                (
+                    C::SanityApi {
+                        project_id,
+                        dataset,
+                        token_env,
+                        assets,
+                        ..
+                    },
+                    "sanity-api",
+                ) => {
+                    assert_eq!(
+                        (project_id.as_str(), dataset.as_str()),
+                        ("abc123", "production")
+                    );
+                    assert_eq!(token_env, "MY_SANITY_TOKEN");
+                    assert_eq!(*assets, porter_engine::config::SanityAssets::All);
+                }
+                (C::SanityExport { path, assets }, "sanity-export") => {
+                    assert_eq!(path.to_str(), Some("export.tar.gz"));
+                    assert_eq!(*assets, porter_engine::config::SanityAssets::All);
+                }
                 (other, _) => panic!("{kind} wrote {other:?}"),
             }
         }

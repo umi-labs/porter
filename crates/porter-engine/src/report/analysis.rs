@@ -239,7 +239,7 @@ mod tests {
         assert!(!html.contains("<script"));
         assert!(html.contains("no API access to private posts"));
         assert!(html.contains("Coverage") && html.contains("drafts need auth"));
-        assert!(html.contains("porter 2.0.0") && html.contains("demo &lt;b&gt;"));
+        assert!(html.contains(&format!("porter {}", env!("CARGO_PKG_VERSION"))) && html.contains("demo &lt;b&gt;"));
         assert!(html.contains("<details"));
         assert_eq!(write_all(&p).unwrap().len(), 1);
     }

@@ -80,6 +80,10 @@ pub enum Command {
     /// check | generate | prompt | spec
     Schema {
         mode: commands::stage::Mode,
+        /// generate only: write into this Payload repo's src/collections/porter/ and
+        /// src/blocks/porter/, then print the payload.config.ts lines and a catch-all route
+        #[arg(long)]
+        into: Option<PathBuf>,
     },
     /// Dry run unless --apply
     Load {
@@ -98,6 +102,13 @@ pub enum Command {
     /// Write status and issues to a file (use with --json)
     Export {
         file: PathBuf,
+    },
+    /// How content flows: sources, tidy-ups and destinations, with the last load's counts
+    Flow,
+    /// Tidy-ups: merge look-alike types or blocks; list, suggest, enable, disable, dismiss
+    Tidy {
+        #[command(subcommand)]
+        cmd: commands::tidy::TidyCmd,
     },
     /// Sync with a Porter hub: login, link, push, pull, run, uploads
     Hub(commands::hub::HubArgs),
@@ -167,6 +178,8 @@ async fn dispatch(cli: Cli) -> Result<i32> {
         Command::Clean => clean::run(&dir, json),
         Command::Report => report::run(&dir, json),
         Command::Export { file } => export::run(&dir, json, &file),
+        Command::Flow => flow::run(&dir, json),
+        Command::Tidy { cmd } => tidy::run(&dir, json, cmd),
         Command::Hub(args) => {
             let ctx = hub::Ctx {
                 dir,
@@ -183,7 +196,17 @@ async fn dispatch(cli: Cli) -> Result<i32> {
         Command::Normalise { refresh } => {
             stage::run(&dir, json, StageCmd::Normalise, refresh).await
         }
-        Command::Schema { mode } => stage::run(&dir, json, StageCmd::Schema(mode), false).await,
+        Command::Schema { mode, into: None } => {
+            stage::run(&dir, json, StageCmd::Schema(mode), false).await
+        }
+        Command::Schema {
+            mode: stage::Mode::Generate,
+            into: Some(repo),
+        } => stage::generate_into(&dir, json, &repo).await,
+        Command::Schema { into: Some(_), .. } => {
+            eprintln!("error: --into only works with `schema generate`");
+            Ok(2)
+        }
         Command::Load { apply } => stage::run(&dir, json, StageCmd::Load(apply), false).await,
         Command::Verify => stage::run(&dir, json, StageCmd::Verify, false).await,
         Command::Run { keep_going, apply } => stage::run_all(&dir, json, keep_going, apply).await,

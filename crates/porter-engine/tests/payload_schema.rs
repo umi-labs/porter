@@ -418,7 +418,9 @@ fn rich_mapping() -> (TypeSummary, MappingConfig) {
 fn generate_roundtrips() {
     let (sum, map) = rich_mapping();
     let d = tempfile::tempdir().unwrap();
-    let files = schema_generate::generate(&sum, &map, d.path()).unwrap();
+    let files = schema_generate::generate(&sum, &map, d.path())
+        .unwrap()
+        .files;
     assert!(
         files.iter().any(|f| f.ends_with("NewsItems.ts")),
         "{files:?}"
@@ -440,6 +442,7 @@ fn generate_roundtrips() {
             ("legacyId", "number"),
             ("title", "text"),
             ("slug", "text"),
+            ("path", "text"),
             ("hero", "richText"),
             ("count", "number"),
             ("flag", "checkbox"),
@@ -889,4 +892,268 @@ export const Pages = { slug: 'pages', admin: {}, fields: [
             .any(|e| e.contains("pages.meta.keywords") && e.contains("required")),
         "{errs:?}"
     );
+}
+
+// ---- nested data, the path field, `--into` ----
+
+fn sref(sid: &str) -> SourceRef {
+    SourceRef {
+        connector: "wxr".into(),
+        source_id: sid.into(),
+        url: None,
+    }
+}
+
+/// A project holding one `post` per entry of `docs` (source id, fields).
+fn store_with(docs: Vec<(&str, Vec<(&str, FieldValue)>)>) -> (tempfile::TempDir, Project) {
+    let d = tempfile::tempdir().unwrap();
+    let p = Project::init(d.path(), "t", "wordpress").unwrap();
+    for (sid, fields) in docs {
+        let src = sref(sid);
+        let id = ItemId::new(ItemKind::Document, &src);
+        let doc = Document {
+            id,
+            doc_type: "post".into(),
+            status: DocStatus::Published,
+            locale: None,
+            translations: vec![],
+            slug: sid.into(),
+            path: format!("/{sid}/"),
+            parent: None,
+            title: sid.into(),
+            fields: fields
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+            seo: Seo::default(),
+            created: None,
+            updated: None,
+            author: None,
+            original: serde_json::Value::Null,
+            source: src.clone(),
+        };
+        p.store()
+            .put_item(ItemKind::Document, id, &src, &doc)
+            .unwrap();
+    }
+    (d, p)
+}
+
+fn obj(kv: Vec<(&str, FieldValue)>) -> FieldValue {
+    FieldValue::Object(kv.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+}
+
+fn text(s: &str) -> FieldValue {
+    FieldValue::Text(s.into())
+}
+
+/// Generates `post -> posts` mapping `field` to `field`; returns Posts.ts and the infos.
+fn gen_posts(p: &Project, field: &str) -> (String, Vec<String>) {
+    let sum = TypeSummary::from_store(p.store()).unwrap();
+    let map = mapping("post", "posts", &[(field, field)]);
+    let out = tempfile::tempdir().unwrap();
+    let g = schema_generate::generate(&sum, &map, out.path()).unwrap();
+    let ts = std::fs::read_to_string(out.path().join("Posts.ts")).unwrap();
+    (ts, g.infos)
+}
+
+#[test]
+fn object_becomes_group() {
+    let (_d, p) = store_with(vec![(
+        "1",
+        vec![(
+            "seo",
+            obj(vec![("metaTitle", text("T")), ("_type", text("seoGroup"))]),
+        )],
+    )]);
+    let (ts, infos) = gen_posts(&p, "seo");
+    assert!(
+        ts.contains(
+            "    {\n      name: \"seo\",\n      type: \"group\",\n      fields: [\n        {\n          name: \"metaTitle\",\n          type: \"text\",\n        },\n      ],\n    },\n"
+        ),
+        "{ts}"
+    );
+    assert!(!ts.contains("_type"), "{ts}");
+    assert!(infos.is_empty(), "{infos:?}");
+}
+
+#[test]
+fn list_of_objects_becomes_array() {
+    let row = |l: &str| obj(vec![("label", text(l)), ("score", FieldValue::Number(1.0))]);
+    let (_d, p) = store_with(vec![(
+        "1",
+        vec![("rows", FieldValue::List(vec![row("a"), row("b")]))],
+    )]);
+    let (ts, infos) = gen_posts(&p, "rows");
+    assert!(
+        ts.contains(
+            "    {\n      name: \"rows\",\n      type: \"array\",\n      fields: [\n        {\n          name: \"label\",\n          type: \"text\",\n        },\n        {\n          name: \"score\",\n          type: \"number\",\n        },\n      ],\n    },\n"
+        ),
+        "{ts}"
+    );
+    assert!(infos.is_empty(), "{infos:?}");
+}
+
+#[test]
+fn doc_inside_object_is_relationship() {
+    let target = ItemId::new(ItemKind::Document, &sref("2"));
+    let (_d, p) = store_with(vec![
+        (
+            "1",
+            vec![(
+                "hero",
+                obj(vec![
+                    ("link", FieldValue::Doc(target)),
+                    ("label", text("Go")),
+                ]),
+            )],
+        ),
+        ("2", vec![]),
+    ]);
+    let sum = TypeSummary::from_store(p.store()).unwrap();
+    let link = &sum.types["post"].fields["hero"].children["link"];
+    assert!(link.relation_types.contains("post"), "{link:?}");
+    let (ts, _) = gen_posts(&p, "hero");
+    assert!(
+        ts.contains(
+            "        {\n          name: \"link\",\n          type: \"relationship\",\n          relationTo: \"posts\",\n        },\n"
+        ),
+        "{ts}"
+    );
+}
+
+#[test]
+fn mixed_shapes_fall_back_to_json_with_info() {
+    let (_d, p) = store_with(vec![
+        ("1", vec![("extra", obj(vec![("a", text("x"))]))]),
+        ("2", vec![("extra", text("plain"))]),
+    ]);
+    let (ts, infos) = gen_posts(&p, "extra");
+    assert!(
+        ts.contains("    {\n      name: \"extra\",\n      type: \"json\",\n    },\n"),
+        "{ts}"
+    );
+    assert_eq!(infos, ["posts.extra has mixed shapes; generated as json"]);
+}
+
+#[test]
+fn every_collection_has_path_field() {
+    let (sum, map) = rich_mapping();
+    let d = tempfile::tempdir().unwrap();
+    schema_generate::generate(&sum, &map, d.path()).unwrap();
+    let ts = std::fs::read_to_string(d.path().join("NewsItems.ts")).unwrap();
+    assert!(
+        ts.contains(
+            "    { name: 'path', type: 'text', index: true, unique: true, admin: { readOnly: true } },\n"
+        ),
+        "{ts}"
+    );
+    let back = read_payload_config(d.path()).unwrap();
+    let path = field(&back.collections["news-items"].fields, "path");
+    assert_eq!(path.kind, "text");
+}
+
+/// Runs `generate_into` for `post -> <to>` over a one-doc project.
+async fn into(
+    repo: &Path,
+    to: &str,
+) -> (
+    porter_engine::events::Summary,
+    Option<schema_generate::IntoReport>,
+    Vec<porter_model::Issue>,
+) {
+    use porter_engine::events::EventSink;
+    use porter_engine::stage::run_stage;
+    use std::sync::{Arc, Mutex};
+    let (_d, p) = store_with(vec![("1", vec![("seo", obj(vec![("t", text("x"))]))])]);
+    let p = Arc::new(p);
+    let mut cfg = p.config().clone();
+    cfg.mapping = mapping("post", to, &[("seo", "seo")]);
+    let report = Arc::new(Mutex::new(None));
+    let (r, repo) = (report.clone(), repo.to_path_buf());
+    let summary = run_stage(
+        p.clone(),
+        Arc::new(cfg),
+        EventSink::new(64),
+        Default::default(),
+        porter_model::Stage::Schema,
+        |ctx| async move {
+            *r.lock().unwrap() = Some(schema_generate::generate_into(&ctx, &repo)?);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+    let issues = p.store().issues(&Default::default()).unwrap();
+    let out = report.lock().unwrap().take();
+    (summary, out, issues)
+}
+
+/// `post` maps onto the app's `pages` on purpose (R20): `pages` is left to the app, with a
+/// warning; nothing collides. (The accidental case, `pages` -> `pages`, is the CLI test.)
+#[tokio::test]
+async fn into_skips_a_collection_mapped_onto_the_app() {
+    let repo = tempfile::tempdir().unwrap();
+    write(
+        repo.path(),
+        "src/collections/Pages.ts",
+        "export const Pages = {\n  slug: 'pages',\n  fields: [],\n}\n",
+    );
+    let (summary, report, issues) = into(repo.path(), "pages").await;
+    let report = report.unwrap();
+    assert!(report.collisions.is_empty());
+    assert_eq!(report.skipped, ["pages"]);
+    assert!(!repo.path().join("src/collections/porter/Pages.ts").exists());
+    assert_eq!(summary.errors, 0);
+    assert!(
+        issues.iter().any(|i| i.severity == Severity::Warning
+            && i.message
+                .contains("`post` maps onto existing collection `pages`")),
+        "{issues:?}"
+    );
+}
+
+#[tokio::test]
+async fn into_writes_index() {
+    let repo = tempfile::tempdir().unwrap();
+    // A slug under porter/ is ours, from an earlier run: not a collision.
+    write(
+        repo.path(),
+        "src/collections/porter/Articles.ts",
+        "export const Articles = { slug: 'articles' }\n",
+    );
+    let (summary, report, _) = into(repo.path(), "articles").await;
+    let report = report.unwrap();
+    assert!(report.collisions.is_empty());
+    assert_eq!(porter_engine::events::exit_code(&summary), 0);
+    let base = repo.path().join("src/collections/porter");
+    assert!(report.written.contains(&base.join("Articles.ts")));
+    assert!(report.written.contains(&base.join("index.ts")));
+    let index = std::fs::read_to_string(base.join("index.ts")).unwrap();
+    assert!(
+        index.contains("import { Articles } from './Articles'"),
+        "{index}"
+    );
+    assert!(
+        index.contains("export const porterCollections: CollectionConfig[] = [Articles]"),
+        "{index}"
+    );
+    assert!(
+        index.contains("export const porterBlocks: Block[] = []"),
+        "{index}"
+    );
+    let back = read_payload_config(&base).unwrap();
+    assert!(back.collections.contains_key("articles"));
+}
+
+#[test]
+fn test_app_reads_generated_porter_collections() {
+    let s = read_payload_config(&repo().join("tests/payload-app/src")).unwrap();
+    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    let hb = &s.collections["hotelBreak"];
+    assert_eq!(field(&hb.fields, "path").kind, "text");
+    assert_eq!(field(&hb.fields, "seo").kind, "group");
+    let hl = field(&hb.fields, "highlights");
+    assert_eq!(hl.kind, "array");
+    assert_eq!(field(&hl.fields, "city").relation_to, ["cityPage"]);
 }

@@ -1,10 +1,10 @@
 # Porter
 
-Porter migrates a client website from one CMS into another and checks the result. It reads a source (WordPress, Umbraco), turns it into a neutral model, loads it into a destination (Payload), and then verifies that what landed matches what was there.
+Porter migrates a client website from one CMS into another and checks the result. It reads a source (WordPress, Umbraco, Sanity), turns it into a neutral model, loads it into a destination (Payload), and then verifies that what landed matches what was there.
 
 Porter is a CLI first. Every command works the same way for a person at a terminal and for a script or an AI agent: `--json` makes stdout pure NDJSON, nothing prompts unless you ask, and exit codes say what happened.
 
-> **Porter 2.0 is in active development.** The engine is built and tested: the five stages and verify, the WordPress and Umbraco sources, the crawler, and the Payload destination. The terminal UI, the desktop app (`crates/porter-desktop`) and the hub (`hub/`) are built and tested. Not built yet: the Sanity, Webflow, Squarespace and Gatsby sources and destinations, and the Elementor and WPBakery converters (porter records a `converter-missing` issue for those builders instead of guessing). Coming from 1.x? Read [UPGRADING.md](UPGRADING.md).
+> **Porter 2.0 is in active development.** The engine is built and tested: the five stages and verify, the WordPress, Umbraco and Sanity sources, the crawler, and the Payload destination. The terminal UI, the desktop app (`crates/porter-desktop`) and the hub (`hub/`) are built and tested. Not built yet: the Webflow, Squarespace and Gatsby sources and destinations, and the Elementor and WPBakery converters (porter records a `converter-missing` issue for those builders instead of guessing). Coming from 1.x? Read [UPGRADING.md](UPGRADING.md).
 
 ## Install
 
@@ -152,6 +152,30 @@ kind = "umbraco-json"
 paths = ["export/pages.json", "export/hotels.json"]
 ```
 
+### `sanity-api` and `sanity-export`: Sanity
+
+Reads a Sanity dataset through the API, or from a `sanity dataset export` archive. Use either with `[source] adapter = "sanity"`. The API token comes from the env var named by `token_env` (default `PORTER_SANITY_TOKEN`), never from the file.
+
+```toml
+[source]
+adapter = "sanity"
+
+[[connectors]]
+kind = "sanity-api"
+project_id = "abc123"
+dataset = "production"
+# token_env = "PORTER_SANITY_TOKEN"
+# api_version = "v2021-06-07"
+# assets = "referenced"               # referenced | all
+
+# or, from an export archive:
+# [[connectors]]
+# kind = "sanity-export"
+# path = "export/production.tar.gz"
+```
+
+Quick start: create a Viewer read token in Sanity Manage, `export PORTER_SANITY_TOKEN=...`, then `porter init acme --adapter sanity`, add the `sanity-api` connector and run `porter analyse`. Tidy-ups (`porter tidy`), the flow graph (`porter flow`) and generating schema into a repo (`porter schema generate --into`) are covered in [docs/sanity.md](docs/sanity.md).
+
 ## `porter.toml`
 
 A full annotated example, WordPress to Payload. Every section is optional in the file, but `porter` reports exactly what is missing (`destination.url is missing`) and fails with exit code 1 before doing anything. Unknown keys are errors, so a typo is caught rather than ignored.
@@ -161,7 +185,7 @@ A full annotated example, WordPress to Payload. Every section is optional in the
 name = "acme"
 
 [source]
-adapter = "wordpress"                 # wordpress | umbraco
+adapter = "wordpress"                 # wordpress | umbraco | sanity
 
 # Zero or more connectors; see above.
 [[connectors]]

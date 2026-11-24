@@ -1,0 +1,442 @@
+{
+  "v": 1,
+  "nodes": [
+    {
+      "id": "src:cityPage",
+      "column": "source",
+      "kind": "doc-type",
+      "title": "City pages",
+      "summary": "Goes through the tidy-up \"destinations\" into Destinations.",
+      "enabled": true,
+      "counts": {
+        "items_in": 3,
+        "ok": 3,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": {
+        "title": "Lisbon",
+        "changed": [
+          [
+            "kind",
+            "(none)",
+            "city"
+          ],
+          [
+            "country",
+            "Portugal",
+            "parent"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "src:countryPage",
+      "column": "source",
+      "kind": "doc-type",
+      "title": "Country pages",
+      "summary": "Goes through the tidy-up \"destinations\" into Destinations.",
+      "enabled": true,
+      "counts": {
+        "items_in": 2,
+        "ok": 2,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": {
+        "title": "Portugal",
+        "changed": [
+          [
+            "kind",
+            "(none)",
+            "country"
+          ],
+          [
+            "region",
+            "Europe",
+            "parent"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "src:homepage",
+      "column": "source",
+      "kind": "doc-type",
+      "title": "Homepages",
+      "summary": "Moves Homepages into Homepage unchanged.",
+      "enabled": true,
+      "counts": {
+        "items_in": 1,
+        "ok": 1,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": null
+    },
+    {
+      "id": "src:hotelBreak",
+      "column": "source",
+      "kind": "doc-type",
+      "title": "Hotel breaks",
+      "summary": "Moves Hotel breaks into Hotel break unchanged.",
+      "enabled": true,
+      "counts": {
+        "items_in": 3,
+        "ok": 3,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": null
+    },
+    {
+      "id": "src:regionPage",
+      "column": "source",
+      "kind": "doc-type",
+      "title": "Region pages",
+      "summary": "Goes through the tidy-up \"destinations\" into Destinations.",
+      "enabled": true,
+      "counts": {
+        "items_in": 1,
+        "ok": 1,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": {
+        "title": "Europe",
+        "changed": [
+          [
+            "kind",
+            "(none)",
+            "region"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "src:siteSettings",
+      "column": "source",
+      "kind": "doc-type",
+      "title": "Site settings",
+      "summary": "Moves Site settings into Site settings unchanged.",
+      "enabled": true,
+      "counts": {
+        "items_in": 1,
+        "ok": 1,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": null
+    },
+    {
+      "id": "blk:accordion",
+      "column": "source",
+      "kind": "block-type",
+      "title": "Accordion blocks",
+      "summary": "Moves Accordion blocks into the Accordion block.",
+      "enabled": true,
+      "counts": {
+        "items_in": 3,
+        "ok": 3,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": null
+    },
+    {
+      "id": "blk:cardCarousel",
+      "column": "source",
+      "kind": "block-type",
+      "title": "Card carousel blocks",
+      "summary": "Goes through the tidy-up \"card-carousels\" into the Card carousel block.",
+      "enabled": true,
+      "counts": {
+        "items_in": 3,
+        "ok": 3,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": null
+    },
+    {
+      "id": "blk:customCardCarousel",
+      "column": "source",
+      "kind": "block-type",
+      "title": "Custom card carousel blocks",
+      "summary": "Goes through the tidy-up \"card-carousels\" into the Card carousel block.",
+      "enabled": true,
+      "counts": {
+        "items_in": 3,
+        "ok": 3,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": {
+        "title": "Beach Break",
+        "changed": [
+          [
+            "cards",
+            "(1 items)",
+            "items"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "blk:hero",
+      "column": "source",
+      "kind": "block-type",
+      "title": "Hero blocks",
+      "summary": "Moves Hero blocks into the Hero block.",
+      "enabled": true,
+      "counts": {
+        "items_in": 3,
+        "ok": 3,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": null
+    },
+    {
+      "id": "src:enquiryForm",
+      "column": "source",
+      "kind": "submissions",
+      "title": "Enquiry form submissions",
+      "summary": "Not loaded: set mapping.forms.collection and mapping.forms.submissions to keep them.",
+      "enabled": true,
+      "counts": {
+        "items_in": 3,
+        "ok": 0,
+        "skipped": 3,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": null
+    },
+    {
+      "id": "tidy:destinations",
+      "column": "tidy",
+      "kind": "merge-types",
+      "title": "Destinations",
+      "summary": "Merges City pages, Country pages and Region pages into Destinations. Each keeps what it was in Kind.",
+      "enabled": true,
+      "counts": {
+        "items_in": 6,
+        "ok": 6,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": {
+        "title": "Europe",
+        "changed": [
+          [
+            "kind",
+            "(none)",
+            "region"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "tidy:card-carousels",
+      "column": "tidy",
+      "kind": "merge-blocks",
+      "title": "Card carousels",
+      "summary": "Merges Card carousel and Custom card carousel blocks into the Card carousel block.",
+      "enabled": true,
+      "counts": {
+        "items_in": 6,
+        "ok": 6,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": null
+    },
+    {
+      "id": "dst:destinations",
+      "column": "destination",
+      "kind": "collection",
+      "title": "Destinations",
+      "summary": "The Destinations collection.",
+      "enabled": true,
+      "counts": {
+        "items_in": 6,
+        "ok": 6,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": null
+    },
+    {
+      "id": "dst:homepage",
+      "column": "destination",
+      "kind": "collection",
+      "title": "Homepage",
+      "summary": "The Homepage collection.",
+      "enabled": true,
+      "counts": {
+        "items_in": 1,
+        "ok": 1,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": null
+    },
+    {
+      "id": "dst:hotelBreak",
+      "column": "destination",
+      "kind": "collection",
+      "title": "Hotel break",
+      "summary": "The Hotel break collection.",
+      "enabled": true,
+      "counts": {
+        "items_in": 3,
+        "ok": 3,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": null
+    },
+    {
+      "id": "dst:siteSettings",
+      "column": "destination",
+      "kind": "collection",
+      "title": "Site settings",
+      "summary": "The Site settings collection.",
+      "enabled": true,
+      "counts": {
+        "items_in": 1,
+        "ok": 1,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": null
+    },
+    {
+      "id": "dstblk:accordion",
+      "column": "destination",
+      "kind": "block",
+      "title": "Accordion",
+      "summary": "The Accordion block.",
+      "enabled": true,
+      "counts": {
+        "items_in": 3,
+        "ok": 3,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": null
+    },
+    {
+      "id": "dstblk:card-carousel",
+      "column": "destination",
+      "kind": "block",
+      "title": "Card carousel",
+      "summary": "The Card carousel block.",
+      "enabled": true,
+      "counts": {
+        "items_in": 6,
+        "ok": 6,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": null
+    },
+    {
+      "id": "dstblk:hero",
+      "column": "destination",
+      "kind": "block",
+      "title": "Hero",
+      "summary": "The Hero block.",
+      "enabled": true,
+      "counts": {
+        "items_in": 3,
+        "ok": 3,
+        "skipped": 0,
+        "failed": 0,
+        "dropped": 0
+      },
+      "example": null
+    }
+  ],
+  "edges": [
+    {
+      "from": "src:cityPage",
+      "to": "tidy:destinations",
+      "count": 3
+    },
+    {
+      "from": "src:countryPage",
+      "to": "tidy:destinations",
+      "count": 2
+    },
+    {
+      "from": "src:homepage",
+      "to": "dst:homepage",
+      "count": 1
+    },
+    {
+      "from": "src:hotelBreak",
+      "to": "dst:hotelBreak",
+      "count": 3
+    },
+    {
+      "from": "src:regionPage",
+      "to": "tidy:destinations",
+      "count": 1
+    },
+    {
+      "from": "src:siteSettings",
+      "to": "dst:siteSettings",
+      "count": 1
+    },
+    {
+      "from": "blk:accordion",
+      "to": "dstblk:accordion",
+      "count": 3
+    },
+    {
+      "from": "blk:cardCarousel",
+      "to": "tidy:card-carousels",
+      "count": 3
+    },
+    {
+      "from": "blk:customCardCarousel",
+      "to": "tidy:card-carousels",
+      "count": 3
+    },
+    {
+      "from": "blk:hero",
+      "to": "dstblk:hero",
+      "count": 3
+    },
+    {
+      "from": "tidy:destinations",
+      "to": "dst:destinations",
+      "count": 6
+    },
+    {
+      "from": "tidy:card-carousels",
+      "to": "dstblk:card-carousel",
+      "count": 6
+    }
+  ]
+}

@@ -766,7 +766,12 @@ impl Env {
     /// After a successful analyse: writes a `[mapping]` starting point if the user has
     /// none, and runs the rest of the plan with it (`out.seeded` says it wrote one).
     fn seed(&self, out: &Mutex<RunOutcome>) {
-        let seed = MappingConfig::seed_from(self.project.store());
+        let mut seed = MappingConfig::seed_from(self.project.store());
+        if let Err(e) = crate::sources::sanity::seed_mapping(&self.project, &mut seed) {
+            lock_out(out)
+                .messages
+                .push(format!("warning: could not read sanity analysis: {e:#}"));
+        }
         match write_seed_if_empty(self.project.dir(), &seed) {
             Ok(false) => {}
             Ok(true) => {
@@ -781,6 +786,59 @@ impl Env {
             Err(e) => lock_out(out)
                 .messages
                 .push(format!("warning: could not seed mapping: {e:#}")),
+        }
+    }
+}
+
+impl Env {
+    /// After a successful normalise: gives mapped types an entry for each field their
+    /// documents hold that the mapping doesn't mention (the seed after analyse only knows
+    /// the types), then runs the rest of the plan with it.
+    fn top_up_fields(&self, out: &Mutex<RunOutcome>) {
+        match crate::mapping::top_up_fields(self.project.dir(), self.project.store()) {
+            Ok(new) if new.is_empty() => {}
+            Ok(new) => {
+                lock_out(out).messages.push(format!(
+                    "{} field(s) added to [mapping], each to itself; edit or `drop` them in porter.toml",
+                    new.len()
+                ));
+                match ProjectConfig::load(&self.project.dir().join("porter.toml")) {
+                    Ok(c) => *self.config.lock().unwrap_or_else(|e| e.into_inner()) = Arc::new(c),
+                    Err(e) => lock_out(out)
+                        .messages
+                        .push(format!("warning: could not re-read porter.toml: {e:#}")),
+                }
+            }
+            Err(e) => lock_out(out)
+                .messages
+                .push(format!("warning: could not add fields to [mapping]: {e:#}")),
+        }
+    }
+
+    /// After a successful normalise: appends disabled `[[tidy]]` suggestions to
+    /// porter.toml (none already there by `from` set), saying how many it added.
+    fn suggest_tidy(&self, out: &Mutex<RunOutcome>) {
+        match crate::tidy::suggest::append(&self.project) {
+            Ok(new) if new.is_empty() => {}
+            Ok(new) => lock_out(out).messages.push(format!(
+                "{} tidy-up suggestion(s) added to porter.toml, off; see `porter tidy list`",
+                new.len()
+            )),
+            Err(e) => lock_out(out)
+                .messages
+                .push(format!("warning: could not suggest tidy-ups: {e:#}")),
+        }
+    }
+
+    /// After normalise and after load: writes `reports/flow.json` from porter.toml as it
+    /// is now (suggestions included). A failure is a warning, never a failed stage.
+    fn write_flow(&self, out: &Mutex<RunOutcome>) {
+        let r = ProjectConfig::load(&self.project.dir().join("porter.toml"))
+            .and_then(|cfg| crate::flow::write(&self.project, &cfg));
+        if let Err(e) = r {
+            lock_out(out)
+                .messages
+                .push(format!("warning: could not write the flow graph: {e:#}"));
         }
     }
 }
@@ -831,6 +889,12 @@ fn validate(cfg: &ProjectConfig, step: Step) -> Result<()> {
         .collect();
     if !errs.is_empty() {
         bail!("porter.toml: {}", errs.join("; "));
+    }
+    // A tidy rule that can't compile stops schema, load and verify before they start.
+    if step.needs_destination()
+        && let Err(e) = crate::tidy::effective_mapping(cfg)
+    {
+        bail!("porter.toml: {e}");
     }
     Ok(())
 }
@@ -1022,6 +1086,14 @@ async fn drive(env: Env, plan: RunPlan) -> RunOutcome {
             // Seed right after analyse, so the steps after it use (and record) the seed.
             if matches!(step, Step::Analyse) && matches!(code, 0 | 2) {
                 env.seed(out);
+            }
+            // Suggestions read the normalised documents, so they come after normalise.
+            if matches!(step, Step::Normalise) && matches!(code, 0 | 2) {
+                env.top_up_fields(out);
+                env.suggest_tidy(out);
+            }
+            if matches!(step, Step::Normalise | Step::Load(_)) && matches!(code, 0 | 2) {
+                env.write_flow(out);
             }
             code
         }
@@ -1399,6 +1471,39 @@ mod tests {
         let out = s.run(apply()).unwrap().wait().await;
         let err = out.per_stage[0].2.clone().unwrap_or_default();
         assert!(err.contains("schema re-ran after it"), "{err}");
+    }
+
+    /// A tidy rule that can't compile is a config error: code 1, before load begins.
+    #[tokio::test]
+    async fn bad_tidy_rule_refuses_load() {
+        let (d, s) = dry_run_with(|_| {});
+        edit_toml(d.path(), |t| {
+            // Valid otherwise, so the tidy rule is what stops it.
+            let t = t.replace(
+                "[destination]\n",
+                "[destination]\napi_key_env = \"K\"\nauth_collection = \"users\"\n",
+            );
+            format!(
+                "{t}\n[mapping.types.post.fields.category]\nto = \"kind\"\n\n[[tidy]]\nid = \"m\"\nkind = \"merge-types\"\nenabled = true\nfrom = [\"post\"]\ninto = \"posts\"\ndiscriminator = {{ field = \"kind\", values = {{ post = \"post\" }} }}\n"
+            )
+        });
+        let runs = s.project.store().runs(Stage::Load).unwrap().len();
+        let plan = RunPlan::Stage(
+            Stage::Load,
+            StageOpts {
+                refresh: false,
+                apply: false,
+                schema_mode: SchemaMode::Check,
+            },
+        );
+        let out = s.run(plan).unwrap().wait().await;
+        assert_eq!(out.code, 1, "{out:?}");
+        let err = out.per_stage[0].2.clone().unwrap_or_default();
+        assert!(
+            err.contains("tidy \"m\": discriminator field kind is already used by post.category"),
+            "{err}"
+        );
+        assert_eq!(s.project.store().runs(Stage::Load).unwrap().len(), runs);
     }
 
     /// With no dry run on record, `load --apply` is not refused by the guard (the

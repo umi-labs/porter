@@ -63,6 +63,8 @@ pub(super) struct Loader<'a> {
     /// None on a dry run: nothing is sent.
     client: Option<Arc<PayloadClient>>,
     schema: Option<DestSchema>,
+    /// `[mapping]` with the tidy rules compiled in.
+    mapping: crate::mapping::MappingConfig,
     ids: LoadIds,
 }
 
@@ -98,10 +100,16 @@ pub(super) async fn run(
             None
         }
     };
+    // Tidy rules are accounted first: a field one would lose or mangle blocks the load.
+    let mapping = crate::tidy::effective_mapping(&ctx.config)?;
+    if !crate::tidy::check_before_load(ctx, schema.as_ref())? {
+        return Ok(());
+    }
     let mut l = Loader {
         ctx,
         client,
         schema,
+        mapping,
         ids: LoadIds::default(),
     };
     for (item, collection, id) in ctx.project.store().dest_ids()? {
@@ -465,10 +473,19 @@ fn settle_nulls(fields: Option<&[DestField]>, data: &mut Map<String, Value>) {
         };
         if v.is_null() && (matches!(f.kind.as_str(), "array" | "blocks") || f.many) {
             *v = json!([]);
-        } else if f.kind == "group"
-            && let Some(o) = v.as_object_mut()
-        {
-            settle_nulls(Some(&f.fields), o);
+        } else if f.kind == "group" {
+            // Payload throws reading a sub-field of a null group: clear its fields instead.
+            if v.is_null() {
+                *v = Value::Object(
+                    f.fields
+                        .iter()
+                        .map(|x| (x.name.clone(), Value::Null))
+                        .collect(),
+                );
+            }
+            if let Some(o) = v.as_object_mut() {
+                settle_nulls(Some(&f.fields), o);
+            }
         }
     }
 }
@@ -546,6 +563,10 @@ mod tests {
             d,
             json!({"layout": [], "title": null, "seo": {"tags": [], "image": null}, "x": null})
         );
+        // Payload crashes reading a sub-field of a null group: send its fields as nulls.
+        let mut d = json!({"seo": null});
+        settle_nulls(Some(&fields), d.as_object_mut().unwrap());
+        assert_eq!(d, json!({"seo": {"tags": [], "image": null}}));
         let mut d = json!({"a": null, "g": {"b": null, "c": 1}});
         settle_nulls(None, d.as_object_mut().unwrap());
         assert_eq!(d, json!({"g": {"c": 1}}));

@@ -5,8 +5,11 @@
 use super::schema_check::effective;
 use crate::mapping::summary::{BlockStats, FieldStats, TypeSummary};
 use crate::mapping::{BlockMap, KeyType, MappingConfig};
+use crate::stage::StageCtx;
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
+use porter_model::{IssueKind, Severity};
+use serde_json::json;
 use std::path::{Path, PathBuf};
 
 #[derive(Default)]
@@ -77,11 +80,33 @@ fn collection_of<'a>(mapping: &'a MappingConfig, ty: &str) -> Option<&'a str> {
     mapping.types.get(ty)?.to.as_deref()
 }
 
+/// `fs.children` as sub-fields (Sanity's `_type`/`_key` and other `_` keys left out).
+fn sub_fields(
+    fs: &FieldStats,
+    mapping: &MappingConfig,
+    own: &str,
+    at: &str,
+    infos: &mut Vec<String>,
+) -> Vec<Field> {
+    fs.children
+        .iter()
+        .filter(|(k, _)| !k.starts_with('_'))
+        .map(|(k, c)| Field {
+            name: k.clone(),
+            ..kind_for(c, &[], mapping, own, &format!("{at}.{k}"), infos)
+        })
+        .collect()
+}
+
+/// The Payload field for `fs`. `at` (`<collection>.<field>`) names it in the Info pushed to
+/// `infos` when its shapes are mixed and it falls back to `json`.
 fn kind_for(
     fs: &FieldStats,
     ts: &[crate::mapping::Transform],
     mapping: &MappingConfig,
     own: &str,
+    at: &str,
+    infos: &mut Vec<String>,
 ) -> Field {
     let vs = effective(&fs.variants, ts);
     let mut f = Field::default();
@@ -122,27 +147,46 @@ fn kind_for(
             f.kind = "relationship".into();
             f.relation_to = rel();
         }
-        _ => f.kind = "json".into(),
+        _ => {}
     };
-    match vs.len() {
-        0 => f.kind = "text".into(),
-        1 => {
-            let v = vs.first().map(String::as_str).unwrap_or_default();
-            if v == "List" {
-                match fs.item_variants.iter().next().map(String::as_str) {
-                    Some(i @ ("Doc" | "Media" | "Text" | "Number"))
-                        if fs.item_variants.len() == 1 =>
-                    {
-                        one(i, &mut f);
-                        f.many = true;
-                    }
-                    _ => f.kind = "json".into(),
-                }
-            } else {
-                one(v, &mut f);
-            }
+    let v = match vs.len() {
+        0 => {
+            f.kind = "text".into();
+            return f;
         }
-        _ => f.kind = "json".into(),
+        1 => vs.first().map(String::as_str).unwrap_or_default(),
+        _ => "",
+    };
+    let items = &fs.item_variants;
+    let nested = match v {
+        "Object" => Some("group"),
+        "List" if items.len() == 1 && items.contains("Object") => Some("array"),
+        "List" => {
+            if let Some(i @ ("Doc" | "Media" | "Text" | "Number")) = items
+                .first()
+                .map(String::as_str)
+                .filter(|_| items.len() == 1)
+            {
+                one(i, &mut f);
+                f.many = true;
+            }
+            None
+        }
+        v => {
+            one(v, &mut f);
+            None
+        }
+    };
+    if let Some(kind) = nested {
+        f.fields = sub_fields(fs, mapping, own, at, infos);
+        if !f.fields.is_empty() {
+            f.kind = kind.into();
+        }
+    }
+    if f.kind.is_empty() {
+        f.kind = "json".into();
+        f.fields.clear();
+        infos.push(format!("{at} has mixed shapes; generated as json"));
     }
     f
 }
@@ -154,7 +198,7 @@ pub fn describe(
     mapping: &MappingConfig,
     own: &str,
 ) -> String {
-    let f = kind_for(fs, ts, mapping, own);
+    let f = kind_for(fs, ts, mapping, own, "", &mut vec![]);
     let mut s = f.kind.clone();
     if !f.relation_to.is_empty() {
         s.push_str(&format!(" -> {}", f.relation_to.join(" | ")));
@@ -236,11 +280,72 @@ fn write(path: &Path, text: &str) -> Result<()> {
     std::fs::write(path, text).with_context(|| format!("write {}", path.display()))
 }
 
-pub fn generate(
-    summary: &TypeSummary,
-    mapping: &MappingConfig,
-    out_dir: &Path,
-) -> Result<Vec<PathBuf>> {
+/// Files `generate` wrote, and an Info per field that fell back to `json`.
+pub struct Generated {
+    pub files: Vec<PathBuf>,
+    pub infos: Vec<String>,
+}
+
+/// What `generate_into` wrote, or the slugs that stopped it writing anything.
+#[derive(Debug, Default)]
+pub struct IntoReport {
+    pub written: Vec<PathBuf>,
+    pub collisions: Vec<String>,
+    /// Collections a type maps onto on purpose that the app already declares: not generated.
+    pub skipped: Vec<String>,
+}
+
+/// The `payload.config.ts` lines that wire in what `--into` wrote.
+pub const CONFIG_LINES: &str = "import { porterCollections } from './collections/porter'\n\
+collections: [/* your collections */, ...porterCollections],\n";
+
+/// `app/(frontend)/[[...path]]/page.tsx`: a plain page for each document `--into` loaded,
+/// `/` included (no segments).
+pub const CATCH_ALL_ROUTE: &str = r#"import config from '@payload-config'
+import { RichText } from '@payloadcms/richtext-lexical/react'
+import { notFound } from 'next/navigation'
+import { getPayload, type CollectionSlug } from 'payload'
+import { porterCollections } from '@/collections/porter'
+
+const HIDDEN = ['id', 'title', 'slug', 'path', 'legacyId', 'createdAt', 'updatedAt', '_status']
+
+export default async function Page({ params }: { params: Promise<{ path?: string[] }> }) {
+  const want = '/' + ((await params).path ?? []).join('/')
+  const payload = await getPayload({ config })
+  for (const { slug } of porterCollections) {
+    const { docs } = await payload.find({
+      collection: slug as CollectionSlug,
+      where: { path: { in: [want, want + '/'] } },
+      limit: 1,
+    })
+    const doc = docs[0] as Record<string, unknown> | undefined
+    if (!doc) continue
+    return (
+      <main>
+        <h1>{String(doc.title)}</h1>
+        {Object.entries(doc).map(([k, v]) =>
+          HIDDEN.includes(k) ? null
+          : typeof v === 'string' || typeof v === 'number' ? <p key={k}>{v}</p>
+          : v && typeof v === 'object' && 'root' in v ? <RichText key={k} data={v as never} />
+          : null,
+        )}
+      </main>
+    )
+  }
+  notFound()
+}
+"#;
+
+/// Generated config file texts, before they are written anywhere.
+struct Built {
+    collections: Vec<(String, String, String)>, // (slug, ident, text)
+    blocks: Vec<(String, String)>,              // (ident, text)
+    infos: Vec<String>,
+}
+
+/// `blocks_dir`: the blocks folder relative to the collections folder.
+fn build(summary: &TypeSummary, mapping: &MappingConfig, blocks_dir: &str) -> Built {
+    let mut infos = vec![];
     let mut colls: IndexMap<&str, (KeyType, Vec<Field>)> = IndexMap::new();
     for (ty, tm) in &mapping.types {
         let Some(coll) = tm.to.as_deref() else {
@@ -249,22 +354,23 @@ pub fn generate(
         let entry = colls.entry(coll).or_insert_with(|| (tm.key_type, vec![]));
         let stats = summary.types.get(ty);
         for (src, fm) in tm.fields.iter().filter(|(_, fm)| !fm.drop) {
-            if fm.to == tm.key_field || ["title", "slug"].contains(&fm.to.as_str()) {
+            if fm.to == tm.key_field || ["title", "slug", "path"].contains(&fm.to.as_str()) {
                 continue;
             }
             let fs = stats
                 .and_then(|s| s.field(src))
                 .cloned()
                 .unwrap_or_default();
-            insert(
-                &mut entry.1,
-                &fm.to,
-                kind_for(&fs, &fm.transform, mapping, coll),
-            );
+            let at = format!("{coll}.{}", fm.to);
+            let f = kind_for(&fs, &fm.transform, mapping, coll, &at, &mut infos);
+            insert(&mut entry.1, &fm.to, f);
         }
     }
-    let mut files = vec![];
-    let mut index = String::new();
+    let mut out = Built {
+        collections: vec![],
+        blocks: vec![],
+        infos: vec![],
+    };
     for (coll, (key_type, fields)) in &colls {
         let ident = pascal(coll);
         let key = mapping
@@ -283,11 +389,11 @@ pub fn generate(
         if fields_use_blocks(fields) {
             for b in block_slugs(mapping) {
                 let id = block_ident(&b);
-                imports.push_str(&format!("import {{ {id} }} from './blocks/{id}'\n"));
+                imports.push_str(&format!("import {{ {id} }} from '{blocks_dir}/{id}'\n"));
             }
         }
         let text = format!(
-            "// Generated by `porter schema generate`. Review, then copy into your Payload config.\n\
+            "// Generated by `porter schema generate`. Review before you rely on it.\n\
              {imports}\n\
              export const {ident}: CollectionConfig = {{\n\
              \x20 slug: {slug},\n\
@@ -303,16 +409,14 @@ pub fn generate(
              \x20   }},\n\
              \x20   {{ name: 'title', type: 'text', required: true }},\n\
              \x20   {{ name: 'slug', type: 'text', index: true }},\n\
+             \x20   {{ name: 'path', type: 'text', index: true, unique: true, admin: {{ readOnly: true }} }},\n\
              {body}\
              \x20 ],\n\
              }}\n",
             slug = q(coll),
             key = q(&key),
         );
-        let p = out_dir.join(format!("{ident}.ts"));
-        write(&p, &text)?;
-        index.push_str(&format!("export {{ {ident} }} from './{ident}'\n"));
-        files.push(p);
+        out.collections.push((coll.to_string(), ident, text));
     }
     for slug in block_slugs(mapping) {
         let id = block_ident(&slug);
@@ -329,10 +433,7 @@ pub fn generate(
                 let mut fs = FieldStats::default();
                 for b in summary.blocks.iter().filter(|b| block_matches(m, b)) {
                     if let Some(p) = b.props.get(src) {
-                        fs.variants.extend(p.variants.iter().cloned());
-                        fs.item_variants.extend(p.item_variants.iter().cloned());
-                        fs.relation_types.extend(p.relation_types.iter().cloned());
-                        fs.samples.extend(p.samples.iter().cloned());
+                        fs.merge(p);
                     }
                 }
                 let own = mapping
@@ -340,7 +441,12 @@ pub fn generate(
                     .values()
                     .find_map(|t| t.to.as_deref())
                     .unwrap_or("pages");
-                insert(&mut fields, dest, kind_for(&fs, &[], mapping, own));
+                let at = format!("{slug}.{dest}");
+                insert(
+                    &mut fields,
+                    dest,
+                    kind_for(&fs, &[], mapping, own, &at, &mut infos),
+                );
             }
         }
         let mut body = String::new();
@@ -357,15 +463,202 @@ pub fn generate(
              }}\n",
             slug = q(&slug),
         );
+        out.blocks.push((id, text));
+    }
+    out.infos = infos;
+    out
+}
+
+/// Writes collection and block configs to `out_dir` (blocks under `blocks/`) with an
+/// `index.ts` re-exporting them.
+pub fn generate(
+    summary: &TypeSummary,
+    mapping: &MappingConfig,
+    out_dir: &Path,
+) -> Result<Generated> {
+    let b = build(summary, mapping, "./blocks");
+    let mut files = vec![];
+    let mut index = String::new();
+    for (_, ident, text) in &b.collections {
+        let p = out_dir.join(format!("{ident}.ts"));
+        write(&p, text)?;
+        index.push_str(&format!("export {{ {ident} }} from './{ident}'\n"));
+        files.push(p);
+    }
+    for (id, text) in &b.blocks {
         let p = out_dir.join("blocks").join(format!("{id}.ts"));
-        write(&p, &text)?;
+        write(&p, text)?;
         index.push_str(&format!("export {{ {id} }} from './blocks/{id}'\n"));
         files.push(p);
     }
     let p = out_dir.join("index.ts");
     write(&p, &index)?;
     files.push(p);
-    Ok(files)
+    Ok(Generated {
+        files,
+        infos: b.infos,
+    })
+}
+
+/// `(value, file)` for every `<key>: '<value>'` in the `.ts` files under `<repo>/<dir>`,
+/// subfolders included, except `porter/` (ours). Files are read in sorted order.
+fn declared(repo: &Path, dir: &str, key: &str) -> Result<Vec<(String, String)>> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for p in rd.filter_map(|e| e.ok().map(|e| e.path())) {
+            if p.is_dir() {
+                if p.file_name()
+                    .is_some_and(|n| n != "porter" && n != "node_modules")
+                {
+                    walk(&p, out);
+                }
+            } else if p.extension().is_some_and(|x| x == "ts" || x == "tsx") {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = vec![];
+    walk(&repo.join(dir), &mut files);
+    files.sort();
+    let re = regex::Regex::new(&format!(r#"\b{key}:\s*['"]([^'"]+)['"]"#))?;
+    let mut out = vec![];
+    for f in files {
+        let text = std::fs::read_to_string(&f).with_context(|| format!("read {}", f.display()))?;
+        let rel = f.strip_prefix(repo).unwrap_or(&f).display().to_string();
+        for c in re.captures_iter(&text) {
+            out.push((c[1].to_string(), rel.clone()));
+        }
+    }
+    Ok(out)
+}
+
+/// `porter schema generate --into <repo>`: collections to `src/collections/porter/`, blocks
+/// to `src/blocks/porter/`, and `src/collections/porter/index.ts` exporting
+/// `porterCollections` and `porterBlocks`. A collection a type maps onto on purpose (its
+/// `to` names an app collection) is left to the app, with a Warning. A collection slug
+/// the app declares with no type mapped onto it by design, or a block slug or interface
+/// name it declares, is an Error issue, and then nothing is written.
+pub fn generate_into(ctx: &StageCtx, repo: &Path) -> Result<IntoReport> {
+    let summary = TypeSummary::from_store(ctx.project.store())?;
+    let mapping = crate::tidy::effective_mapping(&ctx.config)?;
+    let b = build(&summary, &mapping, "../../blocks/porter");
+    for i in &b.infos {
+        ctx.issue(
+            IssueKind::SchemaMismatch,
+            Severity::Info,
+            None,
+            i.clone(),
+            json!({}),
+        )?;
+    }
+    let declared_colls = declared(repo, "src/collections", "slug")?;
+    let mut report = IntoReport::default();
+    for (slug, ..) in &b.collections {
+        let Some((_, file)) = declared_colls.iter().find(|(s, _)| s == slug) else {
+            continue;
+        };
+        // Mapped onto the app's collection by design (a type of another name sends its
+        // documents there): the app has it, so it isn't generated. Otherwise (the seed's
+        // `pages` -> `pages`) it's an accident, and nothing is written.
+        let onto: Vec<&str> = mapping
+            .types
+            .iter()
+            .filter(|(ty, tm)| tm.to.as_deref() == Some(slug.as_str()) && *ty != slug)
+            .map(|(ty, _)| ty.as_str())
+            .collect();
+        if onto.is_empty() {
+            ctx.issue(
+                IssueKind::SchemaMismatch,
+                Severity::Error,
+                None,
+                format!("collection `{slug}` is already declared in {file}; nothing written"),
+                json!({"slug": slug, "file": file}),
+            )?;
+            report.collisions.push(slug.clone());
+        } else {
+            let types = onto.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>();
+            ctx.issue(
+                IssueKind::SchemaMismatch,
+                Severity::Warning,
+                None,
+                format!(
+                    "{} maps onto existing collection `{slug}` ({file}); not generated: run porter schema check for missing fields",
+                    types.join(", ")
+                ),
+                json!({"slug": slug, "file": file, "types": onto}),
+            )?;
+            report.skipped.push(slug.clone());
+        }
+    }
+    let block_slugs_declared = declared(repo, "src/blocks", "slug")?;
+    let interfaces = declared(repo, "src/blocks", "interfaceName")?;
+    for (slug, (ident, _)) in block_slugs(&mapping).iter().zip(&b.blocks) {
+        let hit = block_slugs_declared
+            .iter()
+            .find(|(s, _)| s == slug)
+            .map(|(_, f)| format!("block `{slug}` is already declared in {f}"))
+            .or_else(|| {
+                interfaces
+                    .iter()
+                    .find(|(s, _)| s == ident)
+                    .map(|(_, f)| format!("block interface `{ident}` is already declared in {f}"))
+            });
+        if let Some(why) = hit {
+            ctx.issue(
+                IssueKind::SchemaMismatch,
+                Severity::Error,
+                None,
+                format!("{why}; nothing written"),
+                json!({"slug": slug, "interface": ident}),
+            )?;
+            report.collisions.push(slug.clone());
+        }
+    }
+    if !report.collisions.is_empty() {
+        return Ok(report);
+    }
+    let made: Vec<&(String, String, String)> = b
+        .collections
+        .iter()
+        .filter(|c| !report.skipped.contains(&c.0))
+        .collect();
+    let colls = repo.join("src").join("collections").join("porter");
+    let blocks = repo.join("src").join("blocks").join("porter");
+    let mut imports = String::new();
+    for (_, ident, text) in &made {
+        let p = colls.join(format!("{ident}.ts"));
+        write(&p, text)?;
+        imports.push_str(&format!("import {{ {ident} }} from './{ident}'\n"));
+        report.written.push(p);
+    }
+    for (id, text) in &b.blocks {
+        let p = blocks.join(format!("{id}.ts"));
+        write(&p, text)?;
+        imports.push_str(&format!(
+            "import {{ {id} }} from '../../blocks/porter/{id}'\n"
+        ));
+        report.written.push(p);
+    }
+    let list = |xs: Vec<&str>| xs.join(", ");
+    let index = format!(
+        "// Generated by `porter schema generate --into`. Spread these into your Payload config.\n\
+         import type {{ Block, CollectionConfig }} from 'payload'\n\
+         {imports}\n\
+         export const porterCollections: CollectionConfig[] = [{}]\n\
+         export const porterBlocks: Block[] = [{}]\n",
+        list(made.iter().map(|c| c.1.as_str()).collect()),
+        list(b.blocks.iter().map(|x| x.0.as_str()).collect()),
+    );
+    let p = colls.join("index.ts");
+    write(&p, &index)?;
+    report.written.push(p);
+    let n = report.written.len() as u64;
+    for (i, p) in report.written.iter().enumerate() {
+        ctx.progress(i as u64 + 1, Some(n), format!("wrote {}", p.display()));
+    }
+    Ok(report)
 }
 
 fn fields_use_blocks(fields: &[Field]) -> bool {

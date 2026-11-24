@@ -94,6 +94,24 @@ fn template(name: &str, adapter: &str) -> String {
     // Serialise the user-supplied values so quotes and backslashes are escaped.
     let quote = |s: &str| toml::Value::String(s.to_string()).to_string();
     let name = quote(name);
+    let sanity = if adapter == "sanity" {
+        r#"#
+# Sanity: read through the API (token from the env var named by token_env) ...
+# [[connectors]]
+# kind = "sanity-api"
+# project_id = "abc123"
+# dataset = "production"
+# token_env = "PORTER_SANITY_TOKEN"
+# assets = "referenced"             # referenced | all
+#
+# ... or from a `sanity dataset export` archive:
+# [[connectors]]
+# kind = "sanity-export"
+# path = "export/production.tar.gz"
+"#
+    } else {
+        ""
+    };
     let adapter = quote(adapter);
     format!(
         r#"# Porter project. Credentials never go here: name the env var that holds them.
@@ -107,7 +125,7 @@ adapter = {adapter}
 # One [[connectors]] block per way of reading the source, e.g.:
 # [[connectors]]
 # kind = "crawl"
-
+{sanity}
 [destination]
 # adapter = ""
 # url = "https://cms.example.com"

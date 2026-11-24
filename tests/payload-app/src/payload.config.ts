@@ -7,6 +7,8 @@ import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildConfig } from 'payload'
+// Generated from the Sanity fixture by `porter schema generate --into` (golden-tested).
+import { porterCollections } from './collections/porter'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(dirname, '..')
@@ -77,6 +79,7 @@ export default buildConfig({
         { name: 'content', type: 'richText' },
       ],
     },
+    ...porterCollections,
   ],
   globals: [
     {

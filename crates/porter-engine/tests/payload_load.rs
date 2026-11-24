@@ -748,6 +748,53 @@ async fn media_uploads_collide_then_go_one_at_a_time() {
     assert_eq!(f.p.store().dest_ids().unwrap().len(), 5);
 }
 
+#[tokio::test]
+async fn upload_sends_focal_point() {
+    use porter_model::Media;
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let f = fx(&s.uri());
+    let h =
+        f.p.store()
+            .put_media_bytes(b"bytes", "https://old.example.test/m.png", "m.png")
+            .unwrap();
+    let mut m: Media = f.p.store().get_item(h.id).unwrap().unwrap();
+    m.focal_x = Some(30.0);
+    m.focal_y = Some(60.0);
+    let src = SourceRef {
+        connector: "media".into(),
+        source_id: m.hash.clone(),
+        url: None,
+    };
+    f.p.store()
+        .put_item(ItemKind::Media, m.id, &src, &m)
+        .unwrap();
+    let sum = f.load(true, CancellationToken::new()).await;
+    assert_eq!(exit_code(&sum), 0, "{sum:?}");
+    {
+        let st = fake.0.lock().unwrap();
+        let post = st
+            .log
+            .iter()
+            .find(|(m, p, _)| m == "POST" && p == "media")
+            .unwrap();
+        assert_eq!(
+            (&post.2["focalX"], &post.2["focalY"]),
+            (&json!(30.0), &json!(60.0))
+        );
+    }
+    // Existing doc with a different focal point: PATCHed.
+    {
+        let mut st = fake.0.lock().unwrap();
+        st.log.clear();
+        st.docs[0].1["focalX"] = json!(50.0);
+    }
+    f.load(true, CancellationToken::new()).await;
+    let st = fake.0.lock().unwrap();
+    let patch = st.log.iter().find(|(m, ..)| m == "PATCH").unwrap();
+    assert_eq!(patch.2["focalX"], json!(30.0));
+}
+
 /// A Payload config for `pages` and `posts`, written to a temp dir.
 fn site(fields: &str, blocks: &str) -> tempfile::TempDir {
     let site = tempfile::tempdir().unwrap();
@@ -980,6 +1027,8 @@ async fn dry_run_reports_media_without_a_file() {
         title: None,
         credit: None,
         folder: None,
+        focal_x: None,
+        focal_y: None,
         usages: vec![],
     };
     f.p.store()
@@ -1510,4 +1559,63 @@ async fn not_read_this_run_is_not_called_removed() {
             .any(|i| i.message.contains("removed from source")),
         "{issues:#?}"
     );
+}
+
+/// A document carries its new path when its collection has a `path` field, and relations
+/// inside a group or array rows go out as Payload ids.
+#[tokio::test]
+async fn sends_path_and_nested_relations_as_ids() {
+    let fake = Fake::default();
+    let s = server(&fake).await;
+    let mut f = fx(&s.uri());
+    let dir = site(
+        "{ name: 'path', type: 'text', unique: true },
+         { name: 'hero', type: 'group', fields: [
+           { name: 'label', type: 'text' },
+           { name: 'link', type: 'relationship', relationTo: 'posts' } ] },
+         { name: 'rows', type: 'array', fields: [
+           { name: 'label', type: 'text' },
+           { name: 'link', type: 'relationship', relationTo: 'posts' } ] }",
+        "",
+    );
+    f.cfg.destination.config_dir = Some(dir.path().to_path_buf());
+    with_posts(&mut f);
+    f.cfg.mapping.types.get_mut("page").unwrap().fields.clear();
+    map_field(&mut f, "page", "hero", "hero");
+    map_field(&mut f, "page", "rows", "rows");
+    let obj = |label: &str, link: Option<&str>| {
+        let mut m = IndexMap::new();
+        m.insert("label".to_string(), FieldValue::Text(label.into()));
+        if let Some(l) = link {
+            m.insert("link".to_string(), FieldValue::Doc(did(l)));
+        }
+        FieldValue::Object(m)
+    };
+    let mut a = doc("page", "p:1", "a", None);
+    a.fields.insert("hero".into(), obj("Go", Some("b:1")));
+    a.fields.insert(
+        "rows".into(),
+        FieldValue::List(vec![obj("one", Some("b:1")), obj("two", None)]),
+    );
+    // The mapping's pattern wins over the source path.
+    a.path = "/old/a/".into();
+    let b = doc("post", "b:1", "b", None);
+    f.put(&a);
+    f.put(&b);
+    f.load(true, CancellationToken::new()).await;
+    let page = patch_of(&fake, "pages/1");
+    assert_eq!(page["path"], json!("/a/"));
+    assert_eq!(page["hero"], json!({"label": "Go", "link": 1}));
+    assert_eq!(
+        page["rows"],
+        json!([{"label": "one", "link": 1}, {"label": "two"}])
+    );
+    // The read schema's posts have no `path` field: none sent.
+    let post = fake
+        .writes()
+        .into_iter()
+        .find(|(m, p, _)| m == "POST" && p == "posts")
+        .unwrap()
+        .2;
+    assert!(post.get("path").is_none(), "{post}");
 }

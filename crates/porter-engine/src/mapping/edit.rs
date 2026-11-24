@@ -8,7 +8,7 @@ use crate::config::ProjectConfig;
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use std::path::{Path, PathBuf};
-use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
+use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, TableLike, Value};
 
 /// What `save` says when porter.toml changed on disk since it was opened.
 pub const CHANGED_OUTSIDE: &str = "porter.toml changed outside the editor — reload";
@@ -158,6 +158,23 @@ impl MappingDoc {
         }
     }
 
+    /// Adds `field = { to = "<field>" }` under the type's `fields` table; never touches an
+    /// entry that is already there. Returns whether it added one.
+    pub fn add_identity_field(&mut self, ty: &str, field: &str) -> bool {
+        let t = self.type_table(ty);
+        if !t.contains_key("fields") {
+            t.insert("fields", Item::Table(Table::new()));
+        }
+        let fields = sub(t, "fields");
+        if fields.contains_key(field) {
+            return false;
+        }
+        let mut it = toml_edit::InlineTable::new();
+        it.insert("to", field.into());
+        fields.insert(field, Item::Value(Value::InlineTable(it)));
+        true
+    }
+
     /// Back to unmapped: the field's entry goes.
     pub fn remove_field(&mut self, ty: &str, field: &str) {
         sub(self.type_table(ty), "fields").remove(field);
@@ -242,6 +259,82 @@ impl MappingDoc {
     /// The block slug for content with no native shape; None removes it.
     pub fn set_raw_block(&mut self, slug: Option<&str>) {
         set_str(self.mapping(), "raw_block", slug);
+    }
+
+    /// Appends a `[[tidy]]` rule (sub-tables written inline), leaving the rest of the file
+    /// as it is.
+    pub fn add_tidy(&mut self, rule: &crate::tidy::TidyRule) -> Result<()> {
+        let text = toml::to_string(rule).context("serialising tidy rule")?;
+        let mut t = text
+            .parse::<DocumentMut>()
+            .context("serialising tidy rule")?
+            .as_table()
+            .clone();
+        for (_, item) in t.iter_mut() {
+            if let Item::Table(sub) = item {
+                *item = Item::Value(Value::InlineTable(std::mem::take(sub).into_inline_table()));
+            }
+        }
+        let item = self
+            .doc
+            .as_table_mut()
+            .entry("tidy")
+            .or_insert(Item::ArrayOfTables(ArrayOfTables::new()));
+        match item.as_array_of_tables_mut() {
+            Some(a) => a.push(t),
+            None => anyhow::bail!("`tidy` in porter.toml is not a list of [[tidy]] tables"),
+        }
+        Ok(())
+    }
+
+    /// Turns the `[[tidy]]` rule with this id on or off (on also takes back a dismissal);
+    /// an unknown id lists the known ones.
+    pub fn set_tidy_enabled(&mut self, id: &str, on: bool) -> Result<()> {
+        self.tidy_rule(id, |t| {
+            set_value(t, "enabled", on.into());
+            if on {
+                t.remove("dismissed");
+            }
+        })
+    }
+
+    /// Dismisses the `[[tidy]]` rule with this id: off, and `dismissed = true`, so it stays
+    /// in the file and is never suggested again.
+    pub fn dismiss_tidy(&mut self, id: &str) -> Result<()> {
+        self.tidy_rule(id, |t| {
+            set_value(t, "enabled", false.into());
+            set_value(t, "dismissed", true.into());
+        })
+    }
+
+    fn tidy_rule(&mut self, id: &str, f: impl FnOnce(&mut Table)) -> Result<()> {
+        let rules = self
+            .doc
+            .get_mut("tidy")
+            .and_then(Item::as_array_of_tables_mut);
+        let ids: Vec<String> = rules
+            .iter()
+            .flat_map(|a| a.iter())
+            .filter_map(|t| t.get("id")?.as_str().map(String::from))
+            .collect();
+        let found = rules.and_then(|a| {
+            a.iter_mut()
+                .find(|t| t.get("id").and_then(Item::as_str) == Some(id))
+        });
+        match found {
+            Some(t) => {
+                f(t);
+                Ok(())
+            }
+            None => anyhow::bail!(
+                "no tidy rule \"{id}\"; known: {}",
+                if ids.is_empty() {
+                    "none".into()
+                } else {
+                    ids.join(", ")
+                }
+            ),
+        }
     }
 
     /// Writes the edits. Empty means saved (or nothing to save); otherwise nothing was
@@ -409,6 +502,43 @@ fn transforms(ts: &[Transform]) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
+    use crate::tidy::{TidyKind, TidyRule};
+
+    #[test]
+    fn tidy_rules_are_added_and_toggled_keeping_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("porter.toml");
+        let orig = "# top comment\n[project]\nname = \"x\"\n\n[source]\nadapter = \"a\"\n";
+        std::fs::write(&f, orig).unwrap();
+        let rule = TidyRule {
+            id: "pages".into(),
+            enabled: false,
+            dismissed: false,
+            label: Some("Merge".into()),
+            why: None,
+            kind: TidyKind::MergeBlocks {
+                from: vec!["a".into(), "b".into()],
+                into: "ab".into(),
+                fields: IndexMap::new(),
+                drop: IndexMap::new(),
+            },
+        };
+        let mut d = MappingDoc::open(&f).unwrap();
+        d.add_tidy(&rule).unwrap();
+        assert!(d.save().is_empty());
+        let text = std::fs::read_to_string(&f).unwrap();
+        assert!(text.starts_with(orig), "{text}");
+        let mut d = MappingDoc::open(&f).unwrap();
+        d.set_tidy_enabled("pages", true).unwrap();
+        let e = d.set_tidy_enabled("nope", true).unwrap_err().to_string();
+        assert!(e.contains("known: pages"), "{e}");
+        assert!(d.save().is_empty());
+        let c = MappingDoc::open(&f).unwrap().config().unwrap();
+        assert_eq!(c.tidy.len(), 1);
+        assert!(c.tidy[0].enabled);
+        assert!(std::fs::read_to_string(&f).unwrap().starts_with(orig));
+    }
+
     use super::*;
     use crate::mapping::{BlockMatch, KeyType, Transform};
 
@@ -464,6 +594,24 @@ fields = { title = "heading" }
             .filter(|(x, y)| x != y)
             .map(|(x, y)| (x.to_string(), y.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn lookups_parse_and_survive_edits() {
+        let text = format!("{FIXTURE}\n[mapping.lookups.tiers]\ngold = \"premium\"\n");
+        let (_d, p) = fixture(&text);
+        let mut doc = MappingDoc::open(&p).unwrap();
+        assert_eq!(
+            doc.config().unwrap().mapping.lookups["tiers"]["gold"],
+            "premium"
+        );
+        doc.set_path("post", Some("/{slug}"));
+        assert_eq!(doc.save(), Vec::<String>::new());
+        let after = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            after.contains("[mapping.lookups.tiers]\ngold = \"premium\""),
+            "{after}"
+        );
     }
 
     #[test]

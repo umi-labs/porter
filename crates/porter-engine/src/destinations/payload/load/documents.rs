@@ -7,7 +7,7 @@ use crate::destinations::payload::lexical::{IdMap, to_lexical};
 use crate::destinations::payload::schema_check::find;
 use crate::destinations::payload::ts::DestField;
 use crate::html::PendingIssue;
-use crate::mapping::{KeyType, TypeMap, apply, lookup, paths};
+use crate::mapping::{KeyType, TypeMap, apply, lookup, mapped_parents, paths};
 use anyhow::Result;
 use porter_model::{DocStatus, Document, FieldValue, IssueKind, ItemId, ItemKind, Severity};
 use serde_json::{Map, Value, json};
@@ -23,12 +23,13 @@ struct Built {
 }
 
 pub(super) async fn load(l: &mut Loader<'_>) -> Result<()> {
-    let docs: Vec<Document> = l
+    let mut docs: Vec<Document> = l
         .items::<Document>(KIND)?
         .into_iter()
         .map(|(.., d)| d)
         .collect();
-    let mapping = l.ctx.config.mapping.clone();
+    let mapping = l.mapping.clone();
+    mapped_parents(&mut docs, &mapping);
     let mut todo: Vec<(&Document, &TypeMap, &str)> = vec![];
     let mut unmapped: HashMap<&str, usize> = HashMap::new();
     for d in &docs {
@@ -69,6 +70,25 @@ pub(super) async fn load(l: &mut Loader<'_>) -> Result<()> {
                 )?;
             }
         }
+    }
+    // Data in a field the mapping has no entry for is never left behind silently: one
+    // warning per type and field, with how many documents hold some.
+    let mut unlisted: indexmap::IndexMap<(&str, &str), usize> = indexmap::IndexMap::new();
+    for (d, tm, _) in &todo {
+        for (k, v) in &d.fields {
+            if !matches!(v, FieldValue::Null) && !tm.fields.contains_key(k) {
+                *unlisted.entry((&d.doc_type, k)).or_default() += 1;
+            }
+        }
+    }
+    for ((ty, field), n) in unlisted {
+        l.ctx.issue(
+            IssueKind::UnmappedField,
+            Severity::Warning,
+            None,
+            format!("`{ty}.{field}` holds data in {n} document(s) but has no mapping entry: not loaded; map it or set drop = true"),
+            json!({"type": ty, "field": field, "count": n}),
+        )?;
     }
     for (ty, n) in unmapped {
         l.ctx.issue(
@@ -339,6 +359,12 @@ fn build(l: &Loader, d: &Document, tm: &TypeMap, coll: &str) -> Built {
     };
     b.data.insert("title".into(), json!(d.title));
     b.data.insert("slug".into(), json!(d.slug));
+    // The new URL path (the mapping's pattern, else the source's), for the generated
+    // `path` field; sent unless the read schema shows the collection has none.
+    let path = l.ids.paths.get(&d.id).unwrap_or(&d.path);
+    if !path.is_empty() && fields.is_none_or(|fs| fs.iter().any(|f| f.name == "path")) {
+        b.data.insert("path".into(), json!(path));
+    }
     for (src, fm) in tm.fields.iter().filter(|(_, fm)| !fm.drop) {
         let v = match apply(&lookup(d, src), &fm.transform) {
             Ok(v) => v,
@@ -417,7 +443,7 @@ fn value(l: &Loader, v: &FieldValue, f: Option<&DestField>, out: &mut Vec<Pendin
             j
         }
         FieldValue::Layout(blocks) => {
-            let (arr, issues) = to_blocks(blocks, &l.ctx.config.mapping.blocks, &l.ids, raw);
+            let (arr, issues) = to_blocks(blocks, &l.mapping.blocks, &l.ids, raw);
             out.extend(issues);
             let mut v = Value::Array(arr);
             out.extend(settle_relations(

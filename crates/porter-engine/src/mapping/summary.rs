@@ -52,6 +52,9 @@ pub struct FieldStats {
     /// `filled / count` of the type.
     pub fill_rate: f64,
     pub samples: Vec<String>,
+    /// For `Object`s and `List`s of `Object`: stats per key, merged over every object seen.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub children: IndexMap<String, FieldStats>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
@@ -116,6 +119,17 @@ fn sample(v: &FieldValue) -> Option<String> {
 }
 
 impl FieldStats {
+    /// Folds `o` into these stats (the same field seen in several block kinds).
+    pub fn merge(&mut self, o: &FieldStats) {
+        self.variants.extend(o.variants.iter().cloned());
+        self.item_variants.extend(o.item_variants.iter().cloned());
+        self.relation_types.extend(o.relation_types.iter().cloned());
+        self.samples.extend(o.samples.iter().cloned());
+        for (k, c) in &o.children {
+            self.children.entry(k.clone()).or_default().merge(c);
+        }
+    }
+
     fn observe(&mut self, v: &FieldValue, types: &HashMap<porter_model::ItemId, String>) {
         if matches!(v, FieldValue::Null) {
             return;
@@ -137,6 +151,25 @@ impl FieldStats {
             self.item_variants
                 .extend(items.iter().map(|i| variant(i).to_string()));
             self.item_variants.remove("Null");
+        }
+        // Objects, alone or as list rows: per-key stats, so a `Doc` at any depth is a
+        // relation at its own path.
+        let rows: Vec<&IndexMap<String, FieldValue>> = match v {
+            FieldValue::Object(m) => vec![m],
+            FieldValue::List(items) => items
+                .iter()
+                .filter_map(|i| match i {
+                    FieldValue::Object(m) => Some(m),
+                    _ => None,
+                })
+                .collect(),
+            _ => vec![],
+        };
+        for (k, x) in rows.into_iter().flatten() {
+            self.children
+                .entry(k.clone())
+                .or_default()
+                .observe(x, types);
         }
         if self.samples.len() < SAMPLES
             && let Some(s) = sample(v)

@@ -16,7 +16,7 @@ Porter 2.0 is a rebuild, not an update. The 1.x commands and flags are gone and 
 | `--dry-run` | the default for `porter load`; add `--apply` to write |
 | `--debug`, `--verbose` | `-v`, `-vv`, `-vvv` (log detail on stderr) |
 | `--config <file>` | `--project <dir>` (the folder holding `porter.toml`) |
-| `--list-adapters` | gone; `porter init --adapter nope` exits 1 with `unknown adapter "nope" (available: wordpress, umbraco)` and writes nothing |
+| `--list-adapters` | gone; `porter init --adapter nope` exits 1 with `unknown adapter "nope" (available: wordpress, umbraco, sanity)` and writes nothing |
 | `--plugin-dir` | gone; there is no plugin system |
 
 **Removed commands.** `config`, `generate`, `template`, `migrate`, `explain`. Use `analyse`, `extract`, `normalise`, `schema generate|check|prompt|spec`, `load`. `init`, `clean` and `upgrade` remain but work differently (below).
@@ -60,6 +60,19 @@ Porter now records which `porter.toml` settings each stage ran with, so it can t
 - `porter load --apply` is refused on any project that has a dry run on record until you run `porter load` (a dry run) again.
 - An older porter can't open the project any more. Upgrade every porter that touches it, including teammates' and the hub worker's, before you `porter hub pull` a version a newer porter pushed or the worker produced.
 
+## Upgrading within 2.x: Sanity, tidy-ups and the flow
+
+All of this is additive; existing `porter.toml` files keep working. See [docs/sanity.md](docs/sanity.md).
+
+- **New connector kinds** `sanity-api` and `sanity-export`, used with `[source] adapter = "sanity"`. The API token comes from `PORTER_SANITY_TOKEN` (or the variable `token_env` names).
+- **`[[tidy]]`** rules (`merge-types`, `merge-blocks`) and the `porter tidy list|suggest|enable|disable` commands. `porter normalise` appends suggestions, disabled.
+- **`[mapping.lookups.<table>]`** value tables, and path patterns that follow references: `{country.slug}`, `{country.region|lookup:regions}`.
+- **`title_field`** and **`parent`** on `[mapping.types.<type>]`: the source field for a title, and a reference field whose target is the parent.
+- **`[mapping.forms] submission_types`** lists source types that are form submissions.
+- **Media `focalX` / `focalY`** (from Sanity hotspots). Load sends them with each image that has a hotspot; Payload's upload collections accept `focalX` and `focalY` when `focalPoint` is on.
+- **A `path` field on generated collections** (indexed, unique). Re-run `porter schema generate` and create a migration to add it to an existing generated schema.
+- **`porter schema generate --into <repo>`**, `porter flow` and `reports/flow.json`.
+
 ## Not built yet
 
-2.0 ships the engine, the CLI, the terminal UI, the desktop app and the hub. The Sanity, Webflow, Squarespace and Gatsby adapters, and the Elementor and WPBakery converters are not part of it. Targets other than Payload that 1.x listed (such as Strapi) are not supported.
+2.0 ships the engine, the CLI, the terminal UI, the desktop app and the hub. The Webflow, Squarespace and Gatsby adapters, and the Elementor and WPBakery converters are not part of it. Targets other than Payload that 1.x listed (such as Strapi) are not supported.

@@ -361,6 +361,8 @@ mod tests {
             title: None,
             credit: None,
             folder: None,
+            focal_x: None,
+            focal_y: None,
             usages: vec![
                 Usage {
                     item: doc,
