@@ -5,9 +5,10 @@ import {
   project,
   projectInvitation,
   projectMember,
+  projectVersion,
   user,
 } from "@porter-hub/db";
-import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ensureStaffOrg, staffOrgSlug } from "./auth";
 import { type Action, type Db, type Role, roleCan } from "./permissions";
@@ -98,7 +99,7 @@ export async function access(
 const WRITES: readonly Action[] = ["push", "run", "upload"];
 
 export async function listProjects(db: Db, actor: Actor) {
-  return db
+  const rows = await db
     .select({
       id: project.id,
       name: project.name,
@@ -110,6 +111,28 @@ export async function listProjects(db: Db, actor: Actor) {
     .innerJoin(project, eq(project.id, projectMember.projectId))
     .where(and(eq(projectMember.userId, actor.id), isNull(project.archivedAt)))
     .orderBy(project.name);
+  if (rows.length === 0) return [];
+  // A version row exists only once its push committed, so the highest number is the latest complete push.
+  const latest = await db
+    .selectDistinctOn([projectVersion.projectId], {
+      projectId: projectVersion.projectId,
+      number: projectVersion.number,
+      createdAt: projectVersion.createdAt,
+      status: projectVersion.summary,
+    })
+    .from(projectVersion)
+    .where(
+      inArray(
+        projectVersion.projectId,
+        rows.map((r) => r.id),
+      ),
+    )
+    .orderBy(projectVersion.projectId, desc(projectVersion.number));
+  const by = new Map(latest.map((v) => [v.projectId, v]));
+  return rows.map((r) => {
+    const v = by.get(r.id);
+    return { ...r, latest: v ? { number: v.number, createdAt: v.createdAt, status: v.status } : null };
+  });
 }
 
 export async function getProject(db: Db, actor: Actor, slug: string) {

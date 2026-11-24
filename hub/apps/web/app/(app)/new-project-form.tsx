@@ -7,7 +7,14 @@ import { createProject } from "./actions";
 export function NewProjectForm() {
   const [state, action, pending] = useActionState<{ error?: string } | null, FormData>(createProject, null);
   return (
-    <form action={action} className="mt-6 flex flex-wrap items-center gap-2" aria-label="New project">
+    <form
+      action={action}
+      className="mt-6 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-bg p-4"
+      aria-label="New project"
+    >
+      <span className="w-full text-small font-semibold text-muted">
+        New project · then run porter hub link &lt;slug&gt; in the porter project
+      </span>
       <label className="flex min-w-0 flex-[2_1_220px]">
         <span className="sr-only">Project name</span>
         <input name="name" placeholder="Project name" required maxLength={120} className="w-full" />
