@@ -5377,7 +5377,7 @@ checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "porter-cli"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -5412,7 +5412,7 @@ dependencies = [
 
 [[package]]
 name = "porter-desktop"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5437,7 +5437,7 @@ dependencies = [
 
 [[package]]
 name = "porter-engine"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5478,7 +5478,7 @@ dependencies = [
 
 [[package]]
 name = "porter-model"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "chrono",
  "indexmap",
@@ -5489,7 +5489,7 @@ dependencies = [
 
 [[package]]
 name = "porter-tui"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
