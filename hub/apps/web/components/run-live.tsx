@@ -1,13 +1,15 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { isDryRun, runLook } from "../lib/run-look";
-import type { RunJson } from "../lib/runs";
-import { PIPELINE, runState, type Summary } from "../lib/stage-state";
-import { Banner, type Tone } from "./ui/banner";
-import { Button } from "./ui/button";
-import { Chip, type State } from "./ui/chip";
-import { PageTitle } from "./ui/frame";
+import { Banner, type Tone } from "@/components/porter/banner";
+import { Chip, type State } from "@/components/porter/chip";
+import { PageTitle } from "@/components/porter/frame";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { isDryRun, runLook } from "@/lib/run-look";
+import type { RunJson } from "@/lib/runs";
+import { PIPELINE, runState, type Summary } from "@/lib/stage-state";
 
 type Ev = { event: string; [k: string]: unknown };
 type Lvl = "info" | "warn" | "error";
@@ -53,9 +55,9 @@ function line(e: Ev): Line | null {
 }
 
 const LVL_CLASS: Record<Lvl, string> = {
-  info: "text-[#D4D4DA]",
-  warn: "text-[#F5B83D]",
-  error: "bg-[#2A1414] text-[#FFB3B3]",
+  info: "text-neutral-300",
+  warn: "text-amber-300",
+  error: "bg-red-950/70 text-red-300",
 };
 
 function result(
@@ -177,7 +179,7 @@ export function RunLive({
             {look.state ? (
               <Chip state={look.state} label={look.label} />
             ) : (
-              <span className="text-heading">{look.label}</span>
+              <span className="text-base">{look.label}</span>
             )}
           </span>
         }
@@ -188,7 +190,10 @@ export function RunLive({
             {run.result_version != null && (
               <>
                 {" "}
-                · result <Link href={`/p/${slug}`}>v{run.result_version}</Link>
+                · result{" "}
+                <Link href={`/p/${slug}`} className="text-primary hover:underline">
+                  v{run.result_version}
+                </Link>
               </>
             )}
             {run.cancel_requested && !over && " · cancelling…"}
@@ -198,7 +203,7 @@ export function RunLive({
           canCancel &&
           !over &&
           !run.cancel_requested && (
-            <Button variant="danger" onClick={cancel}>
+            <Button variant="destructive" size="lg" className="press h-9" onClick={cancel}>
               Cancel run
             </Button>
           )
@@ -211,7 +216,7 @@ export function RunLive({
           title={res.title}
           aside={
             run.exit_code != null && (
-              <span className="font-mono text-small text-muted">exit {run.exit_code}</span>
+              <span className="font-mono text-xs text-muted-foreground">exit {run.exit_code}</span>
             )
           }
         >
@@ -228,31 +233,27 @@ export function RunLive({
           );
         })}
       </ol>
-      <section aria-label="Log" className="overflow-hidden rounded-lg border border-border">
-        <div className="flex flex-wrap items-center gap-3 border-b border-border bg-bg px-4 py-2 text-small">
+      <section aria-label="Log" className="overflow-hidden rounded-lg ring-1 ring-foreground/10">
+        <div className="flex flex-wrap items-center gap-3 border-b bg-card px-4 py-1 text-xs">
           <span className="font-semibold">Log</span>
-          <span className="text-muted">
+          <span className="text-muted-foreground">
             {log.length} lines{over ? "" : " · streaming"}
           </span>
           <span className="flex-1" />
-          <label className="flex min-h-11 items-center gap-2">
-            <input
-              type="checkbox"
-              checked={onlyProblems}
-              onChange={(e) => setOnlyProblems(e.target.checked)}
-            />
+          <Label className="flex min-h-11 items-center gap-2 font-normal">
+            <Checkbox checked={onlyProblems} onCheckedChange={setOnlyProblems} />
             Warnings and errors only
-          </label>
+          </Label>
         </div>
         {lost && !over && (
-          <p role="status" className="m-0 bg-warn-bg px-4 py-2 text-small text-warn">
+          <p role="status" className="m-0 bg-warn-soft px-4 py-2 text-xs text-warn">
             Lost the live log. Reconnecting… The run itself is still going on the server; this only affects
             what you see.
           </p>
         )}
-        <pre className="m-0 max-h-[60vh] overflow-auto bg-[#111113] p-0 py-2 font-mono text-[12px] leading-5">
+        <pre className="m-0 max-h-[60vh] overflow-auto bg-neutral-950 p-0 py-2 font-mono text-xs leading-5">
           {shown.length === 0 ? (
-            <span className="block px-4 text-[#8C8C98]">
+            <span className="block px-4 text-neutral-500">
               {over ? "No events." : log.length ? "No warnings or errors yet." : "Connecting to log…"}
             </span>
           ) : (

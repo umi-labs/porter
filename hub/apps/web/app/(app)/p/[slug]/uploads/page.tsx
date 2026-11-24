@@ -1,11 +1,11 @@
 import { getDb } from "@porter-hub/db";
-import { PageTitle } from "../../../../../components/ui/frame";
-import { Uploader } from "../../../../../components/uploader";
-import { roleCan } from "../../../../../lib/permissions";
-import { requireUser } from "../../../../../lib/session";
-import { maxBytes } from "../../../../../lib/uploads";
-import { orStatus, ProjectFrame } from "../../../../../lib/view-parts";
-import { loadProject } from "../../../../../lib/views";
+import { PageTitle } from "@/components/porter/frame";
+import { Uploader } from "@/components/uploader";
+import { roleCan } from "@/lib/permissions";
+import { requireUser } from "@/lib/session";
+import { maxBytes } from "@/lib/uploads";
+import { orStatus, ProjectFrame } from "@/lib/view-parts";
+import { loadProject } from "@/lib/views";
 
 export const dynamic = "force-dynamic";
 

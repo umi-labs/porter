@@ -1,6 +1,15 @@
 {
   "formatter": { "indentStyle": "space", "lineWidth": 110 },
-  "files": { "includes": ["**", "!**/migrations", "!**/.next", "!**/.next-*", "!**/auth-schema.ts"] },
+  "files": {
+    "includes": [
+      "**",
+      "!**/migrations",
+      "!**/.next",
+      "!**/.next-*",
+      "!**/auth-schema.ts",
+      "!apps/web/components/ui"
+    ]
+  },
   "linter": { "rules": { "recommended": true } },
   "css": { "parser": { "tailwindDirectives": true } }
 }

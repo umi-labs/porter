@@ -1,10 +1,10 @@
 "use server";
 import { getDb } from "@porter-hub/db";
 import { revalidatePath } from "next/cache";
-import * as svc from "../../../../../lib/projects";
-import * as secrets from "../../../../../lib/secrets";
-import { requireUser } from "../../../../../lib/session";
-import * as shares from "../../../../../lib/shares";
+import * as svc from "@/lib/projects";
+import * as secrets from "@/lib/secrets";
+import { requireUser } from "@/lib/session";
+import * as shares from "@/lib/shares";
 
 const done = (slug: string) => revalidatePath(`/p/${slug}/settings`);
 const str = (f: FormData, k: string) => String(f.get(k) ?? "");

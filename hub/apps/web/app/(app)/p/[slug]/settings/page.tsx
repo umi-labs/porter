@@ -1,16 +1,19 @@
 import { getDb } from "@porter-hub/db";
 import { notFound } from "next/navigation";
-import { buttonClass } from "../../../../../components/ui/button";
-import { Card } from "../../../../../components/ui/card";
-import { PageTitle } from "../../../../../components/ui/frame";
-import { Table } from "../../../../../components/ui/table";
-import { fmtDate } from "../../../../../lib/format";
-import { roleCan } from "../../../../../lib/permissions";
-import { access, HttpError, listInvitations, listMembers } from "../../../../../lib/projects";
-import { listSecrets } from "../../../../../lib/secrets";
-import { requireUser } from "../../../../../lib/session";
-import { listShares } from "../../../../../lib/shares";
-import { ProjectFrame } from "../../../../../lib/view-parts";
+import { PageTitle } from "@/components/porter/frame";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { Separator } from "@/components/ui/separator";
+import { TableCell, TableRow } from "@/components/ui/table";
+import { fmtDate } from "@/lib/format";
+import { roleCan } from "@/lib/permissions";
+import { access, HttpError, listInvitations, listMembers } from "@/lib/projects";
+import { listSecrets } from "@/lib/secrets";
+import { requireUser } from "@/lib/session";
+import { listShares } from "@/lib/shares";
+import { DataTable, ProjectFrame, Section } from "@/lib/view-parts";
 import { deleteSecret, invite, removeMember, revoke, revokeShare, setRole } from "./actions";
 import { SecretForm } from "./secret-form";
 import { ShareForm } from "./share-form";
@@ -55,6 +58,7 @@ export default async function Settings({ params }: { params: Promise<{ slug: str
     ["secrets", "Run secrets", true],
     ["retention", "Retention", true],
   ];
+  const row = "flex flex-wrap items-center gap-2.5 border-t py-2.5 first:border-t-0";
   return (
     <ProjectFrame project={ctx.project} role={ctx.role} user={user} active="Settings">
       <PageTitle title="Settings" />
@@ -66,7 +70,7 @@ export default async function Settings({ params }: { params: Promise<{ slug: str
               <a
                 key={id}
                 href={`#${id}`}
-                className="flex min-h-11 items-center rounded-md px-3 text-[14px] text-muted no-underline hover:bg-hover hover:no-underline"
+                className="flex min-h-11 items-center rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
                 {label}
               </a>
@@ -74,79 +78,74 @@ export default async function Settings({ params }: { params: Promise<{ slug: str
         </nav>
         <div className="flex min-w-0 flex-[999_1_640px] flex-col gap-5">
           {canMembers && (
-            <Card id="members" title="Members and roles">
+            <Section id="members" title="Members and roles">
               <ul className="m-0 flex list-none flex-col p-0">
                 {members.map((m) => (
-                  <li
-                    key={m.userId}
-                    className="flex flex-wrap items-center gap-2.5 border-t border-panel py-2.5"
-                  >
+                  <li key={m.userId} className={row}>
                     <span className="min-w-[180px] flex-1 break-words">
-                      {m.name} <span className="text-muted">&lt;{m.email}&gt;</span>
+                      {m.name} <span className="text-muted-foreground">&lt;{m.email}&gt;</span>
                     </span>
                     <form action={setRole.bind(null, slug, m.userId)} className="flex items-center gap-2">
-                      <select name="role" defaultValue={m.role} aria-label={`Role for ${m.email}`}>
+                      <NativeSelect name="role" defaultValue={m.role} aria-label={`Role for ${m.email}`}>
                         {ROLES.map((r) => (
-                          <option key={r}>{r}</option>
+                          <NativeSelectOption key={r}>{r}</NativeSelectOption>
                         ))}
-                      </select>
-                      <button type="submit" className={buttonClass("secondary")}>
+                      </NativeSelect>
+                      <Button type="submit" variant="outline" className="press">
                         Change role
-                      </button>
+                      </Button>
                     </form>
                     <form action={removeMember.bind(null, slug, m.userId)}>
-                      <button type="submit" className={buttonClass("danger")}>
+                      <Button type="submit" variant="destructive" className="press">
                         Remove
-                      </button>
+                      </Button>
                     </form>
                   </li>
                 ))}
               </ul>
-              <h3 className="m-0 mt-2 text-[14px] font-semibold">Invitations</h3>
+              <Separator />
+              <h3 className="m-0 text-sm font-semibold">Invitations</h3>
               {invitations.length === 0 ? (
-                <p className="m-0 text-small text-muted">No open invitations.</p>
+                <p className="m-0 text-xs text-muted-foreground">No open invitations.</p>
               ) : (
                 <ul className="m-0 flex list-none flex-col p-0">
                   {invitations.map((i) => (
-                    <li
-                      key={i.id}
-                      className="flex flex-wrap items-center gap-2.5 border-t border-panel py-2.5"
-                    >
+                    <li key={i.id} className={row}>
                       <span className="min-w-[180px] flex-1 break-words">
                         {i.email}{" "}
-                        <span className="text-muted">
+                        <span className="text-muted-foreground">
                           ({i.role}), expires {fmtDate(i.expiresAt)}
                         </span>
                       </span>
                       <form action={revoke.bind(null, slug, i.id)}>
-                        <button type="submit" className={buttonClass("danger")}>
+                        <Button type="submit" variant="destructive" className="press">
                           Revoke
-                        </button>
+                        </Button>
                       </form>
                     </li>
                   ))}
                 </ul>
               )}
               <form action={invite.bind(null, slug)} className="flex flex-wrap items-end gap-2">
-                <label className="flex min-w-0 flex-[1_1_240px] flex-col gap-1.5 text-[14px] font-semibold">
-                  Email
-                  <input name="email" type="email" required className="font-normal" />
-                </label>
-                <label className="flex flex-col gap-1.5 text-[14px] font-semibold">
-                  Role
-                  <select name="role" defaultValue="client" className="font-normal">
+                <div className="flex min-w-0 flex-[1_1_240px] flex-col gap-1.5">
+                  <Label htmlFor="invite-email">Email</Label>
+                  <Input id="invite-email" name="email" type="email" required />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="invite-role">Role</Label>
+                  <NativeSelect id="invite-role" name="role" defaultValue="client">
                     {ROLES.map((r) => (
-                      <option key={r}>{r}</option>
+                      <NativeSelectOption key={r}>{r}</NativeSelectOption>
                     ))}
-                  </select>
-                </label>
-                <button type="submit" className={buttonClass("dark")}>
+                  </NativeSelect>
+                </div>
+                <Button type="submit" className="press">
                   Invite
-                </button>
+                </Button>
               </form>
-            </Card>
+            </Section>
           )}
-          <Card
+          <Section
             id="shares"
             title="Share links"
             aside="Let someone without an account see this project. Every link expires, and you can revoke it at any time."
@@ -155,43 +154,43 @@ export default async function Settings({ params }: { params: Promise<{ slug: str
               <>
                 <ShareForm slug={slug} />
                 {shares.length > 0 && (
-                  <Table head={["Fingerprint", "Scope", "Created", "Expires", ""]}>
+                  <DataTable head={["Fingerprint", "Scope", "Created", "Expires", ""]}>
                     {shares.map((l) => {
                       const active = !l.revokedAt && l.expiresAt >= now;
                       return (
-                        <tr key={l.id} className={active ? "" : "text-muted"}>
-                          <td className={`font-mono text-small ${l.revokedAt ? "line-through" : ""}`}>
+                        <TableRow key={l.id} className={active ? "" : "text-muted-foreground"}>
+                          <TableCell className={`font-mono text-xs ${l.revokedAt ? "line-through" : ""}`}>
                             …/s/{l.fingerprint}···
-                          </td>
-                          <td>{l.scope === "report" ? "Reports only" : "Read-only project"}</td>
-                          <td className="whitespace-nowrap">{fmtDate(l.createdAt)}</td>
-                          <td className="whitespace-nowrap">{fmtDate(l.expiresAt)}</td>
-                          <td className="text-right">
+                          </TableCell>
+                          <TableCell>{l.scope === "report" ? "Reports only" : "Read-only project"}</TableCell>
+                          <TableCell>{fmtDate(l.createdAt)}</TableCell>
+                          <TableCell>{fmtDate(l.expiresAt)}</TableCell>
+                          <TableCell className="text-right">
                             {active ? (
                               <form action={revokeShare.bind(null, slug, l.id)}>
-                                <button type="submit" className={buttonClass("danger")}>
+                                <Button type="submit" variant="destructive" className="press">
                                   Revoke
-                                </button>
+                                </Button>
                               </form>
                             ) : (
-                              <span className="text-small">{l.revokedAt ? "Revoked" : "Expired"}</span>
+                              <span className="text-xs">{l.revokedAt ? "Revoked" : "Expired"}</span>
                             )}
-                          </td>
-                        </tr>
+                          </TableCell>
+                        </TableRow>
                       );
                     })}
-                  </Table>
+                  </DataTable>
                 )}
-                <p className="m-0 text-small text-muted">
+                <p className="m-0 text-xs text-muted-foreground">
                   A link can’t be shown again. If it’s lost, revoke it and create a new one; the old link
                   stops working immediately.
                 </p>
               </>
             ) : (
-              <p className="m-0 text-muted">You can’t manage share links.</p>
+              <p className="m-0 text-muted-foreground">You can’t manage share links.</p>
             )}
-          </Card>
-          <Card
+          </Section>
+          <Section
             id="secrets"
             title="Run secrets"
             aside="Passed to hub runs as environment variables only. Write-only: values are encrypted and never shown again, including to you. Replace or delete them here."
@@ -200,30 +199,28 @@ export default async function Settings({ params }: { params: Promise<{ slug: str
               <>
                 <ul className="m-0 flex list-none flex-col p-0">
                   {secrets.map((x) => (
-                    <li
-                      key={x.name}
-                      className="flex flex-wrap items-center gap-2.5 border-t border-panel py-2.5"
-                    >
-                      <code className="min-w-[180px] flex-1 break-all">{x.name}</code>
-                      <span className="text-small text-muted">Set {fmtDate(x.updated_at)}</span>
+                    <li key={x.name} className={row}>
+                      <code className="min-w-[180px] flex-1 break-all text-xs">{x.name}</code>
+                      <span className="text-xs text-muted-foreground">Set {fmtDate(x.updated_at)}</span>
                       <SecretForm slug={slug} name={x.name} />
                       <form action={deleteSecret.bind(null, slug, x.name)}>
-                        <button type="submit" className={buttonClass("danger")}>
+                        <Button type="submit" variant="destructive" className="press">
                           Delete
-                        </button>
+                        </Button>
                       </form>
                     </li>
                   ))}
                 </ul>
+                {secrets.length > 0 && <Separator />}
                 <SecretForm slug={slug} />
               </>
             ) : (
-              <p className="m-0 text-muted">You can’t manage run secrets.</p>
+              <p className="m-0 text-muted-foreground">You can’t manage run secrets.</p>
             )}
-          </Card>
-          <Card id="retention" title="Retention">
-            <p className="m-0 text-muted">Coming soon.</p>
-          </Card>
+          </Section>
+          <Section id="retention" title="Retention">
+            <p className="m-0 text-muted-foreground">Coming soon.</p>
+          </Section>
         </div>
       </div>
     </ProjectFrame>

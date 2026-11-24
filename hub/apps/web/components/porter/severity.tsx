@@ -2,8 +2,8 @@ export type Severity = "error" | "warning" | "info";
 
 const LOOK: Record<Severity, { dot: string; text: string }> = {
   error: { dot: "rounded-full bg-err", text: "text-err" },
-  warning: { dot: "rounded-[2px] bg-warn", text: "text-warn" },
-  info: { dot: "rounded-full border-[1.5px] border-faint", text: "text-muted" },
+  warning: { dot: "rounded-[2px] bg-warn-fill", text: "text-warn" },
+  info: { dot: "rounded-full border-[1.5px] border-muted-foreground", text: "text-muted-foreground" },
 };
 
 /** Issue severity: error red circle, warning amber square, info grey ring. Always with the word. */
@@ -21,9 +21,9 @@ export function SeverityTag({ severity }: { severity: string }) {
 export function Resolution({ value }: { value: string }) {
   const cls =
     value === "open"
-      ? "font-semibold text-ink"
+      ? "font-semibold text-foreground"
       : value === "wont-fix"
-        ? "text-muted line-through"
-        : "text-muted";
+        ? "text-muted-foreground line-through"
+        : "text-muted-foreground";
   return <span className={cls}>{value}</span>;
 }

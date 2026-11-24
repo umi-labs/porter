@@ -3,17 +3,16 @@ import { join } from "node:path";
 import { getDb } from "@porter-hub/db";
 import { destinationHost } from "@porter-hub/porter/config";
 import Link from "next/link";
-import { RunForm } from "../../../../components/run-form";
-import { Card } from "../../../../components/ui/card";
-import { Chip } from "../../../../components/ui/chip";
-import { PageTitle } from "../../../../components/ui/frame";
-import { Table } from "../../../../components/ui/table";
-import { roleCan } from "../../../../lib/permissions";
-import { runLook } from "../../../../lib/run-look";
-import { listRuns } from "../../../../lib/runs";
-import { requireUser } from "../../../../lib/session";
-import { NoSnapshot, Overview, orStatus, ProjectFrame } from "../../../../lib/view-parts";
-import { loadProject } from "../../../../lib/views";
+import { Chip } from "@/components/porter/chip";
+import { PageTitle } from "@/components/porter/frame";
+import { RunForm } from "@/components/run-form";
+import { TableCell, TableRow } from "@/components/ui/table";
+import { roleCan } from "@/lib/permissions";
+import { runLook } from "@/lib/run-look";
+import { listRuns } from "@/lib/runs";
+import { requireUser } from "@/lib/session";
+import { DataTable, NoSnapshot, Overview, orStatus, ProjectFrame, Section } from "@/lib/view-parts";
+import { loadProject } from "@/lib/views";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +36,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
             {!client && host && (
               <>
                 {project.summary ? " · " : ""}
-                <span className="font-mono text-small">{host}</span>
+                <span className="font-mono text-xs">{host}</span>
               </>
             )}
           </>
@@ -54,41 +53,47 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
         <NoSnapshot plain={client} />
       )}
       {runs && (
-        <Card title="Runs on the hub" aside="Each run uses the latest pushed version and pushes its result.">
+        <Section
+          title="Runs on the hub"
+          aside="Each run uses the latest pushed version and pushes its result."
+        >
           {snap && roleCan(role, "run") && <RunForm slug={slug} host={host} />}
           {runs.length ? (
-            <Table head={["Started", "Stages", "Version", "State"]}>
+            <DataTable head={["Started", "Stages", "Version", "State"]}>
               {runs.map((r) => {
                 const look = runLook(r);
                 return (
-                  <tr key={r.id}>
-                    <td className="whitespace-nowrap">
-                      <Link href={`/p/${slug}/runs/${r.id}`} className="inline-flex min-h-11 items-center">
+                  <TableRow key={r.id}>
+                    <TableCell>
+                      <Link
+                        href={`/p/${slug}/runs/${r.id}`}
+                        className="inline-flex min-h-11 items-center font-medium text-primary hover:underline"
+                      >
                         {r.created_at.toISOString().slice(0, 16).replace("T", " ")}
                       </Link>
-                    </td>
-                    <td>
+                    </TableCell>
+                    <TableCell>
                       {r.stages === "all" ? "all" : r.stages.join(", ")}
                       {r.apply ? " (apply)" : ""}
-                    </td>
-                    <td className="whitespace-nowrap">
+                    </TableCell>
+                    <TableCell>
                       v{r.base_version}
                       {r.result_version != null ? ` → v${r.result_version}` : ""}
-                    </td>
-                    <td>
+                    </TableCell>
+                    <TableCell>
                       {look.state ? <Chip state={look.state} label={look.label} /> : look.label}
                       {r.exit_code != null && (
-                        <span className="ml-2 text-small text-muted">exit {r.exit_code}</span>
+                        <span className="ml-2 text-xs text-muted-foreground">exit {r.exit_code}</span>
                       )}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 );
               })}
-            </Table>
+            </DataTable>
           ) : (
-            <p className="m-0 text-muted">No runs yet.</p>
+            <p className="m-0 text-muted-foreground">No runs yet.</p>
           )}
-        </Card>
+        </Section>
       )}
     </ProjectFrame>
   );

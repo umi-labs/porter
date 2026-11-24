@@ -1,6 +1,21 @@
 "use client";
+import { CopyIcon } from "lucide-react";
 import { useActionState, useEffect, useState } from "react";
-import { Button, buttonClass } from "../../../../../components/ui/button";
+import { Button } from "@/components/ui/button";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+  FieldTitle,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { createShare } from "./actions";
 
 type State = { token?: string; expiresAt?: string; error?: string } | null;
@@ -30,28 +45,29 @@ export function ShareForm({ slug }: { slug: string }) {
       {shown && state?.expiresAt && (
         <section
           aria-labelledby="share-once"
-          className="flex flex-col gap-3.5 rounded-xl border-2 border-accent bg-bg p-5"
+          className="animate-enter flex flex-col gap-3.5 rounded-xl border-2 border-primary bg-card p-5"
         >
-          <div className="flex flex-col">
-            <h3 id="share-once" className="m-0 text-heading font-semibold">
+          <div className="flex flex-col gap-0.5">
+            <h3 id="share-once" className="m-0 text-base font-semibold">
               Copy this link now. It won’t be shown again.
             </h3>
-            <span className="text-[14px] text-muted">
+            <span className="text-muted-foreground">
               We only keep a fingerprint of it. If you lose it, revoke it and make a new one.
             </span>
           </div>
           <div className="flex flex-wrap gap-2">
-            <label className="flex min-w-0 flex-[1_1_360px]">
-              <span className="sr-only">Share link</span>
-              <input
+            <div className="flex min-w-0 flex-[1_1_360px]">
+              <Input
+                aria-label="Share link"
                 readOnly
                 value={url}
                 onFocus={(e) => e.currentTarget.select()}
-                className="w-full min-w-0 bg-surface font-mono text-[14px]"
+                className="h-9 bg-muted font-mono text-xs"
               />
-            </label>
+            </div>
             <Button
-              variant="primary"
+              size="lg"
+              className="press h-9"
               onClick={() =>
                 navigator.clipboard?.writeText(url).then(
                   () => setCopied(true),
@@ -59,60 +75,58 @@ export function ShareForm({ slug }: { slug: string }) {
                 )
               }
             >
+              <CopyIcon data-icon="inline-start" />
               {copied ? "Copied" : "Copy link"}
             </Button>
           </div>
-          <span className="text-[14px] text-muted">Expires {new Date(state.expiresAt).toUTCString()}</span>
+          <span className="text-muted-foreground">Expires {new Date(state.expiresAt).toUTCString()}</span>
           <div className="flex justify-end">
-            <Button onClick={() => setShown(null)}>I’ve copied it</Button>
+            <Button variant="outline" className="press" onClick={() => setShown(null)}>
+              I’ve copied it
+            </Button>
           </div>
         </section>
       )}
       <form action={action} className="flex flex-col gap-4">
-        <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
-          <legend className="mb-2 p-0 text-[14px] font-semibold">What can they see?</legend>
-          <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-2.5">
+        <FieldSet>
+          <FieldLegend variant="label">What can they see?</FieldLegend>
+          <RadioGroup
+            name="scope"
+            defaultValue="report"
+            className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-2.5"
+          >
             {SCOPES.map(([value, title, sub]) => (
-              <label
-                key={value}
-                className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border-strong p-3.5 has-checked:border-2 has-checked:border-accent has-checked:bg-accent-bg"
-              >
-                <input
-                  type="radio"
-                  name="scope"
-                  value={value}
-                  defaultChecked={value === "report"}
-                  className="mt-1"
-                />
-                <span className="flex flex-col">
-                  <span className="font-semibold">{title}</span>
-                  <span className="text-[14px] text-muted">{sub}</span>
-                </span>
-              </label>
+              <FieldLabel key={value} htmlFor={`scope-${value}`}>
+                <Field orientation="horizontal">
+                  <RadioGroupItem value={value} id={`scope-${value}`} />
+                  <FieldContent>
+                    <FieldTitle>{title}</FieldTitle>
+                    <FieldDescription>{sub}</FieldDescription>
+                  </FieldContent>
+                </Field>
+              </FieldLabel>
             ))}
-          </div>
-        </fieldset>
+          </RadioGroup>
+        </FieldSet>
         <div className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1.5 text-[14px] font-semibold">
-            Expires after
-            <select name="days" defaultValue="14" className="font-normal">
-              <option value="1">1 day</option>
-              <option value="7">7 days</option>
-              <option value="14">14 days</option>
-              <option value="30">30 days</option>
-              <option value="90">90 days</option>
-            </select>
-          </label>
-          <button type="submit" disabled={pending} className={buttonClass("dark")}>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="share-days">Expires after</Label>
+            <NativeSelect id="share-days" name="days" defaultValue="14">
+              <NativeSelectOption value="1">1 day</NativeSelectOption>
+              <NativeSelectOption value="7">7 days</NativeSelectOption>
+              <NativeSelectOption value="14">14 days</NativeSelectOption>
+              <NativeSelectOption value="30">30 days</NativeSelectOption>
+              <NativeSelectOption value="90">90 days</NativeSelectOption>
+            </NativeSelect>
+          </div>
+          <Button type="submit" disabled={pending} className="press">
             Create link
-          </button>
+          </Button>
         </div>
-        <span className="text-small text-muted">There’s no “never expires”. 90 days is the longest.</span>
-        {state?.error && (
-          <p role="alert" className="m-0 text-err">
-            {state.error}
-          </p>
-        )}
+        <span className="text-xs text-muted-foreground">
+          There’s no “never expires”. 90 days is the longest.
+        </span>
+        {state?.error && <FieldError>{state.error}</FieldError>}
       </form>
     </>
   );

@@ -1,12 +1,22 @@
 import { forbidden, notFound } from "next/navigation";
 import type { ReactNode } from "react";
-import { Banner, type Tone } from "../components/ui/banner";
-import { buttonClass } from "../components/ui/button";
-import { Card } from "../components/ui/card";
-import { Chip, Stale, type State } from "../components/ui/chip";
-import { Frame, type Tab } from "../components/ui/frame";
-import { Resolution, SeverityTag } from "../components/ui/severity";
-import { Table } from "../components/ui/table";
+import { Banner, type Tone } from "@/components/porter/banner";
+import { Chip, Stale, type State } from "@/components/porter/chip";
+import { Frame, type Tab } from "@/components/porter/frame";
+import { Resolution, SeverityTag } from "@/components/porter/severity";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Empty as EmptyBox, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
+import { Progress } from "@/components/ui/progress";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 import { fmtDateTime, fmtNum } from "./format";
 import { type Role, roleCan } from "./permissions";
 import { HttpError } from "./projects";
@@ -27,13 +37,64 @@ export async function orStatus<T>(p: Promise<T>) {
   }
 }
 
-export const NA = <em className="text-muted not-italic">Not available in this version.</em>;
+export const NA = <em className="text-muted-foreground not-italic">Not available in this version.</em>;
 
 export function Empty({ title, children }: { title: string; children?: ReactNode }) {
   return (
-    <div className="flex flex-col items-start gap-2 rounded-lg border border-border bg-bg p-6">
-      <span className="text-heading font-semibold">{title}</span>
-      {children && <span className="text-muted">{children}</span>}
+    <EmptyBox className="animate-enter border bg-card">
+      <EmptyHeader>
+        <EmptyTitle className="text-base">{title}</EmptyTitle>
+        {children && <EmptyDescription className="text-sm">{children}</EmptyDescription>}
+      </EmptyHeader>
+    </EmptyBox>
+  );
+}
+
+/** The hub's card: a title, an optional muted line and an optional action, then the body. */
+export function Section({
+  title,
+  aside,
+  action,
+  children,
+  className,
+  id,
+}: {
+  title: ReactNode;
+  aside?: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+  className?: string;
+  id?: string;
+}) {
+  return (
+    <Card id={id} className={cn("min-w-0 scroll-mt-6 text-sm", className)}>
+      <CardHeader>
+        <CardTitle className="text-base font-semibold">{title}</CardTitle>
+        {aside && <CardDescription className="text-sm">{aside}</CardDescription>}
+        {action && <CardAction>{action}</CardAction>}
+      </CardHeader>
+      <CardContent className="flex min-w-0 flex-col gap-3">{children}</CardContent>
+    </Card>
+  );
+}
+
+/** A table that scrolls sideways inside its card instead of overflowing the page. */
+export function DataTable({ head, children }: { head: ReactNode[]; children: ReactNode }) {
+  return (
+    <div className="-mx-4 border-t">
+      <Table className="text-sm [&_td]:px-4 [&_th]:px-4">
+        <TableHeader className="bg-muted/50">
+          <TableRow>
+            {head.map((h, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: fixed column list
+              <TableHead key={i} className="text-xs text-muted-foreground">
+                {h}
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>{children}</TableBody>
+      </Table>
     </div>
   );
 }
@@ -53,21 +114,23 @@ export function NoSnapshot({ plain }: { plain?: boolean }) {
 
 export function Pager({ base, p }: { base: string; p: Page<unknown> }) {
   return (
-    <nav aria-label="Pages" className="flex flex-wrap items-center gap-3 text-[14px] text-muted">
-      <span>
-        Page {p.page} of {p.pages} ({fmtNum(p.total)} total)
-      </span>
-      {p.page > 1 && (
-        <a className={buttonClass("secondary")} href={`${base}?page=${p.page - 1}`}>
-          Previous
-        </a>
-      )}
-      {p.page < p.pages && (
-        <a className={buttonClass("secondary")} href={`${base}?page=${p.page + 1}`}>
-          Next
-        </a>
-      )}
-    </nav>
+    <Pagination aria-label="Pages" className="mx-0 w-auto justify-end">
+      <PaginationContent className="flex-wrap">
+        <PaginationItem className="px-2 text-xs text-muted-foreground">
+          Page {p.page} of {p.pages} ({fmtNum(p.total)} total)
+        </PaginationItem>
+        {p.page > 1 && (
+          <PaginationItem>
+            <PaginationPrevious href={`${base}?page=${p.page - 1}`} />
+          </PaginationItem>
+        )}
+        {p.page < p.pages && (
+          <PaginationItem>
+            <PaginationNext href={`${base}?page=${p.page + 1}`} />
+          </PaginationItem>
+        )}
+      </PaginationContent>
+    </Pagination>
   );
 }
 
@@ -106,7 +169,8 @@ export function ProjectFrame({
   return (
     <Frame
       crumbs={[{ label: "Projects", href: "/" }, { label: project.name }]}
-      who={`${user.name || user.email} · ${role}`}
+      who={user.name || user.email}
+      role={role}
       tabs={projectTabs(project.slug, role, active)}
       narrow={role === "client"}
     >
@@ -281,27 +345,27 @@ export function Overview({
   }
   return (
     <>
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-bg px-4 py-3 text-[14px]">
-        <span className="inline-flex h-6 items-center rounded-sm bg-ink px-2 text-small font-semibold text-bg">
+      <div className="flex flex-wrap items-center gap-3 rounded-lg bg-card px-4 py-3 text-sm ring-1 ring-foreground/10">
+        <Badge className="h-6 rounded-md bg-foreground px-2 text-xs font-semibold text-background">
           v{n}
-        </span>
+        </Badge>
         <span>
           Pushed {fmtDateTime(snap.version.createdAt)}
           {!plain && snap.version.porterVersion ? ` from porter ${snap.version.porterVersion}` : ""}
         </span>
         {/* Push messages are internal notes: staff only, never on a share link. */}
         {audience === "staff" && snap.version.message && (
-          <span className="text-muted">“{snap.version.message}”</span>
+          <span className="text-muted-foreground">“{snap.version.message}”</span>
         )}
         <span className="flex-1" />
-        <span className="text-small text-muted">
+        <span className="text-xs text-muted-foreground">
           This page shows v{n} as pushed. It doesn’t update until someone pushes again.
         </span>
       </div>
 
       {o.views && statusBanner(o.views, o.writes, sev("error"), n, plain)}
 
-      <Card title="Pipeline" aside="Six stages, left to right. Only a green stage has written its result.">
+      <Section title="Pipeline" aside="Six stages, left to right. Only a green stage has written its result.">
         {o.views === null ? (
           <p className="m-0">{NA}</p>
         ) : (
@@ -311,43 +375,40 @@ export function Overview({
               return (
                 <li
                   key={v.stage}
-                  className="flex min-w-0 flex-col gap-2.5 rounded-lg border border-border p-3.5"
+                  className="flex min-w-0 flex-col gap-2.5 rounded-lg border bg-background p-3.5"
                   data-stage={v.stage}
                 >
-                  <span className="text-small text-muted">
-                    {i + 1} · <b className="font-semibold text-ink">{NAMES[v.stage]}</b>
+                  <span className="text-xs text-muted-foreground">
+                    {i + 1} · <b className="font-semibold text-foreground">{NAMES[v.stage]}</b>
                   </span>
                   <Stale reason={v.stale} plain={plain}>
                     {v.state && <Chip state={v.state as State} label={t.label} />}
-                    <span className="text-small text-muted">{t.sub}</span>
+                    <span className="text-xs text-muted-foreground">{t.sub}</span>
                   </Stale>
                 </li>
               );
             })}
           </ol>
         )}
-      </Card>
+      </Section>
 
       <div className="flex flex-wrap gap-5">
-        <Card title={plain ? "What’s been found" : "Coverage"} className="flex-[1_1_420px]">
+        <Section title={plain ? "What’s been found" : "Coverage"} className="flex-[1_1_420px]">
           {o.coverage === null ? (
             <p className="m-0">{NA}</p>
           ) : (
             <div className="flex flex-col gap-1.5">
-              <div className="flex gap-2 text-[14px]">
+              <div className="flex gap-2">
                 <span className="flex-1 font-medium">{plain ? "Old web addresses" : "URLs"}</span>
                 <span>{fmtNum(o.coverage.mapped)}</span>
-                <span className="text-muted">of {fmtNum(o.coverage.routes)} mapped</span>
+                <span className="text-muted-foreground">of {fmtNum(o.coverage.routes)} mapped</span>
               </div>
-              <div className="flex h-2 overflow-hidden rounded-xs bg-panel">
-                <div
-                  className="bg-ink/80"
-                  style={{
-                    width: `${o.coverage.routes ? (o.coverage.mapped / o.coverage.routes) * 100 : 0}%`,
-                  }}
-                />
-              </div>
-              <span className="text-small text-muted">
+              <Progress
+                aria-label="URLs mapped"
+                value={o.coverage.routes ? (o.coverage.mapped / o.coverage.routes) * 100 : 0}
+                className="[&_[data-slot=progress-indicator]]:bg-foreground/80"
+              />
+              <span className="text-xs text-muted-foreground">
                 {o.coverage.routes - o.coverage.mapped === 0
                   ? plain
                     ? "Every old address leads somewhere."
@@ -358,12 +419,18 @@ export function Overview({
               </span>
             </div>
           )}
-        </Card>
+        </Section>
 
-        <Card
+        <Section
           title="Issues"
           className="flex-[1_1_360px]"
-          aside={!plain && issuesHref ? <a href={issuesHref}>Open issues table</a> : undefined}
+          action={
+            !plain && issuesHref ? (
+              <a href={issuesHref} className="text-xs font-medium text-primary hover:underline">
+                Open issues table
+              </a>
+            ) : undefined
+          }
         >
           {o.issueCounts === null ? (
             <p className="m-0">{NA}</p>
@@ -372,31 +439,31 @@ export function Overview({
               <div className="grid grid-cols-3 gap-2.5">
                 {(
                   [
-                    ["error", plain ? "to fix" : "errors", "bg-err-bg text-err"],
-                    ["warning", plain ? "to review" : "warnings", "bg-warn-bg text-warn"],
-                    ["info", "info", "bg-panel text-muted"],
+                    ["error", plain ? "to fix" : "errors", "bg-err-soft text-err"],
+                    ["warning", plain ? "to review" : "warnings", "bg-warn-soft text-warn"],
+                    ["info", "info", "bg-muted text-muted-foreground"],
                   ] as const
                 ).map(([s, label, cls]) => (
                   <div key={s} className={`flex flex-col rounded-md p-3 ${cls}`}>
-                    <span className="text-[24px] leading-8 font-semibold">{fmtNum(sev(s))}</span>
-                    <span className="text-small">{label}</span>
+                    <span className="text-2xl font-semibold">{fmtNum(sev(s))}</span>
+                    <span className="text-xs">{label}</span>
                   </div>
                 ))}
               </div>
               {plain ? (
-                <span className="text-[14px] text-ink/80">
+                <span className="text-foreground/80">
                   Your Umi team is working through these. Details stay with the team; you’ll see the counts
                   drop as they’re fixed. Anything that needs your help will show up under Uploads.
                 </span>
               ) : kinds.size === 0 ? (
-                <span className="text-[14px] text-muted">No open issues.</span>
+                <span className="text-muted-foreground">No open issues.</span>
               ) : (
-                <ul className="m-0 flex list-none flex-col p-0 text-[14px]">
+                <ul className="m-0 flex list-none flex-col p-0">
                   {[...kinds].map(([kind, k]) => (
-                    <li key={kind} className="flex gap-2 border-t border-panel py-1.5">
-                      <span className="min-w-0 flex-1 truncate font-mono text-small">{kind}</span>
+                    <li key={kind} className="flex gap-2 border-t py-1.5">
+                      <span className="min-w-0 flex-1 truncate font-mono text-xs">{kind}</span>
                       <span
-                        className={`font-semibold ${k.error ? "text-err" : k.warning ? "text-warn" : "text-muted"}`}
+                        className={`font-semibold ${k.error ? "text-err" : k.warning ? "text-warn" : "text-muted-foreground"}`}
                       >
                         {[
                           k.error && `${fmtNum(k.error)} error${k.error === 1 ? "" : "s"}`,
@@ -412,12 +479,12 @@ export function Overview({
               )}
             </>
           )}
-        </Card>
+        </Section>
       </div>
 
-      <Card title={`Reports from v${n}`}>
+      <Section title={`Reports from v${n}`}>
         {reports.length === 0 ? (
-          <p className="m-0 text-muted">No reports in this version.</p>
+          <p className="m-0 text-muted-foreground">No reports in this version.</p>
         ) : (
           <>
             <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-2.5">
@@ -425,10 +492,10 @@ export function Overview({
                 <a
                   key={r}
                   href={`${reportBase}/${encodeURIComponent(r)}`}
-                  className="flex min-h-11 flex-col gap-0.5 rounded-lg border border-border p-3.5 text-ink no-underline hover:border-border-strong hover:no-underline"
+                  className="press flex min-h-11 flex-col gap-0.5 rounded-lg border bg-background p-3.5 transition-colors hover:bg-muted"
                 >
-                  <span className="text-[14px] font-semibold">{humanReport(r)}</span>
-                  <span className="truncate text-small text-muted">
+                  <span className="font-semibold">{humanReport(r)}</span>
+                  <span className="truncate text-xs text-muted-foreground">
                     {r} · v{n}
                   </span>
                 </a>
@@ -437,12 +504,12 @@ export function Overview({
             {reports
               .filter((r) => r.endsWith(".html"))
               .map((r) => (
-                <figure key={r} className="m-0 overflow-hidden rounded-lg border border-border">
-                  <figcaption className="flex flex-wrap items-center gap-3 border-b border-border bg-surface px-3.5 py-2 text-small">
+                <figure key={r} className="m-0 overflow-hidden rounded-lg border">
+                  <figcaption className="flex flex-wrap items-center gap-3 border-b bg-muted/50 px-3.5 py-2 text-xs">
                     <span className="font-semibold">
                       {r} · v{n}
                     </span>
-                    <span className="text-muted">Sandboxed: no scripts, no network</span>
+                    <span className="text-muted-foreground">Sandboxed: no scripts, no network</span>
                   </figcaption>
                   <iframe
                     title={r}
@@ -454,7 +521,7 @@ export function Overview({
               ))}
           </>
         )}
-      </Card>
+      </Section>
     </>
   );
 }
@@ -473,14 +540,14 @@ export function IssuesView({
   const p = issuesPage(snap.dir, page, full);
   if (!p) return <p>{NA}</p>;
   return (
-    <Card
+    <Section
       title={full ? `Issues in v${snap.version.number}` : `Open issues in v${snap.version.number}`}
-      aside={<Pager base={base} p={p} />}
+      action={<Pager base={base} p={p} />}
     >
       {p.total === 0 ? (
-        <p className="m-0 text-muted">No issues in this version.</p>
+        <p className="m-0 text-muted-foreground">No issues in this version.</p>
       ) : (
-        <Table
+        <DataTable
           head={[
             "Kind",
             "Severity",
@@ -491,20 +558,26 @@ export function IssuesView({
         >
           {p.rows.map((r, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: rows are a static page
-            <tr key={i}>
-              <td className="font-mono text-small">{r.kind}</td>
-              <td>
+            <TableRow key={i}>
+              <TableCell className="font-mono text-xs">{r.kind}</TableCell>
+              <TableCell>
                 <SeverityTag severity={r.severity} />
-              </td>
-              {full && <td className="min-w-[240px] break-words">{"message" in r ? r.message : ""}</td>}
-              <td className="break-words">{r.itemTitle ?? ""}</td>
-              {full && <td>{"stage" in r ? r.stage : ""}</td>}
-              {full && <td>{"resolution" in r ? <Resolution value={r.resolution ?? ""} /> : ""}</td>}
-            </tr>
+              </TableCell>
+              {full && (
+                <TableCell className="min-w-[240px] whitespace-normal break-words">
+                  {"message" in r ? r.message : ""}
+                </TableCell>
+              )}
+              <TableCell className="whitespace-normal break-words">{r.itemTitle ?? ""}</TableCell>
+              {full && <TableCell>{"stage" in r ? r.stage : ""}</TableCell>}
+              {full && (
+                <TableCell>{"resolution" in r ? <Resolution value={r.resolution ?? ""} /> : ""}</TableCell>
+              )}
+            </TableRow>
           ))}
-        </Table>
+        </DataTable>
       )}
-    </Card>
+    </Section>
   );
 }
 
@@ -512,21 +585,23 @@ export function UrlsView({ snap, page, base }: { snap: Snapshot; page: number; b
   const p = urlsPage(snap.dir, page);
   if (!p) return <p>{NA}</p>;
   return (
-    <Card title={`URLs in v${snap.version.number}`} aside={<Pager base={base} p={p} />}>
+    <Section title={`URLs in v${snap.version.number}`} action={<Pager base={base} p={p} />}>
       {p.total === 0 ? (
-        <p className="m-0 text-muted">No URLs in this version.</p>
+        <p className="m-0 text-muted-foreground">No URLs in this version.</p>
       ) : (
-        <Table head={["URL", "Old status", "Maps to"]}>
+        <DataTable head={["URL", "Old status", "Maps to"]}>
           {p.rows.map((r, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: rows are a static page
-            <tr key={i}>
-              <td className="max-w-[480px] font-mono text-small break-all">{r.url}</td>
-              <td>{r.status ?? ""}</td>
-              <td className={r.target === "none" ? "text-err" : ""}>{r.target}</td>
-            </tr>
+            <TableRow key={i}>
+              <TableCell className="max-w-[480px] font-mono text-xs whitespace-normal break-all">
+                {r.url}
+              </TableCell>
+              <TableCell>{r.status ?? ""}</TableCell>
+              <TableCell className={r.target === "none" ? "text-err" : ""}>{r.target}</TableCell>
+            </TableRow>
           ))}
-        </Table>
+        </DataTable>
       )}
-    </Card>
+    </Section>
   );
 }

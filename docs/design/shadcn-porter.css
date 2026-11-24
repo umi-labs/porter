@@ -1,0 +1,93 @@
+/* Porter (Manifest) on top of the shadcn preset b3lV3g17I.
+   Paste below the preset's :root / .dark blocks in globals.css.
+   Changes to the preset are marked CHANGED; everything else is additive. */
+
+:root {
+  /* CHANGED: shadcn uses --accent for hover/selected backgrounds (menus, ghost
+     buttons, sidebar items). Orange there would put the accent on every hover.
+     Keep it neutral; orange stays on --primary only. */
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+
+  /* Porter state tokens. Green = written only. */
+  --ok: oklch(0.53 0.14 150);
+  --ok-soft: oklch(0.96 0.03 155);
+  --ok-foreground: oklch(1 0 0);
+  --warn: oklch(0.52 0.11 82);           /* warning text */
+  --warn-fill: oklch(0.84 0.17 92);      /* square glyph */
+  --warn-soft: oklch(0.98 0.04 95);
+  --warn-foreground: oklch(0.2 0.04 85);
+  --err: var(--destructive);
+  --err-soft: oklch(0.96 0.02 20);
+  --int: oklch(0.5 0.2 295);             /* interrupted */
+  --int-soft: oklch(0.95 0.03 300);
+  --dry: oklch(0.42 0.05 265);           /* dry run */
+  --dry-soft: oklch(0.96 0.01 260);
+  --dry-hatch: oklch(0.92 0.015 260);
+  --dry-line: oklch(0.66 0.05 265);
+  --stale-soft: oklch(0.97 0 0);
+}
+
+.dark {
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+
+  --ok: oklch(0.79 0.17 155);
+  --ok-soft: oklch(0.26 0.05 155);
+  --ok-foreground: oklch(0.2 0.05 155);
+  --warn: oklch(0.85 0.15 88);
+  --warn-fill: oklch(0.85 0.15 88);
+  --warn-soft: oklch(0.25 0.04 85);
+  --warn-foreground: oklch(0.2 0.04 85);
+  --err: var(--destructive);
+  --err-soft: oklch(0.24 0.05 20);
+  --int: oklch(0.75 0.13 295);
+  --int-soft: oklch(0.24 0.05 295);
+  --dry: oklch(0.77 0.04 260);
+  --dry-soft: oklch(0.21 0.02 260);
+  --dry-hatch: oklch(0.25 0.02 260);
+  --dry-line: oklch(0.5 0.05 260);
+  --stale-soft: oklch(0.205 0 0);
+}
+
+@theme inline {
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-ok-foreground: var(--ok-foreground);
+  --color-warn: var(--warn);
+  --color-warn-fill: var(--warn-fill);
+  --color-warn-soft: var(--warn-soft);
+  --color-warn-foreground: var(--warn-foreground);
+  --color-err: var(--err);
+  --color-err-soft: var(--err-soft);
+  --color-int: var(--int);
+  --color-int-soft: var(--int-soft);
+  --color-dry: var(--dry);
+  --color-dry-soft: var(--dry-soft);
+  --color-dry-hatch: var(--dry-hatch);
+  --color-dry-line: var(--dry-line);
+  --color-stale-soft: var(--stale-soft);
+
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --ease-out-mf: cubic-bezier(.2, .8, .2, 1);
+  --animate-enter: enter 280ms var(--ease-out-mf) both;
+  @keyframes enter {
+    from { opacity: 0; transform: scale(.97); }
+    to { opacity: 1; transform: none; }
+  }
+}
+
+@utility bg-dry-hatch {
+  background: repeating-linear-gradient(135deg,
+    var(--dry-soft) 0 5px, var(--dry-hatch) 5px 7px);
+}
+@utility press {
+  transition: transform 120ms var(--ease-out-mf);
+  &:active { transform: scale(.97); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-enter { animation: none; }
+  .press:active { transform: none; }
+}
+
+/* Don't use --chart-1..5 for stage or issue state: they are all oranges. */

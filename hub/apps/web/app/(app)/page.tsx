@@ -1,11 +1,22 @@
 import { getDb } from "@porter-hub/db";
+import { ChevronRightIcon, FolderIcon } from "lucide-react";
 import Link from "next/link";
-import { Chip } from "../../components/ui/chip";
-import { Frame, PageTitle } from "../../components/ui/frame";
-import { fmtAgo } from "../../lib/format";
-import { projectHeadline } from "../../lib/headline";
-import { isStaff, listProjects } from "../../lib/projects";
-import { requireUser } from "../../lib/session";
+import { Chip } from "@/components/porter/chip";
+import { Frame, PageTitle } from "@/components/porter/frame";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/components/ui/item";
+import { Kbd } from "@/components/ui/kbd";
+import { fmtAgo } from "@/lib/format";
+import { projectHeadline } from "@/lib/headline";
+import { isStaff, listProjects } from "@/lib/projects";
+import { requireUser } from "@/lib/session";
 import { NewProjectForm } from "./new-project-form";
 
 export const dynamic = "force-dynamic";
@@ -18,51 +29,55 @@ export default async function Home() {
     <Frame who={user.name || user.email} narrow>
       <PageTitle title="Projects" />
       {projects.length === 0 ? (
-        <div className="flex min-h-[260px] flex-col items-center justify-center gap-2.5 rounded-lg border border-border bg-bg p-5 text-center">
-          <span className="text-[17px] font-semibold">
-            {staff ? "No projects yet" : "Nothing has been shared with you yet."}
-          </span>
-          {staff ? (
-            <>
-              <span className="max-w-[300px] text-ink">
-                Projects appear here when someone pushes one from porter on their computer.
+        <Empty className="animate-enter min-h-[260px] border bg-card">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <FolderIcon />
+            </EmptyMedia>
+            <EmptyTitle className="text-base">
+              {staff ? "No projects yet" : "Nothing has been shared with you yet."}
+            </EmptyTitle>
+            <EmptyDescription className="text-sm">
+              {staff
+                ? "Projects appear here when someone pushes one from porter on their computer."
+                : "Projects appear here when your Umi team invites you to one."}
+            </EmptyDescription>
+          </EmptyHeader>
+          {staff && (
+            <EmptyContent>
+              <span className="flex flex-wrap items-center justify-center gap-1.5 text-xs text-muted-foreground">
+                <Kbd>porter hub login</Kbd>, then <Kbd>porter hub push</Kbd> from the project
               </span>
-              <code className="rounded-sm bg-surface px-2.5 py-1.5 font-mono text-[13px]">
-                porter hub login, then porter hub push from the project
-              </code>
-            </>
-          ) : (
-            <span className="max-w-[300px] text-ink">
-              Projects appear here when your Umi team invites you to one.
-            </span>
+            </EmptyContent>
           )}
-        </div>
+        </Empty>
       ) : (
-        <ul className="m-0 flex list-none flex-col overflow-hidden rounded-lg border border-border bg-bg p-0">
+        <ItemGroup className="animate-enter overflow-hidden rounded-lg bg-card ring-1 ring-foreground/10">
           {projects.map((p) => {
             const pill = projectHeadline(p.latest?.status ?? null);
             return (
-              <li key={p.id} className="border-t border-panel first:border-t-0">
-                <Link
-                  href={`/p/${p.slug}`}
-                  className="flex min-h-11 items-center gap-2.5 px-4 py-3 text-ink no-underline hover:bg-hover hover:no-underline"
-                >
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate font-semibold" title={p.name}>
-                      {p.name}
-                    </span>
-                    <span className="text-small text-muted">
-                      {p.latest
-                        ? `v${p.latest.number} · ${fmtAgo(p.latest.createdAt)}`
-                        : "Nothing pushed yet"}
-                    </span>
-                  </span>
+              <Item
+                key={p.id}
+                size="sm"
+                className="rounded-none border-0 border-t px-4 py-3 first:border-t-0 hover:bg-muted/60"
+                render={<Link href={`/p/${p.slug}`} />}
+              >
+                <ItemContent className="min-w-0">
+                  <ItemTitle className="w-full truncate text-sm font-semibold" title={p.name}>
+                    {p.name}
+                  </ItemTitle>
+                  <ItemDescription>
+                    {p.latest ? `v${p.latest.number} · ${fmtAgo(p.latest.createdAt)}` : "Nothing pushed yet"}
+                  </ItemDescription>
+                </ItemContent>
+                <ItemActions>
                   {pill && <Chip state={pill.state} label={pill.label} />}
-                </Link>
-              </li>
+                  <ChevronRightIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+                </ItemActions>
+              </Item>
             );
           })}
-        </ul>
+        </ItemGroup>
       )}
       {staff && <NewProjectForm />}
     </Frame>

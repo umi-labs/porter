@@ -1,4 +1,4 @@
-import { Empty } from "../../../lib/view-parts";
+import { Empty } from "@/lib/view-parts";
 
 /** Unknown, expired and revoked links look the same: no project name, no reason. */
 export default function ShareNotFound() {

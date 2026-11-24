@@ -1,43 +1,51 @@
 "use client";
 import { useActionState } from "react";
-import { buttonClass } from "../../components/ui/button";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { FieldError } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { createProject } from "./actions";
 
 /** Name, and an optional slug (made from the name when left empty). */
 export function NewProjectForm() {
   const [state, action, pending] = useActionState<{ error?: string } | null, FormData>(createProject, null);
   return (
-    <form
-      action={action}
-      className="mt-6 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-bg p-4"
-      aria-label="New project"
-    >
-      <span className="w-full text-small font-semibold text-muted">
-        New project · then run porter hub link &lt;slug&gt; in the porter project
-      </span>
-      <label className="flex min-w-0 flex-[2_1_220px]">
-        <span className="sr-only">Project name</span>
-        <input name="name" placeholder="Project name" required maxLength={120} className="w-full" />
-      </label>
-      <label className="flex min-w-0 flex-[1_1_160px]">
-        <span className="sr-only">Slug (optional)</span>
-        <input
-          name="slug"
-          placeholder="slug (optional)"
-          pattern="[a-z0-9]+(-[a-z0-9]+)*"
-          maxLength={60}
-          title="Lowercase letters, digits and single hyphens"
-          className="w-full font-mono"
-        />
-      </label>
-      <button type="submit" disabled={pending} className={buttonClass("dark")}>
-        New project
-      </button>
-      {state?.error && (
-        <span role="alert" className="w-full text-err">
-          {state.error}
-        </span>
-      )}
-    </form>
+    <Card className="mt-6">
+      <CardHeader>
+        <CardTitle className="text-sm font-semibold">New project</CardTitle>
+        <CardDescription>
+          Then run <code>porter hub link &lt;slug&gt;</code> in the porter project.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form action={action} className="flex flex-wrap items-center gap-2" aria-label="New project">
+          <div className="flex min-w-0 flex-[2_1_220px]">
+            <Input
+              aria-label="Project name"
+              name="name"
+              placeholder="Project name"
+              required
+              maxLength={120}
+              className="h-9"
+            />
+          </div>
+          <div className="flex min-w-0 flex-[1_1_160px]">
+            <Input
+              aria-label="Slug (optional)"
+              name="slug"
+              placeholder="slug (optional)"
+              pattern="[a-z0-9]+(-[a-z0-9]+)*"
+              maxLength={60}
+              title="Lowercase letters, digits and single hyphens"
+              className="h-9 font-mono"
+            />
+          </div>
+          <Button type="submit" size="lg" disabled={pending} className="press h-9 px-4">
+            New project
+          </Button>
+          {state?.error && <FieldError className="w-full">{state.error}</FieldError>}
+        </form>
+      </CardContent>
+    </Card>
   );
 }

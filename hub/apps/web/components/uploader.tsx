@@ -1,8 +1,14 @@
 "use client";
 
+import { DownloadIcon, UploadIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { buttonClass } from "./ui/button";
-import { Chip, type State } from "./ui/chip";
+import { Chip, type State } from "@/components/porter/chip";
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { Label } from "@/components/ui/label";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { Progress } from "@/components/ui/progress";
+import { cn } from "@/lib/utils";
 
 const PURPOSES = {
   dump: ".sql .sql.gz .gz .zip .tar.gz .tgz",
@@ -258,7 +264,7 @@ export function Uploader({
     ["Ready", "pending", 0],
   ];
   return (
-    <section className="flex flex-col gap-5">
+    <section className="flex flex-col gap-5 text-sm">
       {canUpload && (
         <form
           className="flex flex-col gap-4"
@@ -268,55 +274,44 @@ export function Uploader({
           }}
         >
           <div className="flex flex-wrap items-end gap-3">
-            <label className="flex flex-col gap-1.5 text-[14px] font-semibold">
-              What is it?
-              <select
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="upload-purpose">What is it?</Label>
+              <NativeSelect
+                id="upload-purpose"
                 value={purpose}
                 onChange={(e) => setPurpose(e.target.value as Purpose)}
                 disabled={busy}
-                className="font-normal"
               >
                 {Object.keys(PURPOSES).map((p) => (
-                  <option key={p} value={p}>
+                  <NativeSelectOption key={p} value={p}>
                     {LABELS[p as Purpose]}
-                  </option>
+                  </NativeSelectOption>
                 ))}
-              </select>
-            </label>
-            <small className="pb-3 text-small text-muted">{PURPOSES[purpose] || "any file type"}</small>
+              </NativeSelect>
+            </div>
+            <small className="pb-1.5 text-xs text-muted-foreground">
+              {PURPOSES[purpose] || "any file type"}
+            </small>
           </div>
           <label
-            className="relative flex cursor-pointer flex-col items-center gap-2.5 rounded-xl border-2 border-dashed border-border-strong bg-bg px-5 py-7 text-center has-focus-visible:outline-2 has-focus-visible:outline-accent"
+            className="relative flex cursor-pointer flex-col items-center gap-2.5 rounded-xl border-2 border-dashed bg-card px-5 py-7 text-center transition-colors hover:bg-muted/50 has-focus-visible:border-ring has-focus-visible:ring-2 has-focus-visible:ring-ring/30"
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
               if (!busy) setFile(e.dataTransfer.files?.[0] ?? null);
             }}
           >
-            <svg
-              width="32"
-              height="32"
-              viewBox="0 0 24 24"
-              fill="none"
-              className="stroke-accent"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M12 16V4M7 9l5-5 5 5" />
-              <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
-            </svg>
-            <span className="text-heading font-semibold">
+            <UploadIcon className="size-8 text-primary" strokeWidth={1.8} aria-hidden="true" />
+            <span className="text-base font-semibold">
               {file ? (
                 file.name
               ) : (
                 <>
-                  Drop a file here, or <span className="text-accent underline">choose a file</span>
+                  Drop a file here, or <span className="text-primary underline">choose a file</span>
                 </>
               )}
             </span>
-            <span className="text-[14px] text-muted">
+            <span className="text-muted-foreground">
               {file
                 ? `${fmtSize(file.size)}${resumable ? " · started before: Resume sends only what’s missing" : ""}`
                 : `Up to ${fmtSize(maxBytes)} each`}
@@ -330,41 +325,44 @@ export function Uploader({
             />
           </label>
           {tooBig && (
-            <p role="alert" className="m-0 rounded-md bg-err-bg p-3 text-[14px] text-err">
+            <p role="alert" className="m-0 rounded-md bg-err-soft p-3 text-err">
               This file is over the {fmtSize(maxBytes)} limit, so nothing was uploaded. Split it into smaller
               archives, or ask your Umi contact for another way to send it.
             </p>
           )}
           <div className="flex flex-wrap gap-2">
-            <button type="submit" disabled={!file || busy || tooBig} className={buttonClass("primary")}>
+            <Button type="submit" size="lg" disabled={!file || busy || tooBig} className="press h-9 px-4">
               {resumable ? "Resume" : "Upload"}
-            </button>
+            </Button>
             {(busy || resumable) && (
-              <button type="button" onClick={cancel} className={buttonClass("secondary")}>
+              <Button variant="outline" size="lg" onClick={cancel} className="press h-9 px-4">
                 Cancel upload
-              </button>
+              </Button>
             )}
           </div>
           {(busy || status) && (
-            <div className="flex flex-col gap-3 rounded-lg border border-border bg-bg p-4">
+            <div className="animate-enter flex flex-col gap-3 rounded-lg bg-card p-4 ring-1 ring-foreground/10">
               <ol className="m-0 grid list-none grid-cols-2 gap-1.5 p-0 sm:grid-cols-4">
                 {steps.map(([label, st, w]) => (
                   <li key={label} className="flex flex-col gap-1.5">
-                    <div className="h-1.5 overflow-hidden rounded-[3px] bg-panel">
-                      <div
-                        className={`h-full ${st === "done" ? "bg-ink/80" : "bg-accent"}`}
-                        style={{ width: `${st === "done" ? 100 : w}%` }}
-                      />
-                    </div>
+                    <Progress
+                      aria-hidden="true"
+                      value={st === "done" ? 100 : w}
+                      className={cn(st === "done" && "[&_[data-slot=progress-indicator]]:bg-foreground/80")}
+                    />
                     <span
-                      className={`text-small ${st === "pending" ? "text-muted" : "text-ink"} ${st === "active" ? "font-semibold" : ""}`}
+                      className={cn(
+                        "text-xs",
+                        st === "pending" ? "text-muted-foreground" : "text-foreground",
+                        st === "active" && "font-semibold",
+                      )}
                     >
                       {label}
                     </span>
                   </li>
                 ))}
               </ol>
-              {status && <span className="text-[14px] text-muted">{status}</span>}
+              {status && <span className="text-muted-foreground">{status}</span>}
               <progress value={pct} max={100} className="sr-only">
                 {pct}%
               </progress>
@@ -373,36 +371,42 @@ export function Uploader({
         </form>
       )}
       {error && (
-        <p role="alert" className="m-0 rounded-md bg-err-bg p-3 text-[14px] text-err">
+        <p role="alert" className="m-0 rounded-md bg-err-soft p-3 text-err">
           {error}
         </p>
       )}
       <section className="flex flex-col gap-3">
-        <h2 className="m-0 text-heading font-semibold">Files</h2>
+        <h2 className="m-0 text-base font-semibold">Files</h2>
         {rows.length === 0 && (
-          <div className="rounded-lg border border-border bg-bg p-5">
-            <span className="font-semibold">Nothing uploaded yet</span>
-            <p className="m-0 text-muted">
-              Your Umi contact will tell you what to send. Usually a database export and a zip of your images.
-            </p>
-          </div>
+          <Empty className="border bg-card">
+            <EmptyHeader>
+              <EmptyTitle className="text-sm">Nothing uploaded yet</EmptyTitle>
+              <EmptyDescription className="text-sm">
+                Your Umi contact will tell you what to send. Usually a database export and a zip of your
+                images.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         )}
         {rows.map((r) => {
           const look = ROW_LOOK[r.state] ?? { state: "not-run" as const, label: r.state };
           return (
             <article
               key={r.id}
-              className={`flex flex-col gap-3 rounded-lg border bg-bg px-4.5 py-4 ${r.state === "failed" ? "border-err/40" : "border-border"}`}
+              className={cn(
+                "animate-enter flex flex-col gap-3 rounded-lg border bg-card px-4.5 py-4",
+                r.state === "failed" && "border-err/40",
+              )}
             >
               <div className="flex flex-wrap items-start gap-3">
-                <span className="flex size-9 flex-none items-center justify-center rounded-md bg-panel text-[11px] font-bold text-muted uppercase">
+                <span className="flex size-9 flex-none items-center justify-center rounded-md bg-muted text-[11px] font-bold text-muted-foreground uppercase">
                   {ext(r.filename)}
                 </span>
                 <div className="flex min-w-0 flex-[1_1_280px] flex-col">
                   <span className="truncate font-semibold" title={r.filename}>
                     {r.filename}
                   </span>
-                  <span className="text-small text-muted">
+                  <span className="text-xs text-muted-foreground">
                     {fmtSize(r.size)} · {LABELS[r.purpose as Purpose] ?? r.purpose} · added{" "}
                     {new Date(r.created_at).toLocaleString("en-GB", {
                       dateStyle: "medium",
@@ -414,16 +418,20 @@ export function Uploader({
               </div>
               {look.note && (
                 <p
-                  className={`m-0 rounded-md px-3 py-2.5 text-[14px] ${r.state === "failed" ? "bg-err-bg text-err" : "bg-surface text-ink/80"}`}
+                  className={cn(
+                    "m-0 rounded-md px-3 py-2.5",
+                    r.state === "failed" ? "bg-err-soft text-err" : "bg-muted text-foreground/80",
+                  )}
                 >
                   {look.note}
                 </p>
               )}
               {canDownload && r.state === "ready" && (
                 <div>
-                  <button type="button" onClick={() => download(r.id)} className={buttonClass("secondary")}>
+                  <Button variant="outline" size="lg" onClick={() => download(r.id)} className="press h-9">
+                    <DownloadIcon data-icon="inline-start" />
                     Download
-                  </button>
+                  </Button>
                 </div>
               )}
             </article>

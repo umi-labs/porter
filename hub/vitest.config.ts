@@ -1,8 +1,11 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   // apps/web's tsconfig keeps JSX for Next ("preserve"); component tests need it compiled.
   oxc: { jsx: { runtime: "automatic" } },
+  // apps/web imports its own files as @/… (shadcn's alias, tsconfig paths).
+  resolve: { alias: { "@/": fileURLToPath(new URL("./apps/web/", import.meta.url)) } },
   test: {
     include: ["packages/**/*.test.ts", "apps/**/*.test.ts"],
     testTimeout: 30000,
