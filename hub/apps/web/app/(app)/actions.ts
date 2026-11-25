@@ -1,8 +1,8 @@
 "use server";
 import { getDb } from "@porter-hub/db";
 import { redirect } from "next/navigation";
-import * as svc from "../../lib/projects";
-import { requireUser } from "../../lib/session";
+import * as svc from "@/lib/projects";
+import { requireUser } from "@/lib/session";
 
 /** Staff only (createProject checks). The new project opens on its settings, to add people. */
 export async function createProject(_prev: unknown, f: FormData) {

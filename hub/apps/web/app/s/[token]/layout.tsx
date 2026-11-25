@@ -1,7 +1,7 @@
 import { getDb } from "@porter-hub/db";
 import type { ReactNode } from "react";
-import { SharedFrame } from "../../../components/ui/share-bar";
-import { resolveShare } from "../../../lib/shares";
+import { SharedFrame } from "@/components/porter/share-bar";
+import { resolveShare } from "@/lib/shares";
 
 export const dynamic = "force-dynamic";
 

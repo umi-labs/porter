@@ -1,7 +1,10 @@
 "use client";
 
 import { type FormEvent, useState } from "react";
-import { buttonClass } from "../../../components/ui/button";
+import { AuthCard } from "@/components/porter/auth-card";
+import { Button } from "@/components/ui/button";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 
 /** Staff password sign-up. Needs the invitation id from `invite-staff` (the link it prints: /sign-up?invitation=<id>). */
 export default function SignUpPage() {
@@ -30,37 +33,39 @@ export default function SignUpPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-[420px] flex-col justify-center gap-5 px-4 py-10">
-      <form onSubmit={signUp} className="flex flex-col gap-3 rounded-xl border border-border bg-bg p-6">
-        <h1 className="m-0 text-title font-semibold">Create your staff account</h1>
-        <label className="flex flex-col gap-1.5 text-[14px] font-semibold">
-          Name
-          <input name="name" autoComplete="name" required className="font-normal" />
-        </label>
-        <label className="flex flex-col gap-1.5 text-[14px] font-semibold">
-          Email (the invited address)
-          <input name="email" type="email" autoComplete="username" required className="font-normal" />
-        </label>
-        <label className="flex flex-col gap-1.5 text-[14px] font-semibold">
-          Password (12+ characters)
-          <input
-            name="password"
-            type="password"
-            autoComplete="new-password"
-            minLength={12}
-            required
-            className="font-normal"
-          />
-        </label>
-        <button type="submit" className={buttonClass("dark")}>
-          Create account
-        </button>
-        {message && (
-          <p role="status" className="m-0 rounded-md bg-surface p-3 text-[14px]">
-            {message}
-          </p>
-        )}
+    <AuthCard title="Create your staff account">
+      <form onSubmit={signUp}>
+        <FieldGroup className="gap-3">
+          <Field>
+            <FieldLabel htmlFor="name">Name</FieldLabel>
+            <Input id="name" name="name" autoComplete="name" required className="h-9" />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="email">Email (the invited address)</FieldLabel>
+            <Input id="email" name="email" type="email" autoComplete="username" required className="h-9" />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="password">Password (12+ characters)</FieldLabel>
+            <Input
+              id="password"
+              name="password"
+              type="password"
+              autoComplete="new-password"
+              minLength={12}
+              required
+              className="h-9"
+            />
+          </Field>
+          <Button type="submit" size="lg" className="press h-10">
+            Create account
+          </Button>
+        </FieldGroup>
       </form>
-    </main>
+      {message && (
+        <p role="status" className="m-0 rounded-md bg-muted p-3">
+          {message}
+        </p>
+      )}
+    </AuthCard>
   );
 }

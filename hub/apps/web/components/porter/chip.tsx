@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
-/** The stage states from docs/design/README.md. Stale is not a state: it is a modifier (see `Chip`'s `stale`). */
+/** The stage states from docs/design/README.md. Stale is not a state: it is a modifier (see `Stale`). */
 export const STATES = [
   "not-run",
   "running",
@@ -20,56 +22,56 @@ export const LOOKS: Record<State, Look> = {
   "not-run": {
     glyph: "",
     word: "Not run",
-    chip: "text-muted border-dashed border-border-strong",
-    dot: "rounded-full border-dashed border-faint",
+    chip: "text-muted-foreground border-dashed border-border bg-transparent",
+    dot: "rounded-full border-dashed border-muted-foreground",
   },
   running: {
     glyph: "",
     word: "Running",
-    chip: "text-accent bg-accent-bg border-accent-bg",
-    dot: "rounded-full border-dotted border-accent",
+    chip: "text-primary bg-primary/10 dark:text-orange-300 dark:bg-primary/25",
+    dot: "rounded-full border-dotted border-primary",
   },
   clean: {
     glyph: "✓",
     word: "Clean",
-    chip: "text-ok bg-ok-bg border-ok-bg",
-    dot: "rounded-full bg-ok border-ok text-on-ok",
+    chip: "text-ok bg-ok-soft",
+    dot: "rounded-full bg-ok border-ok text-ok-foreground",
   },
   warnings: {
     glyph: "!",
     word: "Warnings",
-    chip: "text-warn bg-warn-bg border-warn-bg",
-    dot: "rounded-[3px] border-warn",
+    chip: "text-warn bg-warn-soft",
+    dot: "rounded-[3px] bg-warn-fill border-warn-fill text-warn-foreground",
   },
   errors: {
     glyph: "!",
     word: "Errors",
-    chip: "text-err bg-err-bg border-err",
-    dot: "rounded-full bg-err border-err text-on-err",
+    chip: "text-err bg-err-soft border-err/50",
+    dot: "rounded-full bg-err border-err text-white",
   },
   failed: {
     glyph: "✕",
     word: "Failed",
-    chip: "text-white bg-err-solid border-err-solid",
-    dot: "rounded-full bg-white border-white text-err-solid",
+    chip: "text-white bg-err",
+    dot: "rounded-full bg-white border-white text-err",
   },
   interrupted: {
     glyph: "‖",
     word: "Interrupted",
-    chip: "text-int bg-int-bg border-int-bg",
+    chip: "text-int bg-int-soft",
     dot: "rounded-full border-int",
   },
   "dry-run": {
     glyph: "",
     word: "Dry run",
-    chip: "text-dry bg-dry-hatch border-dashed border-dry-border",
+    chip: "text-dry bg-dry-hatch border-dashed border-dry-line",
     dot: "rounded-full border-dashed border-dry",
   },
   skipped: {
     glyph: "–",
     word: "Skipped",
-    chip: "text-faint border-border",
-    dot: "rounded-full border-faint",
+    chip: "text-muted-foreground border-border bg-transparent",
+    dot: "rounded-full border-muted-foreground",
   },
 };
 
@@ -77,19 +79,22 @@ export const LOOKS: Record<State, Look> = {
 export function Chip({ state, label, title }: { state: State; label?: ReactNode; title?: string }) {
   const l = LOOKS[state];
   return (
-    <span
+    <Badge
       data-state={state}
       title={title}
-      className={`inline-flex h-6 max-w-full items-center gap-1.5 self-start whitespace-nowrap rounded-sm border pr-2 pl-1.5 text-small font-medium ${l.chip}`}
+      className={cn("h-6 max-w-full self-start rounded-md px-2 pl-1.5 text-xs font-medium", l.chip)}
     >
       <span
         aria-hidden="true"
-        className={`inline-flex size-3.5 flex-none items-center justify-center border-[1.5px] text-[9px] leading-none font-extrabold ${l.dot}`}
+        className={cn(
+          "inline-flex size-3.5 flex-none items-center justify-center border-[1.5px] text-[9px] leading-none font-extrabold",
+          l.dot,
+        )}
       >
         {l.glyph}
       </span>
       <span className="truncate">{label ?? l.word}</span>
-    </span>
+    </Badge>
   );
 }
 
@@ -111,7 +116,7 @@ export function Stale({
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <div className="flex min-w-0 flex-col gap-1.5 opacity-[.62]">{children}</div>
-      <span className="text-small text-muted">
+      <span className="text-xs text-muted-foreground">
         <span aria-hidden="true">↻ </span>
         {plain ? "Needs re-running" : `Stale: ${reason}`}
       </span>

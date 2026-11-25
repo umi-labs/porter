@@ -5,12 +5,12 @@ import { DatabaseSync } from "node:sqlite";
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, describe, expect, test } from "vitest";
-import { Chip, STATES } from "../components/ui/chip";
-import { SharedFrame } from "../components/ui/share-bar";
+import { Chip, STATES } from "@/components/porter/chip";
+import { SharedFrame } from "@/components/porter/share-bar";
 import { type RunRow, stageViews, storedViews } from "./stage-state";
 import { Overview } from "./view-parts";
 
-const OK = /(?<![\w-])(?:bg|text|border)-(?:on-)?ok(?:-bg)?(?![\w-])/;
+const OK = /(?<![\w-])(?:bg|text|border|fill)-ok(?:-soft|-foreground)?(?![\w-])/;
 
 test("clean is the only state that renders the ok class", () => {
   for (const s of STATES) {

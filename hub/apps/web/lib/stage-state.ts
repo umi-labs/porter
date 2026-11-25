@@ -1,4 +1,4 @@
-import { STATES, type State } from "../components/ui/chip";
+import { STATES, type State } from "@/components/porter/chip";
 
 // A version pushed by a current porter carries porter's own stage views (`porter --json status`'s `stage_views`,
 // from the engine's `stage_view`), so the hub shows what the desktop and TUI show: `storedViews`. Older versions

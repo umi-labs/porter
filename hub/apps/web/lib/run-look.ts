@@ -1,4 +1,4 @@
-import type { State } from "../components/ui/chip";
+import type { State } from "@/components/porter/chip";
 
 // No server imports: the run page's client component uses this too.
 

@@ -1,5 +1,5 @@
-import type { State } from "../components/ui/chip";
-import { STATES } from "../components/ui/chip";
+import type { State } from "@/components/porter/chip";
+import { STATES } from "@/components/porter/chip";
 import { fmtNum } from "./format";
 import { PIPELINE } from "./stage-state";
 
