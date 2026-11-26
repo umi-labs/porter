@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import Link from "next/link";
 import { forbidden, notFound } from "next/navigation";
 import type { ReactNode } from "react";
 import { Banner, type Tone } from "@/components/porter/banner";
@@ -38,6 +41,17 @@ export async function orStatus<T>(p: Promise<T>) {
 }
 
 export const NA = <em className="text-muted-foreground not-italic">Not available in this version.</em>;
+/** Set up on the hub and never run: the version is only porter.toml, with no project.db yet. */
+const notRun = (snap: Snapshot) => !existsSync(join(snap.dir, "project.db"));
+const NotRunYet = ({ plain }: { plain?: boolean }) => (
+  <Empty title="Not run yet">
+    {plain
+      ? "Your Umi team hasn’t run this project yet."
+      : "Run it from the overview. Results show here when the run finishes."}
+  </Empty>
+);
+/** Why a page has no data: never run, or a snapshot from a porter too old to record it. */
+const Missing = ({ snap }: { snap: Snapshot }) => (notRun(snap) ? <NotRunYet /> : <p>{NA}</p>);
 
 export function Empty({ title, children }: { title: string; children?: ReactNode }) {
   return (
@@ -99,15 +113,24 @@ export function DataTable({ head, children }: { head: ReactNode[]; children: Rea
   );
 }
 
-export function NoSnapshot({ plain }: { plain?: boolean }) {
+export function NoSnapshot({ plain, setupHref }: { plain?: boolean; setupHref?: string }) {
   return plain ? (
     <Empty title="Nothing to show yet">
       Your Umi team hasn’t shared results for this project yet. You can already send us your site files under
       Uploads.
     </Empty>
   ) : (
-    <Empty title="Nothing has been pushed to this project yet">
-      It appears here when someone pushes it from porter (<code>porter hub push</code>).
+    <Empty title="Nothing has been set up or pushed yet">
+      {setupHref ? (
+        <>
+          <Link href={setupHref}>Set up the source</Link> to run it here, or push it from porter (
+          <code>porter hub push</code>).
+        </>
+      ) : (
+        <>
+          It appears here when someone pushes it from porter (<code>porter hub push</code>).
+        </>
+      )}
     </Empty>
   );
 }
@@ -141,6 +164,7 @@ export function projectTabs(slug: string, role: Role, active: string): Tab[] {
     ["Issues", "/issues", roleCan(role, "view_raw")],
     ["URLs", "/urls", roleCan(role, "view_raw")],
     ["Uploads", "/uploads", roleCan(role, "view")],
+    ["Setup", "/setup", roleCan(role, "push")],
     [
       "Settings",
       "/settings",
@@ -332,6 +356,8 @@ export function Overview({
   issuesHref?: string;
 }) {
   const plain = audience === "client";
+  // Set up on the hub and never run: there is nothing but porter.toml yet.
+  const fresh = notRun(snap);
   const o = overview(snap.dir, snap.version.summary);
   const reports = listReports(snap.dir);
   const n = snap.version.number;
@@ -350,7 +376,7 @@ export function Overview({
           v{n}
         </Badge>
         <span>
-          Pushed {fmtDateTime(snap.version.createdAt)}
+          {fresh ? "Set up" : "Pushed"} {fmtDateTime(snap.version.createdAt)}
           {!plain && snap.version.porterVersion ? ` from porter ${snap.version.porterVersion}` : ""}
         </span>
         {/* Push messages are internal notes: staff only, never on a share link. */}
@@ -359,169 +385,184 @@ export function Overview({
         )}
         <span className="flex-1" />
         <span className="text-xs text-muted-foreground">
-          This page shows v{n} as pushed. It doesn’t update until someone pushes again.
+          {fresh
+            ? `v${n} hasn’t run yet.`
+            : `This page shows v${n} as pushed. It doesn’t update until someone pushes again.`}
         </span>
       </div>
 
-      {o.views && statusBanner(o.views, o.writes, sev("error"), n, plain)}
+      {fresh ? (
+        <Empty title="Not run yet">
+          {plain
+            ? "Your Umi team hasn’t run this project yet."
+            : "Run all stages below. The result shows here when the run finishes."}
+        </Empty>
+      ) : (
+        <>
+          {o.views && statusBanner(o.views, o.writes, sev("error"), n, plain)}
 
-      <Section title="Pipeline" aside="Six stages, left to right. Only a green stage has written its result.">
-        {o.views === null ? (
-          <p className="m-0">{NA}</p>
-        ) : (
-          <ol className="m-0 grid list-none grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-2.5 p-0">
-            {o.views.map((v, i) => {
-              const t = stageText(v, plain);
-              return (
-                <li
-                  key={v.stage}
-                  className="flex min-w-0 flex-col gap-2.5 rounded-lg border bg-background p-3.5"
-                  data-stage={v.stage}
-                >
-                  <span className="text-xs text-muted-foreground">
-                    {i + 1} · <b className="font-semibold text-foreground">{NAMES[v.stage]}</b>
-                  </span>
-                  <Stale reason={v.stale} plain={plain}>
-                    {v.state && <Chip state={v.state as State} label={t.label} />}
-                    <span className="text-xs text-muted-foreground">{t.sub}</span>
-                  </Stale>
-                </li>
-              );
-            })}
-          </ol>
-        )}
-      </Section>
-
-      <div className="flex flex-wrap gap-5">
-        <Section title={plain ? "What’s been found" : "Coverage"} className="flex-[1_1_420px]">
-          {o.coverage === null ? (
-            <p className="m-0">{NA}</p>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              <div className="flex gap-2">
-                <span className="flex-1 font-medium">{plain ? "Old web addresses" : "URLs"}</span>
-                <span>{fmtNum(o.coverage.mapped)}</span>
-                <span className="text-muted-foreground">of {fmtNum(o.coverage.routes)} mapped</span>
-              </div>
-              <Progress
-                aria-label="URLs mapped"
-                value={o.coverage.routes ? (o.coverage.mapped / o.coverage.routes) * 100 : 0}
-                className="[&_[data-slot=progress-indicator]]:bg-foreground/80"
-              />
-              <span className="text-xs text-muted-foreground">
-                {o.coverage.routes - o.coverage.mapped === 0
-                  ? plain
-                    ? "Every old address leads somewhere."
-                    : "Every URL maps to migrated content."
-                  : plain
-                    ? `${fmtNum(o.coverage.routes - o.coverage.mapped)} old links don’t lead anywhere yet.`
-                    : `${fmtNum(o.coverage.routes - o.coverage.mapped)} URLs don’t map to migrated content.`}
-              </span>
-            </div>
-          )}
-        </Section>
-
-        <Section
-          title="Issues"
-          className="flex-[1_1_360px]"
-          action={
-            !plain && issuesHref ? (
-              <a href={issuesHref} className="text-xs font-medium text-primary hover:underline">
-                Open issues table
-              </a>
-            ) : undefined
-          }
-        >
-          {o.issueCounts === null ? (
-            <p className="m-0">{NA}</p>
-          ) : (
-            <>
-              <div className="grid grid-cols-3 gap-2.5">
-                {(
-                  [
-                    ["error", plain ? "to fix" : "errors", "bg-err-soft text-err"],
-                    ["warning", plain ? "to review" : "warnings", "bg-warn-soft text-warn"],
-                    ["info", "info", "bg-muted text-muted-foreground"],
-                  ] as const
-                ).map(([s, label, cls]) => (
-                  <div key={s} className={`flex flex-col rounded-md p-3 ${cls}`}>
-                    <span className="text-2xl font-semibold">{fmtNum(sev(s))}</span>
-                    <span className="text-xs">{label}</span>
-                  </div>
-                ))}
-              </div>
-              {plain ? (
-                <span className="text-foreground/80">
-                  Your Umi team is working through these. Details stay with the team; you’ll see the counts
-                  drop as they’re fixed. Anything that needs your help will show up under Uploads.
-                </span>
-              ) : kinds.size === 0 ? (
-                <span className="text-muted-foreground">No open issues.</span>
-              ) : (
-                <ul className="m-0 flex list-none flex-col p-0">
-                  {[...kinds].map(([kind, k]) => (
-                    <li key={kind} className="flex gap-2 border-t py-1.5">
-                      <span className="min-w-0 flex-1 truncate font-mono text-xs">{kind}</span>
-                      <span
-                        className={`font-semibold ${k.error ? "text-err" : k.warning ? "text-warn" : "text-muted-foreground"}`}
-                      >
-                        {[
-                          k.error && `${fmtNum(k.error)} error${k.error === 1 ? "" : "s"}`,
-                          k.warning && `${fmtNum(k.warning)} warning${k.warning === 1 ? "" : "s"}`,
-                          k.info && `${fmtNum(k.info)} info`,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
+          <Section
+            title="Pipeline"
+            aside="Six stages, left to right. Only a green stage has written its result."
+          >
+            {o.views === null ? (
+              <p className="m-0">{NA}</p>
+            ) : (
+              <ol className="m-0 grid list-none grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-2.5 p-0">
+                {o.views.map((v, i) => {
+                  const t = stageText(v, plain);
+                  return (
+                    <li
+                      key={v.stage}
+                      className="flex min-w-0 flex-col gap-2.5 rounded-lg border bg-background p-3.5"
+                      data-stage={v.stage}
+                    >
+                      <span className="text-xs text-muted-foreground">
+                        {i + 1} · <b className="font-semibold text-foreground">{NAMES[v.stage]}</b>
                       </span>
+                      <Stale reason={v.stale} plain={plain}>
+                        {v.state && <Chip state={v.state as State} label={t.label} />}
+                        <span className="text-xs text-muted-foreground">{t.sub}</span>
+                      </Stale>
                     </li>
-                  ))}
-                </ul>
-              )}
-            </>
-          )}
-        </Section>
-      </div>
+                  );
+                })}
+              </ol>
+            )}
+          </Section>
 
-      <Section title={`Reports from v${n}`}>
-        {reports.length === 0 ? (
-          <p className="m-0 text-muted-foreground">No reports in this version.</p>
-        ) : (
-          <>
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-2.5">
-              {reports.map((r) => (
-                <a
-                  key={r}
-                  href={`${reportBase}/${encodeURIComponent(r)}`}
-                  className="press flex min-h-11 flex-col gap-0.5 rounded-lg border bg-background p-3.5 transition-colors hover:bg-muted"
-                >
-                  <span className="font-semibold">{humanReport(r)}</span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {r} · v{n}
-                  </span>
-                </a>
-              ))}
-            </div>
-            {reports
-              .filter((r) => r.endsWith(".html"))
-              .map((r) => (
-                <figure key={r} className="m-0 overflow-hidden rounded-lg border">
-                  <figcaption className="flex flex-wrap items-center gap-3 border-b bg-muted/50 px-3.5 py-2 text-xs">
-                    <span className="font-semibold">
-                      {r} · v{n}
-                    </span>
-                    <span className="text-muted-foreground">Sandboxed: no scripts, no network</span>
-                  </figcaption>
-                  <iframe
-                    title={r}
-                    sandbox=""
-                    src={`${reportBase}/${encodeURIComponent(r)}`}
-                    className="block h-[480px] w-full border-0 bg-white"
+          <div className="flex flex-wrap gap-5">
+            <Section title={plain ? "What’s been found" : "Coverage"} className="flex-[1_1_420px]">
+              {o.coverage === null ? (
+                <p className="m-0">{NA}</p>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex gap-2">
+                    <span className="flex-1 font-medium">{plain ? "Old web addresses" : "URLs"}</span>
+                    <span>{fmtNum(o.coverage.mapped)}</span>
+                    <span className="text-muted-foreground">of {fmtNum(o.coverage.routes)} mapped</span>
+                  </div>
+                  <Progress
+                    aria-label="URLs mapped"
+                    value={o.coverage.routes ? (o.coverage.mapped / o.coverage.routes) * 100 : 0}
+                    className="[&_[data-slot=progress-indicator]]:bg-foreground/80"
                   />
-                </figure>
-              ))}
-          </>
-        )}
-      </Section>
+                  <span className="text-xs text-muted-foreground">
+                    {o.coverage.routes - o.coverage.mapped === 0
+                      ? plain
+                        ? "Every old address leads somewhere."
+                        : "Every URL maps to migrated content."
+                      : plain
+                        ? `${fmtNum(o.coverage.routes - o.coverage.mapped)} old links don’t lead anywhere yet.`
+                        : `${fmtNum(o.coverage.routes - o.coverage.mapped)} URLs don’t map to migrated content.`}
+                  </span>
+                </div>
+              )}
+            </Section>
+
+            <Section
+              title="Issues"
+              className="flex-[1_1_360px]"
+              action={
+                !plain && issuesHref ? (
+                  <a href={issuesHref} className="text-xs font-medium text-primary hover:underline">
+                    Open issues table
+                  </a>
+                ) : undefined
+              }
+            >
+              {o.issueCounts === null ? (
+                <p className="m-0">{NA}</p>
+              ) : (
+                <>
+                  <div className="grid grid-cols-3 gap-2.5">
+                    {(
+                      [
+                        ["error", plain ? "to fix" : "errors", "bg-err-soft text-err"],
+                        ["warning", plain ? "to review" : "warnings", "bg-warn-soft text-warn"],
+                        ["info", "info", "bg-muted text-muted-foreground"],
+                      ] as const
+                    ).map(([s, label, cls]) => (
+                      <div key={s} className={`flex flex-col rounded-md p-3 ${cls}`}>
+                        <span className="text-2xl font-semibold">{fmtNum(sev(s))}</span>
+                        <span className="text-xs">{label}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {plain ? (
+                    <span className="text-foreground/80">
+                      Your Umi team is working through these. Details stay with the team; you’ll see the
+                      counts drop as they’re fixed. Anything that needs your help will show up under Uploads.
+                    </span>
+                  ) : kinds.size === 0 ? (
+                    <span className="text-muted-foreground">No open issues.</span>
+                  ) : (
+                    <ul className="m-0 flex list-none flex-col p-0">
+                      {[...kinds].map(([kind, k]) => (
+                        <li key={kind} className="flex gap-2 border-t py-1.5">
+                          <span className="min-w-0 flex-1 truncate font-mono text-xs">{kind}</span>
+                          <span
+                            className={`font-semibold ${k.error ? "text-err" : k.warning ? "text-warn" : "text-muted-foreground"}`}
+                          >
+                            {[
+                              k.error && `${fmtNum(k.error)} error${k.error === 1 ? "" : "s"}`,
+                              k.warning && `${fmtNum(k.warning)} warning${k.warning === 1 ? "" : "s"}`,
+                              k.info && `${fmtNum(k.info)} info`,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+            </Section>
+          </div>
+
+          <Section title={`Reports from v${n}`}>
+            {reports.length === 0 ? (
+              <p className="m-0 text-muted-foreground">No reports in this version.</p>
+            ) : (
+              <>
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-2.5">
+                  {reports.map((r) => (
+                    <a
+                      key={r}
+                      href={`${reportBase}/${encodeURIComponent(r)}`}
+                      className="press flex min-h-11 flex-col gap-0.5 rounded-lg border bg-background p-3.5 transition-colors hover:bg-muted"
+                    >
+                      <span className="font-semibold">{humanReport(r)}</span>
+                      <span className="truncate text-xs text-muted-foreground">
+                        {r} · v{n}
+                      </span>
+                    </a>
+                  ))}
+                </div>
+                {reports
+                  .filter((r) => r.endsWith(".html"))
+                  .map((r) => (
+                    <figure key={r} className="m-0 overflow-hidden rounded-lg border">
+                      <figcaption className="flex flex-wrap items-center gap-3 border-b bg-muted/50 px-3.5 py-2 text-xs">
+                        <span className="font-semibold">
+                          {r} · v{n}
+                        </span>
+                        <span className="text-muted-foreground">Sandboxed: no scripts, no network</span>
+                      </figcaption>
+                      <iframe
+                        title={r}
+                        sandbox=""
+                        src={`${reportBase}/${encodeURIComponent(r)}`}
+                        className="block h-[480px] w-full border-0 bg-white"
+                      />
+                    </figure>
+                  ))}
+              </>
+            )}
+          </Section>
+        </>
+      )}
     </>
   );
 }
@@ -538,7 +579,7 @@ export function IssuesView({
   full: boolean;
 }) {
   const p = issuesPage(snap.dir, page, full);
-  if (!p) return <p>{NA}</p>;
+  if (!p) return <Missing snap={snap} />;
   return (
     <Section
       title={full ? `Issues in v${snap.version.number}` : `Open issues in v${snap.version.number}`}
@@ -583,7 +624,7 @@ export function IssuesView({
 
 export function UrlsView({ snap, page, base }: { snap: Snapshot; page: number; base: string }) {
   const p = urlsPage(snap.dir, page);
-  if (!p) return <p>{NA}</p>;
+  if (!p) return <Missing snap={snap} />;
   return (
     <Section title={`URLs in v${snap.version.number}`} action={<Pager base={base} p={p} />}>
       {p.total === 0 ? (

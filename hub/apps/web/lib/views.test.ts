@@ -287,12 +287,16 @@ describe("snapshot queries", () => {
     expect(overview(d).stages).not.toBeNull();
     expect(urlsPage(d, 1)?.total).toBe(2);
   });
-  test("other errors (corrupt or missing database) propagate instead of reading as 'not available'", () => {
+  test("a corrupt database propagates instead of reading as 'not available'", () => {
     const bad = mkdtempSync(join(work, "bad-"));
     writeFileSync(join(bad, "project.db"), "this is not a sqlite database, not even close".repeat(50));
     expect(() => overview(bad)).toThrow();
     expect(() => issuesPage(bad, 1, true)).toThrow();
-    expect(() => overview(mkdtempSync(join(work, "none-")))).toThrow(); // no project.db at all
+  });
+  test("no project.db yet (set up on the hub, never run) reads as nothing yet", () => {
+    const o = overview(mkdtempSync(join(work, "none-")));
+    expect(o.stages).toBeNull();
+    expect(o.issueCounts).toBeNull();
   });
 });
 

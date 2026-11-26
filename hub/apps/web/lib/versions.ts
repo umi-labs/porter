@@ -35,7 +35,10 @@ const schemas = {
   n: z.coerce.number().int().min(1),
 };
 
-const latestOf = async (db: Db | Parameters<Parameters<Db["transaction"]>[0]>[0], projectId: string) => {
+export const latestOf = async (
+  db: Db | Parameters<Parameters<Db["transaction"]>[0]>[0],
+  projectId: string,
+) => {
   const [r] = await db
     .select({ n: sql<number | null>`max(${projectVersion.number})` })
     .from(projectVersion)
@@ -102,7 +105,7 @@ export async function getVersion(db: Db, actor: Actor, slug: string, n: string) 
 }
 
 /** A run's result lands as latest+1 built from its own base: a push now would be buried under it on the next pull. */
-async function refuseWhileRunning(
+export async function refuseWhileRunning(
   db: Db | Parameters<Parameters<Db["transaction"]>[0]>[0],
   projectId: string,
 ) {

@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import * as svc from "@/lib/projects";
 import { requireUser } from "@/lib/session";
 
-/** Staff only (createProject checks). The new project opens on its settings, to add people. */
+/** Staff only (createProject checks). The new project opens on its setup, to pick the source. */
 export async function createProject(_prev: unknown, f: FormData) {
   let slug: string;
   try {
@@ -18,5 +18,5 @@ export async function createProject(_prev: unknown, f: FormData) {
     if (e instanceof svc.HttpError) return { error: e.message };
     throw e;
   }
-  redirect(`/p/${slug}/settings`);
+  redirect(`/p/${slug}/setup`);
 }
