@@ -47,7 +47,10 @@ const secret = opt(
 
 const schema = z.object({
   adapter: z.string(),
-  kind: z.string(),
+  kinds: z.preprocess(
+    (v) => (typeof v === "string" ? v.split(",").filter(Boolean) : v),
+    z.array(z.string()).min(1, "choose at least one way in").max(8),
+  ),
   upload: opt(z.uuid()),
   url: opt(url),
   projectId: opt(
@@ -127,18 +130,24 @@ export async function saveSetup(db: Db, actor: Actor, slug: string, input: unkno
   // push is owners and developers, who may also manage secrets.
   const { project: p } = await access(db, actor, slug, "push");
   const s = parse(schema, input);
-  const way = wayOf(s.adapter, s.kind);
-  if (!way) throw new HttpError(400, "kind: not a way into this source");
-  if (way.input === "local-only")
-    throw new HttpError(400, `${way.label} runs locally only; run porter on your machine and push`);
-  if (way.input === "upload" && !s.upload) throw new HttpError(400, "upload: choose an uploaded file");
-  if (way.input === "url" && !s.url) throw new HttpError(400, "url: the site URL is required");
-  if (way.input === "sanity-api" && !(s.projectId && s.dataset))
+  const ways = s.kinds.map((k) => {
+    const w = wayOf(s.adapter, k);
+    if (!w) throw new HttpError(400, `kinds: ${k} is not a way into this source`);
+    if (w.input === "local-only")
+      throw new HttpError(400, `${w.label} runs locally only; run porter on your machine and push`);
+    return w;
+  });
+  const uses = (input: string) => ways.some((w) => w.input === input);
+  if (ways.filter((w) => w.input === "upload").length > 1)
+    throw new HttpError(400, "kinds: choose one uploaded file at a time");
+  if (uses("upload") && !s.upload) throw new HttpError(400, "upload: choose an uploaded file");
+  if (uses("url") && !s.url) throw new HttpError(400, "url: the site URL is required");
+  if (uses("sanity-api") && !(s.projectId && s.dataset))
     throw new HttpError(400, "projectId and dataset are required");
-  if (way.input === "none" && !s.siteUrl) throw new HttpError(400, "siteUrl: the live site URL is required");
+  if (uses("site") && !s.siteUrl) throw new HttpError(400, "siteUrl: the live site URL is required to crawl");
 
   let uploadName: string | undefined;
-  if (way.input === "upload") {
+  if (uses("upload")) {
     const [u] = await db
       .select({ filename: upload.filename, state: upload.state })
       .from(upload)
@@ -193,7 +202,7 @@ export async function saveSetup(db: Db, actor: Actor, slug: string, input: unkno
           size,
           // The old stage views were judged against the old porter.toml; the hub re-derives them from project.db.
           summary: null,
-          message: `source set up on the hub (${way.label})`,
+          message: `source set up on the hub (${ways.map((w) => w.label).join(", ")})`,
         })
         .returning({ id: projectVersion.id });
       if (base) {
@@ -225,7 +234,7 @@ export async function saveSetup(db: Db, actor: Actor, slug: string, input: unkno
           });
         await audit(tx, actor, p.id, "secret.put", name);
       }
-      await audit(tx, actor, p.id, "version.setup", v.id, { number, adapter: s.adapter, kind: s.kind });
+      await audit(tx, actor, p.id, "version.setup", v.id, { number, adapter: s.adapter, kinds: s.kinds });
       return number;
     });
     committed = true;

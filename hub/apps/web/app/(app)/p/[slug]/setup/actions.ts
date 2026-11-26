@@ -7,7 +7,7 @@ import { saveSetup } from "@/lib/setup";
 
 const FIELDS = [
   "adapter",
-  "kind",
+  "kinds",
   "upload",
   "url",
   "projectId",
