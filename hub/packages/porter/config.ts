@@ -110,3 +110,17 @@ export function readSetup(toml: string): (Setup & { uploadName?: string }) | nul
     destUrl: str((doc.destination as Toml | undefined)?.url),
   };
 }
+
+/** Sets `[destination]` to a Payload site (key from the PAYLOAD_API_KEY run secret); nothing else changes. */
+export function applyDestination(prev: string | null, name: string, url: string) {
+  const doc = (prev ? parse(prev) : {}) as Toml;
+  const project = (doc.project ?? {}) as Toml;
+  doc.project = { ...project, name: (project.name as string) || name };
+  doc.destination = {
+    ...((doc.destination ?? {}) as Toml),
+    adapter: "payload",
+    url,
+    api_key_env: PAYLOAD_KEY_ENV,
+  };
+  return stringify(doc);
+}

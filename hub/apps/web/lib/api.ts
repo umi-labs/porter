@@ -1,5 +1,7 @@
 import { getDb } from "@porter-hub/db";
+import { resolveServiceKey, SERVICE_KEY_PREFIX } from "@porter-hub/db/service-keys";
 import { getAuth } from "./auth";
+import * as foundry from "./foundry";
 import { getListener, type Listener } from "./listen";
 import type { Db } from "./permissions";
 import * as svc from "./projects";
@@ -53,6 +55,8 @@ export function makeApi(
   const slugOf = (p: P) => p.slug;
 
   return {
+    linkFoundry: route(async (a, r) => foundry.linkFoundry(db, a, await body(r))),
+    foundryStatus: route((a, r) => foundry.foundryStatus(db, a, new URL(r.url).searchParams.get("ref"))),
     listProjects: route((a) => svc.listProjects(db, a)),
     createProject: route(
       async (a, r) => svc.createProject(db, a, parse(schemas.createProject, await body(r))),
@@ -114,12 +118,17 @@ export function makeApi(
   };
 }
 
+/** A service key (`Bearer phk_…`, e.g. Foundry hub) acts as its bot user; anything else is a Better Auth session. */
+export async function actorOf(req: Request) {
+  const bearer = req.headers.get("authorization")?.match(/^Bearer\s+(\S+)$/i)?.[1];
+  if (bearer?.startsWith(SERVICE_KEY_PREFIX)) return resolveServiceKey(getDb(), bearer);
+  const s = await getAuth().api.getSession({ headers: req.headers });
+  return s ? { id: s.user.id } : null;
+}
+
 let instance: ReturnType<typeof makeApi> | undefined;
 /** The app's API, bound to the real database and Better Auth session. */
 export const getApi = () => {
-  instance ??= makeApi(getDb(), async (req) => {
-    const s = await getAuth().api.getSession({ headers: req.headers });
-    return s ? { id: s.user.id } : null;
-  });
+  instance ??= makeApi(getDb(), actorOf);
   return instance;
 };

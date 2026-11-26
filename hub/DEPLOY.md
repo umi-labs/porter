@@ -388,7 +388,27 @@ to roll back.
 Images are rebuilt on the server for each deploy. Prune old ones now and then (`docker image prune`); Dokploy has a
 cleanup setting for this.
 
-## 12. Caveats
+## 12. Foundry hub
+
+Foundry hub can create and link Porter projects, show their status on its site pages and post Slack notices
+when a run fails or an apply finishes. All of this is optional.
+
+1. **Service key.** Mint one for Foundry and paste it into Foundry's Porter integration, with this hub's URL:
+
+   ```sh
+   docker compose exec worker node_modules/.bin/tsx apps/worker/src/service-key.ts "Foundry hub"
+   ```
+
+   It's shown once; Porter keeps only its hash. The key acts as a staff bot user. Revoke it by setting
+   `service_key.revoked_at`.
+2. **Run notices.** In Foundry, choose _Set up notifications_ on the Porter integration. Set the URL and token it
+   shows as `FOUNDRY_WEBHOOK_URL` and `FOUNDRY_WEBHOOK_TOKEN`, then redeploy the worker.
+3. **Sign in with Foundry** (staff only). Register Porter as a client in Foundry with the redirect URI
+   `https://hub.example.com/api/auth/callback/foundry`. Then set `FOUNDRY_OIDC_ISSUER`
+   (`https://<foundry>/api/auth`), `FOUNDRY_OIDC_CLIENT_ID` and `FOUNDRY_OIDC_CLIENT_SECRET` on `web`. The
+   same staff rule as Google applies: a verified `STAFF_EMAIL_DOMAIN` address.
+
+## 13. Caveats
 
 - **Run secrets and the developer role.** Developers can store destination API keys as run secrets, which the hub
   never shows again. But a developer can also edit the project's `porter.toml` (push a version) and point the

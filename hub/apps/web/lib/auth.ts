@@ -17,7 +17,7 @@ import {
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware } from "better-auth/api";
-import { bearer, deviceAuthorization, magicLink, organization } from "better-auth/plugins";
+import { bearer, deviceAuthorization, genericOAuth, magicLink, organization } from "better-auth/plugins";
 import type { BetterAuthPlugin } from "better-auth/types";
 import { and, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { createTransport } from "nodemailer";
@@ -85,14 +85,17 @@ async function mayGetMagicLink(db: Db, email: string) {
 // The one staff org (org membership there = staff); shared with the worker's invite-staff script.
 export { ensureStaffOrg, staffOrgSlug };
 
-/** Adds a verified staff-domain user who signed in with Google to the staff org, once. */
+/** Providers whose verified staff-domain users become staff: Google and Foundry hub. */
+const STAFF_PROVIDERS = ["google", "foundry"];
+
+/** Adds a verified staff-domain user who signed in with Google or Foundry hub to the staff org, once. */
 async function provisionGoogleStaff(db: Db, userId: string, domain: string) {
   const [u] = await db.select().from(user).where(eq(user.id, userId));
   if (!u?.emailVerified || !isStaffEmail(u.email, domain)) return;
   const [google] = await db
     .select({ id: account.id })
     .from(account)
-    .where(and(eq(account.userId, userId), eq(account.providerId, "google")))
+    .where(and(eq(account.userId, userId), inArray(account.providerId, STAFF_PROVIDERS)))
     .limit(1);
   if (!google) return;
   const orgId = await ensureStaffOrg(db);
@@ -211,6 +214,14 @@ export function createAuth(
 
   const google = { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET, ...deps.google };
   if (google.clientId && !domain) throw new Error("STAFF_EMAIL_DOMAIN must be set when Google sign-in is on");
+  // Sign in with Foundry hub (OpenID Connect), for staff only; on when all three are set.
+  const foundry = {
+    issuer: (env.FOUNDRY_OIDC_ISSUER ?? "").replace(/\/$/, ""),
+    clientId: env.FOUNDRY_OIDC_CLIENT_ID ?? "",
+    clientSecret: env.FOUNDRY_OIDC_CLIENT_SECRET ?? "",
+  };
+  const foundryOn = !!(foundry.issuer && foundry.clientId && foundry.clientSecret);
+  if (foundryOn && !domain) throw new Error("STAFF_EMAIL_DOMAIN must be set when Foundry sign-in is on");
 
   const staffDeviceApproval = {
     id: "porter-staff-device-approval",
@@ -350,6 +361,30 @@ export function createAuth(
       deviceAuthorization({ validateClient: (id) => id === CLI_CLIENT_ID, verificationUri: "/device" }),
       bearer(),
       staffDeviceApproval,
+      ...(foundryOn
+        ? [
+            genericOAuth({
+              config: [
+                {
+                  providerId: "foundry",
+                  discoveryUrl: `${foundry.issuer}/.well-known/openid-configuration`,
+                  clientId: foundry.clientId,
+                  clientSecret: foundry.clientSecret,
+                  scopes: ["openid", "email", "profile"],
+                  pkce: true,
+                  mapProfileToUser: (p) => {
+                    if (p.emailVerified !== true || !p.email || !isStaffEmail(p.email, domain)) {
+                      throw new APIError("FORBIDDEN", {
+                        message: "Foundry sign-in is for staff accounts only",
+                      });
+                    }
+                    return {};
+                  },
+                },
+              ],
+            }),
+          ]
+        : []),
     ],
   });
   return auth;

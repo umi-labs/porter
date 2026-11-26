@@ -38,6 +38,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { claim, reclaimLost } from "./claim";
 import { cleanScratch, execute, outcome, type Settings } from "./execute";
+import { notifyFoundry } from "./foundry-hook";
 import { sweepUploads } from "./sweep";
 
 process.env.HUB_SECRET_KEY = randomBytes(32).toString("base64");
@@ -690,5 +691,51 @@ describe("set up on the hub", () => {
     expect(r.state).toBe("failed");
     expect(r.error).toBe(`uploads/${id}/basic.xml is not a finished upload on this project any more`);
     expect(r.resultVersionId).toBeNull();
+  });
+
+  test("a run on a Foundry-linked project is posted to Foundry's webhook; unlinked or unconfigured, nothing", async () => {
+    const v = await setupVersion(randomUUID(), "ready");
+    const { run: r } = await runOn(v, ["analyse"]);
+    const sent: { url: string; init: RequestInit }[] = [];
+    const fake = (async (url: string, init: RequestInit) => {
+      sent.push({ url, init });
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+
+    await notifyFoundry(conn.db, r.id, fake); // no env: nothing
+    process.env.FOUNDRY_WEBHOOK_URL = "https://foundry.test/api/webhooks/porter?c=abc";
+    process.env.FOUNDRY_WEBHOOK_TOKEN = "tok";
+    process.env.BETTER_AUTH_URL = "https://porter.test";
+    try {
+      await notifyFoundry(conn.db, r.id, fake); // not linked: nothing
+      expect(sent).toHaveLength(0);
+      await conn.db.update(project).set({ foundryRef: "acme/site" }).where(eq(project.id, pid));
+      await notifyFoundry(conn.db, r.id, fake);
+      expect(sent).toHaveLength(1);
+      expect(sent[0].url).toBe("https://foundry.test/api/webhooks/porter?c=abc");
+      expect((sent[0].init.headers as Record<string, string>).authorization).toBe("Bearer tok");
+      expect(JSON.parse(String(sent[0].init.body))).toEqual({
+        event: "run.finished",
+        ref: "acme/site",
+        porter_url: `https://porter.test/p/acme/runs/${r.id}`,
+        run: {
+          id: r.id,
+          state: "finished",
+          stages: ["analyse"],
+          apply: false,
+          exit_code: 0,
+          error: null,
+          result_version: expect.any(Number),
+        },
+      });
+      // A Foundry that's down never fails anything.
+      await notifyFoundry(conn.db, r.id, (async () => {
+        throw new Error("down");
+      }) as unknown as typeof fetch);
+    } finally {
+      delete process.env.FOUNDRY_WEBHOOK_URL;
+      delete process.env.FOUNDRY_WEBHOOK_TOKEN;
+      await conn.db.update(project).set({ foundryRef: null }).where(eq(project.id, pid));
+    }
   });
 });
