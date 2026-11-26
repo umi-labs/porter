@@ -1,5 +1,6 @@
 import { getDb } from "@porter-hub/db";
 import { notFound } from "next/navigation";
+import { ProjectFrame } from "@/components/porter/app-frame";
 import { PageTitle } from "@/components/porter/frame";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +14,7 @@ import { access, HttpError, listInvitations, listMembers } from "@/lib/projects"
 import { listSecrets } from "@/lib/secrets";
 import { requireUser } from "@/lib/session";
 import { listShares } from "@/lib/shares";
-import { DataTable, ProjectFrame, Section } from "@/lib/view-parts";
+import { DataTable, Section } from "@/lib/view-parts";
 import { deleteSecret, invite, removeMember, revoke, revokeShare, setRole } from "./actions";
 import { SecretForm } from "./secret-form";
 import { ShareForm } from "./share-form";

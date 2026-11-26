@@ -5,7 +5,6 @@ import { forbidden, notFound } from "next/navigation";
 import type { ReactNode } from "react";
 import { Banner, type Tone } from "@/components/porter/banner";
 import { Chip, Stale, type State } from "@/components/porter/chip";
-import { Frame, type Tab } from "@/components/porter/frame";
 import { Resolution, SeverityTag } from "@/components/porter/severity";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,7 +20,6 @@ import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { fmtDateTime, fmtNum } from "./format";
-import { type Role, roleCan } from "./permissions";
 import { HttpError } from "./projects";
 import type { Page, Snapshot } from "./snapshot-reader";
 import { issuesPage, listReports, overview, urlsPage } from "./snapshot-reader";
@@ -154,52 +152,6 @@ export function Pager({ base, p }: { base: string; p: Page<unknown> }) {
         )}
       </PaginationContent>
     </Pagination>
-  );
-}
-
-/** The project's tabs for this role. Clients get Overview and Uploads only. */
-export function projectTabs(slug: string, role: Role, active: string): Tab[] {
-  const tabs: [string, string, boolean][] = [
-    ["Overview", "", true],
-    ["Issues", "/issues", roleCan(role, "view_raw")],
-    ["URLs", "/urls", roleCan(role, "view_raw")],
-    ["Uploads", "/uploads", roleCan(role, "view")],
-    ["Setup", "/setup", roleCan(role, "push")],
-    [
-      "Settings",
-      "/settings",
-      roleCan(role, "share") || roleCan(role, "manage_members") || roleCan(role, "manage_secrets"),
-    ],
-  ];
-  return tabs
-    .filter(([, , ok]) => ok)
-    .map(([label, path]) => ({ label, href: `/p/${slug}${path}`, active: label === active }));
-}
-
-/** A signed-in project page: header, the role's tabs, then the content. */
-export function ProjectFrame({
-  project,
-  role,
-  user,
-  active,
-  children,
-}: {
-  project: { name: string; slug: string };
-  role: Role;
-  user: { name: string; email: string };
-  active: string;
-  children: ReactNode;
-}) {
-  return (
-    <Frame
-      crumbs={[{ label: "Projects", href: "/" }, { label: project.name }]}
-      who={user.name || user.email}
-      role={role}
-      tabs={projectTabs(project.slug, role, active)}
-      narrow={role === "client"}
-    >
-      {children}
-    </Frame>
   );
 }
 

@@ -1,8 +1,9 @@
 import { getDb } from "@porter-hub/db";
+import { ProjectFrame } from "@/components/porter/app-frame";
 import { PageTitle } from "@/components/porter/frame";
 import { requireUser } from "@/lib/session";
 import { pageNum } from "@/lib/snapshot-reader";
-import { IssuesView, NoSnapshot, orStatus, ProjectFrame } from "@/lib/view-parts";
+import { IssuesView, NoSnapshot, orStatus } from "@/lib/view-parts";
 import { loadProject } from "@/lib/views";
 
 export const dynamic = "force-dynamic";

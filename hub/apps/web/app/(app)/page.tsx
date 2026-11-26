@@ -1,8 +1,9 @@
 import { getDb } from "@porter-hub/db";
 import { ChevronRightIcon, FolderIcon } from "lucide-react";
 import Link from "next/link";
+import { AppFrame } from "@/components/porter/app-frame";
 import { Chip } from "@/components/porter/chip";
-import { Frame, PageTitle } from "@/components/porter/frame";
+import { PageTitle } from "@/components/porter/frame";
 import {
   Empty,
   EmptyContent,
@@ -26,7 +27,7 @@ export default async function Home() {
   const user = await requireUser();
   const [projects, staff] = await Promise.all([listProjects(getDb(), user), isStaff(getDb(), user)]);
   return (
-    <Frame who={user.name || user.email} narrow>
+    <AppFrame user={user} narrow>
       <PageTitle title="Projects" />
       {projects.length === 0 ? (
         <Empty className="animate-enter min-h-[260px] border bg-card">
@@ -80,6 +81,6 @@ export default async function Home() {
         </ItemGroup>
       )}
       {staff && <NewProjectForm />}
-    </Frame>
+    </AppFrame>
   );
 }

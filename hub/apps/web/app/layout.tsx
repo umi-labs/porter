@@ -13,7 +13,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={cn("font-sans", sans.variable, mono.variable)} suppressHydrationWarning>
       <body className="min-h-dvh bg-muted/40">
-        {/* Follows the OS theme, as before; no toggle. */}
+        {/* Follows the OS theme until the user picks one from the sidebar menu. */}
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           {children}
         </ThemeProvider>

@@ -1,10 +1,11 @@
 import { getDb } from "@porter-hub/db";
+import { ProjectFrame } from "@/components/porter/app-frame";
 import { RunLive } from "@/components/run-live";
 import { roleCan } from "@/lib/permissions";
 import { access } from "@/lib/projects";
 import { getRun } from "@/lib/runs";
 import { requireUser } from "@/lib/session";
-import { orStatus, ProjectFrame } from "@/lib/view-parts";
+import { orStatus } from "@/lib/view-parts";
 
 export const dynamic = "force-dynamic";
 
