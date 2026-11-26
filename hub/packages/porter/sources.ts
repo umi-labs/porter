@@ -22,7 +22,12 @@ export const SOURCES: Source[] = [
         input: "upload",
         hint: "Tools → Export in wp-admin (.xml)",
       },
-      { kind: "wp-rest", label: "WordPress REST API", input: "url", hint: "The site's public REST API" },
+      {
+        kind: "wp-rest",
+        label: "WordPress REST API",
+        input: "url",
+        hint: "The site, or any /wp-json/ URL on it",
+      },
       {
         kind: "crawl-only",
         label: "Crawl the live site only",
@@ -67,6 +72,9 @@ export const SOURCES: Source[] = [
 /** Run-secret names the setup form writes; porter.toml only ever names them. */
 export const SANITY_TOKEN_ENV = "PORTER_SANITY_TOKEN";
 export const PAYLOAD_KEY_ENV = "PAYLOAD_API_KEY";
+/** porter's wp-rest connector reads these (basic auth: a WordPress application password). */
+export const WP_USER_ENV = "PORTER_WP_USERNAME";
+export const WP_PASSWORD_ENV = "PORTER_WP_PASSWORD";
 
 /** What the setup form submits (and reads back from a porter.toml). */
 export type Setup = {

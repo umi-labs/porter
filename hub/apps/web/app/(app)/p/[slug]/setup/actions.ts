@@ -16,6 +16,8 @@ const FIELDS = [
   "destUrl",
   "sanityToken",
   "payloadKey",
+  "wpUser",
+  "wpPassword",
 ];
 
 /** Saves the source setup as a new version. */

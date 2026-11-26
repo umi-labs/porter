@@ -4,7 +4,15 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { project, projectVersion, runSecret, upload, versionMedia } from "@porter-hub/db";
-import { applySetup, PAYLOAD_KEY_ENV, readSetup, SANITY_TOKEN_ENV, wayOf } from "@porter-hub/porter/config";
+import {
+  applySetup,
+  PAYLOAD_KEY_ENV,
+  readSetup,
+  SANITY_TOKEN_ENV,
+  WP_PASSWORD_ENV,
+  WP_USER_ENV,
+  wayOf,
+} from "@porter-hub/porter/config";
 import { encryptSecret } from "@porter-hub/porter/secrets";
 import { packTarZst } from "@porter-hub/storage/tar";
 import { and, desc, eq } from "drizzle-orm";
@@ -59,6 +67,8 @@ const schema = z.object({
   /** Write-only: stored as run secrets, never in porter.toml. */
   sanityToken: secret,
   payloadKey: secret,
+  wpUser: secret,
+  wpPassword: secret,
 });
 
 const latestVersion = async (db: Db | Tx, projectId: string) =>
@@ -98,6 +108,7 @@ export async function getSetup(db: Db, actor: Actor, slug: string) {
     uploads,
     hasSanityToken: secrets.some((s) => s.name === SANITY_TOKEN_ENV),
     hasPayloadKey: secrets.some((s) => s.name === PAYLOAD_KEY_ENV),
+    hasWpLogin: secrets.some((s) => s.name === WP_PASSWORD_ENV),
   };
 }
 
@@ -200,6 +211,8 @@ export async function saveSetup(db: Db, actor: Actor, slug: string, input: unkno
       for (const [name, value] of [
         [SANITY_TOKEN_ENV, s.sanityToken],
         [PAYLOAD_KEY_ENV, s.payloadKey],
+        [WP_USER_ENV, s.wpUser],
+        [WP_PASSWORD_ENV, s.wpPassword],
       ] as const) {
         if (!value) continue;
         const enc = encryptSecret(p.id, name, value);

@@ -190,7 +190,7 @@ impl WpRestConnector {
             _ => Default::default(),
         };
         Self {
-            url: url.trim_end_matches('/').to_string(),
+            url: site_root(&url),
             auth,
             keyring,
         }
@@ -975,8 +975,37 @@ impl Connector for WpRestConnector {
     }
 }
 
+/// The site root from a site URL or any REST URL people paste
+/// (`https://example.com/wp-json/wp/v2/pages/` -> `https://example.com`).
+fn site_root(url: &str) -> String {
+    let url = url.trim().trim_end_matches('/');
+    match url.find("/wp-json") {
+        Some(i) => url[..i].to_string(),
+        None => url.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn site_root_from_pasted_rest_urls() {
+        for (given, want) in [
+            ("https://example.com", "https://example.com"),
+            ("https://example.com/", "https://example.com"),
+            ("https://example.com/wp-json", "https://example.com"),
+            (
+                "https://example.com/wp-json/wp/v2/pages/",
+                "https://example.com",
+            ),
+            (
+                "https://example.com/blog/wp-json/wp/v2/posts?per_page=5",
+                "https://example.com/blog",
+            ),
+        ] {
+            assert_eq!(super::site_root(given), want, "{given}");
+        }
+    }
+
     use super::*;
 
     #[test]

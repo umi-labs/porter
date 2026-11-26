@@ -30,12 +30,14 @@ export function SetupForm({
   uploads,
   hasSanityToken,
   hasPayloadKey,
+  hasWpLogin,
 }: {
   slug: string;
   current: Setup | null;
   uploads: Upload[];
   hasSanityToken: boolean;
   hasPayloadKey: boolean;
+  hasWpLogin: boolean;
 }) {
   const [state, action, pending] = useActionState<State, FormData>(save.bind(null, slug), null);
   const [adapter, setAdapter] = useState(current?.adapter || SOURCES[0].adapter);
@@ -124,17 +126,49 @@ export function SetupForm({
           </Field>
         )}
         {way.input === "url" && (
-          <Field>
-            <FieldLabel htmlFor="setup-url">Site URL</FieldLabel>
-            <Input
-              id="setup-url"
-              name="url"
-              type="url"
-              required
-              defaultValue={current?.url}
-              placeholder="https://example.com"
-            />
-          </Field>
+          <>
+            <Field>
+              <FieldLabel htmlFor="setup-url">Site URL</FieldLabel>
+              <Input
+                id="setup-url"
+                name="url"
+                type="url"
+                required
+                defaultValue={current?.url}
+                placeholder="https://example.com"
+              />
+              <FieldDescription>The site, or any /wp-json/ URL on it.</FieldDescription>
+            </Field>
+            <FieldSet>
+              <FieldLegend variant="label">WordPress login (optional)</FieldLegend>
+              <FieldDescription>
+                Without one, porter sees published content only: no drafts, menus, settings or user details.
+                Use an application password (Users → Profile → Application Passwords), not the account
+                password. Kept encrypted as run secrets.
+              </FieldDescription>
+              <div className="flex flex-wrap gap-3">
+                <Field className="flex-[1_1_200px]">
+                  <FieldLabel htmlFor="setup-wpuser">Username</FieldLabel>
+                  <Input
+                    id="setup-wpuser"
+                    name="wpUser"
+                    autoComplete="off"
+                    placeholder={hasWpLogin ? "Saved. Type a new one to replace it" : ""}
+                  />
+                </Field>
+                <Field className="flex-[1_1_200px]">
+                  <FieldLabel htmlFor="setup-wppass">Application password</FieldLabel>
+                  <Input
+                    id="setup-wppass"
+                    name="wpPassword"
+                    type="password"
+                    autoComplete="off"
+                    placeholder={hasWpLogin ? "Saved. Type a new one to replace it" : ""}
+                  />
+                </Field>
+              </div>
+            </FieldSet>
+          </>
         )}
         {way.input === "sanity-api" && (
           <>

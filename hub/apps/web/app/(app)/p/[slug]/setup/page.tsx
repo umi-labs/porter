@@ -28,6 +28,7 @@ export default async function SetupPage({ params }: { params: Promise<{ slug: st
           uploads={s.uploads}
           hasSanityToken={s.hasSanityToken}
           hasPayloadKey={s.hasPayloadKey}
+          hasWpLogin={s.hasWpLogin}
         />
       </Section>
     </ProjectFrame>

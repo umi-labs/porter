@@ -186,4 +186,22 @@ describe("setup on the hub", () => {
       .where(and(eq(runSecret.projectId, pid), eq(runSecret.name, "PORTER_SANITY_TOKEN")));
     expect(decryptSecret(pid, tok.name, tok)).toBe("sk-secret-token");
   });
+
+  test("WordPress REST: the pasted URL is kept for porter, the login goes to run secrets", async () => {
+    await saveSetup(conn.db, as("dev"), "acme", {
+      adapter: "wordpress",
+      kind: "wp-rest",
+      url: "https://hotel.example.com/wp-json/wp/v2/pages/",
+      wpUser: "harry",
+      wpPassword: "abcd efgh ijkl mnop",
+    });
+    const toml = readFileSync(join(await versionDir(await latest()), "porter.toml"), "utf8");
+    expect(toml).toContain('url = "https://hotel.example.com/wp-json/wp/v2/pages/"');
+    expect(toml).not.toContain("abcd efgh");
+    const rows = await conn.db.select().from(runSecret).where(eq(runSecret.projectId, pid));
+    const got = Object.fromEntries(rows.map((r) => [r.name, decryptSecret(pid, r.name, r)]));
+    expect(got.PORTER_WP_USERNAME).toBe("harry");
+    expect(got.PORTER_WP_PASSWORD).toBe("abcd efgh ijkl mnop");
+    expect((await getSetup(conn.db, as("dev"), "acme")).hasWpLogin).toBe(true);
+  });
 });
