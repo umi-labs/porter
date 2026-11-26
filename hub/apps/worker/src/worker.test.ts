@@ -650,7 +650,7 @@ describe("set up on the hub", () => {
     const dir = mkdtempSync(join(tmp, "setup-"));
     writeFileSync(
       join(dir, "porter.toml"),
-      applySetup(null, "Acme", { adapter: "wordpress", kind: "wxr", upload: uploadId }, "basic.xml"),
+      applySetup(null, "Acme", { adapter: "wordpress", kinds: ["wxr"], upload: uploadId }, "basic.xml"),
     );
     const out = join(tmp, `${randomUUID()}.tar.zst`);
     await packTarZst(dir, out);

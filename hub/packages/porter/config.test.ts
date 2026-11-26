@@ -11,7 +11,7 @@ describe("setup toml", () => {
       "Acme",
       {
         adapter: "wordpress",
-        kind: "wxr",
+        kinds: ["wxr", "crawl"],
         upload: ID,
         siteUrl: "https://old.example.com",
         destUrl: "https://cms.example.com",
@@ -31,7 +31,7 @@ describe("setup toml", () => {
     });
     expect(readSetup(toml)).toMatchObject({
       adapter: "wordpress",
-      kind: "wxr",
+      kinds: ["wxr", "crawl"],
       upload: ID,
       uploadName: "export.xml",
       siteUrl: "https://old.example.com",
@@ -44,7 +44,7 @@ describe("setup toml", () => {
     const prev = `[project]\nname = "Old"\n[source]\nadapter = "wordpress"\n[[connectors]]\nkind = "wp-db"\ndump = "d.sql"\n[mapping.types.post]\ncollection = "posts"\n[[tidy]]\nkind = "merge-types"\n`;
     const toml = applySetup(prev, "New", {
       adapter: "sanity",
-      kind: "sanity-api",
+      kinds: ["sanity-api"],
       projectId: "abc",
       dataset: "production",
     });
@@ -60,14 +60,39 @@ describe("setup toml", () => {
     // Clearing the live site drops its crawl and its verify check.
     const withSite = applySetup(prev, "New", {
       adapter: "wordpress",
-      kind: "crawl-only",
+      kinds: ["crawl"],
       siteUrl: "https://old.example.com",
     });
     const cleared = parse(
-      applySetup(withSite, "New", { adapter: "wordpress", kind: "wp-rest", url: "https://old.example.com" }),
+      applySetup(withSite, "New", {
+        adapter: "wordpress",
+        kinds: ["wp-rest"],
+        url: "https://old.example.com",
+      }),
     ) as Record<string, any>;
     expect(cleared.verify).toBeUndefined();
     expect(cleared.connectors).toEqual([{ kind: "wp-rest", url: "https://old.example.com" }]);
+  });
+
+  test("REST and a crawl together; a pasted REST URL as the live site crawls the site root", () => {
+    const rest = "https://hotel.example.com/wp-json/wp/v2/pages/";
+    const toml = applySetup(null, "Hotel", {
+      adapter: "wordpress",
+      kinds: ["wp-rest", "crawl"],
+      url: rest,
+      siteUrl: rest,
+    });
+    const doc = parse(toml) as Record<string, any>;
+    expect(doc.connectors).toEqual([
+      { kind: "wp-rest", url: rest },
+      { kind: "crawl", url: "https://hotel.example.com" },
+    ]);
+    expect(doc.verify.site_url).toBe("https://hotel.example.com");
+    expect(readSetup(toml)).toMatchObject({
+      kinds: ["wp-rest", "crawl"],
+      url: rest,
+      siteUrl: "https://hotel.example.com",
+    });
   });
 
   test("uploadRefs only takes uploads/<uuid>/<name> paths", () => {

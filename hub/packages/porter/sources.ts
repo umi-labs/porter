@@ -1,14 +1,14 @@
 // No dependencies: the browser imports this (setup form).
 
 /** Where a connector's input comes from. */
-export type Input = "upload" | "url" | "sanity-api" | "local-only" | "none";
+export type Input = "upload" | "url" | "sanity-api" | "site" | "local-only";
 
 export type Way = { kind: string; label: string; input: Input; hint: string };
 export type Source = { adapter: string; label: string; ways: Way[] };
 
 /**
- * Each porter source and the ways in to it, as the hub's setup form offers them. `kind` is the porter.toml
- * connector kind; "crawl-only" adds no connector beyond the live-site crawl. wp-db is never run on the hub (it
+ * Each porter source and the ways in to it, as the hub's setup form offers them; a project may use several.
+ * `kind` is the porter.toml connector kind. wp-db is never run on the hub (it
  * runs the client's PHP in Docker): it is listed so people see where it went.
  */
 export const SOURCES: Source[] = [
@@ -28,12 +28,7 @@ export const SOURCES: Source[] = [
         input: "url",
         hint: "The site, or any /wp-json/ URL on it",
       },
-      {
-        kind: "crawl-only",
-        label: "Crawl the live site only",
-        input: "none",
-        hint: "Needs the live site URL",
-      },
+      { kind: "crawl", label: "Crawl the live site", input: "site", hint: "Old URLs, media and live pages" },
       {
         kind: "wp-db",
         label: "Database dump",
@@ -58,6 +53,7 @@ export const SOURCES: Source[] = [
         input: "sanity-api",
         hint: "Project id, dataset and a read token",
       },
+      { kind: "crawl", label: "Crawl the live site", input: "site", hint: "Old URLs, media and live pages" },
     ],
   },
   {
@@ -65,6 +61,7 @@ export const SOURCES: Source[] = [
     label: "Umbraco",
     ways: [
       { kind: "umbraco-json", label: "Umbraco JSON export", input: "upload", hint: "The JSON export file" },
+      { kind: "crawl", label: "Crawl the live site", input: "site", hint: "Old URLs, media and live pages" },
     ],
   },
 ];
@@ -79,14 +76,15 @@ export const WP_PASSWORD_ENV = "PORTER_WP_PASSWORD";
 /** What the setup form submits (and reads back from a porter.toml). */
 export type Setup = {
   adapter: string;
-  kind: string;
+  /** Connector kinds, any of the source's ways except local-only ones. */
+  kinds: string[];
   /** Upload id, for `upload` ways. */
   upload?: string;
   /** Site root, for wp-rest. */
   url?: string;
   projectId?: string;
   dataset?: string;
-  /** The old live site: crawled, and checked by verify. */
+  /** The old live site, for the crawl: also checked by verify. */
   siteUrl?: string;
   /** Payload admin URL. */
   destUrl?: string;
@@ -94,3 +92,6 @@ export type Setup = {
 
 export const wayOf = (adapter: string, kind: string) =>
   SOURCES.find((s) => s.adapter === adapter)?.ways.find((w) => w.kind === kind);
+
+/** The site root from a site URL or any WordPress REST URL (`https://x.com/wp-json/wp/v2/pages/` -> `https://x.com`). */
+export const siteRoot = (url: string) => url.trim().split("/wp-json")[0].replace(/\/+$/, "");

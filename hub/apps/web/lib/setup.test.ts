@@ -88,16 +88,32 @@ afterAll(async () => {
 
 describe("setup on the hub", () => {
   test("only people who can push may set up; bad choices are refused", async () => {
-    const ok = { adapter: "wordpress", kind: "crawl-only", siteUrl: "https://old.example.com" };
+    const ok = { adapter: "wordpress", kinds: ["crawl"], siteUrl: "https://old.example.com" };
     expect(await status(saveSetup(conn.db, as("viewer"), "acme", ok))).toBe(403);
     expect(await status(saveSetup(conn.db, as("client"), "acme", ok))).toBe(403);
-    expect(await status(saveSetup(conn.db, as("dev"), "acme", { adapter: "wordpress", kind: "wp-db" }))).toBe(
+    expect(
+      await status(saveSetup(conn.db, as("dev"), "acme", { adapter: "wordpress", kinds: ["wp-db"] })),
+    ).toBe(400);
+    expect(await status(saveSetup(conn.db, as("dev"), "acme", { adapter: "sanity", kinds: ["wxr"] }))).toBe(
       400,
     );
-    expect(await status(saveSetup(conn.db, as("dev"), "acme", { adapter: "sanity", kind: "wxr" }))).toBe(400);
+    expect(await status(saveSetup(conn.db, as("dev"), "acme", { adapter: "wordpress", kinds: [] }))).toBe(
+      400,
+    );
+    // A runnable way alongside a local-only one is still refused: wp-db never goes in from the hub.
+    expect(await status(saveSetup(conn.db, as("dev"), "acme", { ...ok, kinds: ["crawl", "wp-db"] }))).toBe(
+      400,
+    );
+    expect(
+      await status(saveSetup(conn.db, as("dev"), "acme", { adapter: "wordpress", kinds: ["crawl"] })),
+    ).toBe(400);
     expect(
       await status(
-        saveSetup(conn.db, as("dev"), "acme", { ...ok, kind: "wxr", upload: await addUpload("uploading") }),
+        saveSetup(conn.db, as("dev"), "acme", {
+          ...ok,
+          kinds: ["wxr"],
+          upload: await addUpload("uploading"),
+        }),
       ),
     ).toBe(400);
     expect(
@@ -110,7 +126,7 @@ describe("setup on the hub", () => {
     const up = await addUpload("ready");
     const { number } = await saveSetup(conn.db, as("dev"), "acme", {
       adapter: "wordpress",
-      kind: "wxr",
+      kinds: ["wxr"],
       upload: up,
       destUrl: "https://cms.example.com",
       payloadKey: "key-123456",
@@ -123,7 +139,7 @@ describe("setup on the hub", () => {
     expect(decryptSecret(pid, s.name, s)).toBe("key-123456");
 
     const g = await getSetup(conn.db, as("dev"), "acme");
-    expect(g.current).toMatchObject({ adapter: "wordpress", kind: "wxr", upload: up });
+    expect(g.current).toMatchObject({ adapter: "wordpress", kinds: ["wxr"], upload: up });
     expect(g.hasPayloadKey).toBe(true);
 
     // Runnable from the dashboard; and no setup while that run is active.
@@ -131,7 +147,7 @@ describe("setup on the hub", () => {
     expect(r.base_version).toBe(1);
     expect(
       await status(
-        saveSetup(conn.db, as("dev"), "acme", { adapter: "umbraco", kind: "umbraco-json", upload: up }),
+        saveSetup(conn.db, as("dev"), "acme", { adapter: "umbraco", kinds: ["umbraco-json"], upload: up }),
       ),
     ).toBe(409);
     await cancelRun(conn.db, as("dev"), "acme", r.id);
@@ -165,7 +181,7 @@ describe("setup on the hub", () => {
 
     const { number } = await saveSetup(conn.db, as("dev"), "acme", {
       adapter: "sanity",
-      kind: "sanity-api",
+      kinds: ["sanity-api"],
       projectId: "abc123",
       dataset: "production",
       sanityToken: "sk-secret-token",
@@ -190,7 +206,7 @@ describe("setup on the hub", () => {
   test("WordPress REST: the pasted URL is kept for porter, the login goes to run secrets", async () => {
     await saveSetup(conn.db, as("dev"), "acme", {
       adapter: "wordpress",
-      kind: "wp-rest",
+      kinds: ["wp-rest"],
       url: "https://hotel.example.com/wp-json/wp/v2/pages/",
       wpUser: "harry",
       wpPassword: "abcd efgh ijkl mnop",

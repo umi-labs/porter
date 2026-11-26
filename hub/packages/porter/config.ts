@@ -1,5 +1,5 @@
 import { parse, stringify } from "smol-toml";
-import { PAYLOAD_KEY_ENV, SANITY_TOKEN_ENV, type Setup } from "./sources";
+import { PAYLOAD_KEY_ENV, SANITY_TOKEN_ENV, type Setup, siteRoot } from "./sources";
 
 export * from "./sources";
 export * from "./stages";
@@ -58,21 +58,19 @@ export function applySetup(prev: string | null, name: string, s: Setup, uploadNa
   doc.source = { ...((doc.source ?? {}) as Toml), adapter: s.adapter };
   const connectors: Toml[] = [];
   const file = s.upload && uploadName ? uploadPath(s.upload, uploadName) : undefined;
-  if (s.kind === "wxr" || s.kind === "sanity-export") connectors.push({ kind: s.kind, path: file });
-  if (s.kind === "umbraco-json") connectors.push({ kind: s.kind, paths: [file] });
-  if (s.kind === "wp-rest") connectors.push({ kind: s.kind, url: s.url });
-  if (s.kind === "sanity-api")
-    connectors.push({
-      kind: s.kind,
-      project_id: s.projectId,
-      dataset: s.dataset,
-      token_env: SANITY_TOKEN_ENV,
-    });
-  if (s.siteUrl) connectors.push({ kind: "crawl", url: s.siteUrl });
+  const site = s.siteUrl ? siteRoot(s.siteUrl) : undefined;
+  for (const kind of s.kinds) {
+    if (kind === "wxr" || kind === "sanity-export") connectors.push({ kind, path: file });
+    if (kind === "umbraco-json") connectors.push({ kind, paths: [file] });
+    if (kind === "wp-rest") connectors.push({ kind, url: s.url });
+    if (kind === "sanity-api")
+      connectors.push({ kind, project_id: s.projectId, dataset: s.dataset, token_env: SANITY_TOKEN_ENV });
+    if (kind === "crawl" && site) connectors.push({ kind, url: site });
+  }
   doc.connectors = connectors;
   // The form shows verify.site_url as the live site, so clearing it there clears it here too.
-  const verify = { ...((doc.verify ?? {}) as Toml), site_url: s.siteUrl };
-  if (!s.siteUrl) delete verify.site_url;
+  const verify = { ...((doc.verify ?? {}) as Toml), site_url: site };
+  if (!site) delete verify.site_url;
   if (Object.keys(verify).length) doc.verify = verify;
   else delete doc.verify;
   if (s.destUrl)
@@ -94,21 +92,21 @@ export function readSetup(toml: string): (Setup & { uploadName?: string }) | nul
     return null;
   }
   const all = Array.isArray(doc.connectors) ? (doc.connectors as Toml[]) : [];
-  const main = all.find((c) => c?.kind !== "crawl");
-  const crawl = all.find((c) => c?.kind === "crawl");
+  const of = (kind: string) => all.find((c) => c?.kind === kind);
   const str = (v: unknown) => (typeof v === "string" ? v : undefined);
-  const file =
-    str(main?.path) ?? str(main?.dump) ?? (Array.isArray(main?.paths) ? str(main.paths[0]) : undefined);
+  const file = all
+    .map((c) => str(c?.path) ?? str(c?.dump) ?? (Array.isArray(c?.paths) ? str(c.paths[0]) : undefined))
+    .find(Boolean);
   const m = file ? UPLOAD_PATH.exec(file) : null;
   return {
     adapter: str((doc.source as Toml | undefined)?.adapter) ?? "",
-    kind: str(main?.kind) ?? (crawl ? "crawl-only" : ""),
+    kinds: [...new Set(all.map((c) => str(c?.kind)).filter((k): k is string => !!k))],
     upload: m?.[1],
     uploadName: m?.[2],
-    url: str(main?.url),
-    projectId: str(main?.project_id),
-    dataset: str(main?.dataset),
-    siteUrl: str(crawl?.url) ?? str((doc.verify as Toml | undefined)?.site_url),
+    url: str(of("wp-rest")?.url),
+    projectId: str(of("sanity-api")?.project_id),
+    dataset: str(of("sanity-api")?.dataset),
+    siteUrl: str(of("crawl")?.url) ?? str((doc.verify as Toml | undefined)?.site_url),
     destUrl: str((doc.destination as Toml | undefined)?.url),
   };
 }
