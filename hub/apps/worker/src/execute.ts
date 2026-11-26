@@ -2,7 +2,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, join, relative } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import {
@@ -13,6 +13,7 @@ import {
   run,
   runEvent,
   runSecret,
+  upload,
   versionMedia,
 } from "@porter-hub/db";
 import {
@@ -29,6 +30,7 @@ import {
   spawnPorter,
   stripWpDb,
   Tail,
+  uploadRefs,
 } from "@porter-hub/porter";
 import { deleteObject, getStream, keys, putFile } from "@porter-hub/storage/s3";
 import { extractTarZst, packTarZst } from "@porter-hub/storage/tar";
@@ -359,6 +361,18 @@ export async function execute(db: Db, r: Run, s: Settings) {
       await writeFile(join(dir, "porter.toml"), stripped.toml ?? "", { mode: 0o600 });
     }
 
+    // Hub uploads a connector reads (`uploads/<id>/<filename>`, set up on the hub): fetched in, never kept.
+    for (const ref of uploadRefs(originalToml.toString("utf8"))) {
+      const [u] = await db
+        .select({ objectKey: upload.objectKey, state: upload.state })
+        .from(upload)
+        .where(and(eq(upload.id, ref.id), eq(upload.projectId, r.projectId)));
+      if (u?.state !== "ready")
+        return await finish("failed", null, `${ref.path} is not a finished upload on this project any more`);
+      await mkdir(join(dir, "uploads", ref.id), { recursive: true });
+      await pipeline(await getStream(u.objectKey), createWriteStream(join(dir, ref.path)));
+    }
+
     const media = await db
       .select({ sha256: versionMedia.sha256 })
       .from(versionMedia)
@@ -462,7 +476,7 @@ async function commitResult(
   // The result must stay readable by the hub (extractTarZst caps the extracted bytes).
   let total = 0;
   for (const e of await readdir(dir, { recursive: true, withFileTypes: true }))
-    if (e.isFile() && !join(e.parentPath, e.name).startsWith(join(dir, "media")))
+    if (e.isFile() && !/^(media|uploads)\//.test(relative(dir, join(e.parentPath, e.name))))
       total += (await stat(join(e.parentPath, e.name))).size;
   const limit = maxResultBytes();
   if (total > limit)
@@ -509,9 +523,9 @@ async function commitResult(
   );
   const kept = [...have, ...fresh.map((f) => f.sha256)];
 
-  // The snapshot keeps the original porter.toml (never the stripped copy) and leaves media/ out.
+  // The snapshot keeps the original porter.toml (never the stripped copy) and leaves media/ and uploads/ out.
   const out = join(scratch, "result.tar.zst");
-  await packTarZst(dir, out, (rel) => rel === "media", { "porter.toml": originalToml });
+  await packTarZst(dir, out, (rel) => rel === "media" || rel === "uploads", { "porter.toml": originalToml });
   const snapshotSha256 = await sha256File(out);
   const { size } = await stat(out);
   const snapshotKey = keys.snapshot(r.projectId, r.id);

@@ -31,7 +31,7 @@ import {
 } from "@porter-hub/db";
 import { runMigrations } from "@porter-hub/db/migrate";
 import { freshDb } from "@porter-hub/db/test-helper";
-import { encryptSecret, Tail } from "@porter-hub/porter";
+import { applySetup, encryptSecret, Tail } from "@porter-hub/porter";
 import { createMultipart, getStream, head, keys, putFile } from "@porter-hub/storage/s3";
 import { extractTarZst, packTarZst } from "@porter-hub/storage/tar";
 import { and, asc, eq, sql } from "drizzle-orm";
@@ -627,5 +627,68 @@ describe("sweeps", () => {
         [id2, "upload.abort"],
       ].sort(),
     );
+  });
+});
+
+describe("set up on the hub", () => {
+  /** A version that is only porter.toml (what the hub's setup form commits), reading a hub upload. */
+  async function setupVersion(uploadId: string, state: "ready" | "uploading") {
+    const body = readFileSync(WXR);
+    const h = createHash("sha256").update(body).digest("hex");
+    const f = join(tmp, `${uploadId}.xml`);
+    writeFileSync(f, body);
+    await putFile(keys.upload(pid, uploadId), f, h, body.length);
+    await conn.db.insert(upload).values({
+      id: uploadId,
+      projectId: pid,
+      filename: "basic.xml",
+      size: body.length,
+      sha256: h,
+      objectKey: keys.upload(pid, uploadId),
+      state,
+    });
+    const dir = mkdtempSync(join(tmp, "setup-"));
+    writeFileSync(
+      join(dir, "porter.toml"),
+      applySetup(null, "Acme", { adapter: "wordpress", kind: "wxr", upload: uploadId }, "basic.xml"),
+    );
+    const out = join(tmp, `${randomUUID()}.tar.zst`);
+    await packTarZst(dir, out);
+    const id = randomUUID();
+    await putFile(keys.snapshot(pid, id), out, sha(out), statSync(out).size);
+    const [{ n }] = await conn.db
+      .select({ n: sql<number>`coalesce(max(${projectVersion.number}), 0)` })
+      .from(projectVersion)
+      .where(eq(projectVersion.projectId, pid));
+    const [v] = await conn.db
+      .insert(projectVersion)
+      .values({
+        projectId: pid,
+        number: Number(n) + 1,
+        snapshotKey: keys.snapshot(pid, id),
+        snapshotSha256: sha(out),
+        size: statSync(out).size,
+      })
+      .returning();
+    return v;
+  }
+
+  test("a porter.toml-only version runs, reading its upload; the upload isn't kept in the result", async () => {
+    const v = await setupVersion(randomUUID(), "ready");
+    const { run: r, list } = await runOn(v, ["analyse"]);
+    expect(r.state, JSON.stringify(list.slice(-3))).toBe("finished");
+    const { dir } = await snapshotOf(r.resultVersionId as string);
+    expect(existsSync(join(dir, "project.db"))).toBe(true);
+    expect(existsSync(join(dir, "uploads"))).toBe(false);
+    expect(readFileSync(join(dir, "porter.toml"), "utf8")).toContain("uploads/");
+  });
+
+  test("an upload that isn't finished fails the run before porter starts", async () => {
+    const id = randomUUID();
+    const v = await setupVersion(id, "uploading");
+    const { run: r } = await runOn(v, ["analyse"]);
+    expect(r.state).toBe("failed");
+    expect(r.error).toBe(`uploads/${id}/basic.xml is not a finished upload on this project any more`);
+    expect(r.resultVersionId).toBeNull();
   });
 });

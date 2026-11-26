@@ -50,12 +50,12 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
           issuesHref={`/p/${slug}/issues`}
         />
       ) : (
-        <NoSnapshot plain={client} />
+        <NoSnapshot plain={client} setupHref={roleCan(role, "push") ? `/p/${slug}/setup` : undefined} />
       )}
       {runs && (
         <Section
           title="Runs on the hub"
-          aside="Each run uses the latest pushed version and pushes its result."
+          aside="Each run uses the latest version and saves its result as a new one."
         >
           {snap && roleCan(role, "run") && <RunForm slug={slug} host={host} />}
           {runs.length ? (

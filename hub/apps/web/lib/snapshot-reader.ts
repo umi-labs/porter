@@ -52,7 +52,7 @@ export async function versionDir(v: { id: string; snapshotKey: string; snapshotS
   let p = inflight.get(v.id);
   if (!p) {
     p = (async () => {
-      if (existsSync(join(final, "project.db"))) return final;
+      if (existsSync(join(final, "porter.toml"))) return final; // every snapshot has one
       // Temp dir then atomic rename: a concurrent request in another process sees all of it or none.
       const tmp = join(cacheDir(), `.tmp-${v.id}-${randomUUID()}`);
       try {
@@ -83,6 +83,8 @@ export function withDb<T>(
   dir: string,
   fn: (q: (sql: string, ...a: (string | number)[]) => Row[]) => T,
 ): T | null {
+  // A version set up on the hub has no project.db until its first run.
+  if (!existsSync(join(dir, "project.db"))) return null;
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(join(dir, "project.db"), { readOnly: true });

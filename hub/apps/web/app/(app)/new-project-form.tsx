@@ -14,7 +14,8 @@ export function NewProjectForm() {
       <CardHeader>
         <CardTitle className="text-sm font-semibold">New project</CardTitle>
         <CardDescription>
-          Then run <code>porter hub link &lt;slug&gt;</code> in the porter project.
+          Then pick its source here, or run <code>porter hub link &lt;slug&gt;</code> in a local porter
+          project.
         </CardDescription>
       </CardHeader>
       <CardContent>
