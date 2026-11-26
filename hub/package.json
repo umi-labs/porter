@@ -9,6 +9,7 @@
     "lint": "biome check .",
     "worker": "pnpm -C apps/worker dev",
     "admin:invite-staff": "tsx --env-file-if-exists=.env apps/worker/src/invite-staff.ts",
+    "admin:service-key": "tsx --env-file-if-exists=.env apps/worker/src/service-key.ts",
     "db:generate": "pnpm -C packages/db generate",
     "auth:generate": "pnpm -C packages/db auth:generate"
   },

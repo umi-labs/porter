@@ -156,13 +156,38 @@ export async function saveSetup(db: Db, actor: Actor, slug: string, input: unkno
     uploadName = u.filename;
   }
 
+  return commitToml(db, actor, p, (prev) => applySetup(prev, p.name, s, uploadName), {
+    message: `source set up on the hub (${ways.map((w) => w.label).join(", ")})`,
+    secrets: {
+      [SANITY_TOKEN_ENV]: s.sanityToken,
+      [PAYLOAD_KEY_ENV]: s.payloadKey,
+      [WP_USER_ENV]: s.wpUser,
+      [WP_PASSWORD_ENV]: s.wpPassword,
+    },
+    detail: { adapter: s.adapter, kinds: s.kinds },
+  });
+}
+
+/**
+ * Rewrites the latest porter.toml with `edit` (given null when there is no version yet) and commits it as a new
+ * version, so a project can be set up and run from the hub without a push. The rest of the latest snapshot
+ * (project.db, raw/, reports/, its media) carries over unchanged. `secrets` (empty values skipped) go to run
+ * secrets in the same transaction. Refused while a run is queued or running.
+ */
+export async function commitToml(
+  db: Db,
+  actor: Actor,
+  p: { id: string },
+  edit: (prev: string | null) => string,
+  opts: { message: string; secrets?: Record<string, string | undefined>; detail?: object },
+) {
   await refuseWhileRunning(db, p.id);
   const base = await latestVersion(db, p.id);
   const baseDir = base ? await versionDir(base) : null;
   const prev = baseDir ? await readFile(join(baseDir, "porter.toml"), "utf8").catch(() => null) : null;
   let toml: string;
   try {
-    toml = applySetup(prev, p.name, s, uploadName);
+    toml = edit(prev);
   } catch {
     throw new HttpError(409, "The latest porter.toml can't be read; fix it locally and push");
   }
@@ -202,7 +227,7 @@ export async function saveSetup(db: Db, actor: Actor, slug: string, input: unkno
           size,
           // The old stage views were judged against the old porter.toml; the hub re-derives them from project.db.
           summary: null,
-          message: `source set up on the hub (${ways.map((w) => w.label).join(", ")})`,
+          message: opts.message,
         })
         .returning({ id: projectVersion.id });
       if (base) {
@@ -217,12 +242,7 @@ export async function saveSetup(db: Db, actor: Actor, slug: string, input: unkno
               media.slice(i, i + 5000).map((m) => ({ versionId: v.id, projectId: p.id, sha256: m.sha256 })),
             );
       }
-      for (const [name, value] of [
-        [SANITY_TOKEN_ENV, s.sanityToken],
-        [PAYLOAD_KEY_ENV, s.payloadKey],
-        [WP_USER_ENV, s.wpUser],
-        [WP_PASSWORD_ENV, s.wpPassword],
-      ] as const) {
+      for (const [name, value] of Object.entries(opts.secrets ?? {})) {
         if (!value) continue;
         const enc = encryptSecret(p.id, name, value);
         await tx
@@ -234,7 +254,7 @@ export async function saveSetup(db: Db, actor: Actor, slug: string, input: unkno
           });
         await audit(tx, actor, p.id, "secret.put", name);
       }
-      await audit(tx, actor, p.id, "version.setup", v.id, { number, adapter: s.adapter, kinds: s.kinds });
+      await audit(tx, actor, p.id, "version.setup", v.id, { number, ...opts.detail });
       return number;
     });
     committed = true;

@@ -55,10 +55,18 @@ export const project = pgTable(
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     retentionDays: integer("retention_days").notNull().default(90),
+    /** The Foundry hub site this project migrates into (`<org>/<project>`), set by Foundry's link call. */
+    foundryRef: text("foundry_ref"),
+    /** That site's page in Foundry hub. */
+    foundryUrl: text("foundry_url"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex("project_slug_uq").on(t.slug), index("project_org_idx").on(t.orgId)],
+  (t) => [
+    uniqueIndex("project_slug_uq").on(t.slug),
+    index("project_org_idx").on(t.orgId),
+    uniqueIndex("project_foundry_ref_uq").on(t.foundryRef),
+  ],
 );
 
 /** Per-project roles. Org membership alone means staff; this grants access to a project. */
@@ -295,6 +303,22 @@ export const runSecret = pgTable(
   },
   (t) => [uniqueIndex("run_secret_name_uq").on(t.projectId, t.name)],
 );
+
+/** API keys for other services (e.g. Foundry hub). Each acts as its own bot user; only the hash is kept. */
+export const serviceKey = pgTable("service_key", {
+  id: id(),
+  name: text("name").notNull(),
+  /** First characters of the key, to recognise it in lists. */
+  prefix: text("prefix").notNull(),
+  keyHash: text("key_hash").notNull().unique(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  createdAt: createdAt(),
+});
 
 export const auditLog = pgTable(
   "audit_log",

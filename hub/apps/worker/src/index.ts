@@ -6,6 +6,7 @@ import { connect } from "@porter-hub/db";
 import { secretKey } from "@porter-hub/porter";
 import { claim, type Db, reclaimLost } from "./claim";
 import { active, cleanScratch, execute, interruptAll, type Settings } from "./execute";
+import { notifyFoundry } from "./foundry-hook";
 import { RETENTION_MS, sweepRetention } from "./retention";
 import { SWEEP_MS, sweepUploads } from "./sweep";
 
@@ -42,7 +43,9 @@ export async function loop(db: Db, s: ReturnType<typeof settings>, signal: Abort
         if (!r) break;
         runs.set(
           r.id,
-          execute(db, r, s).finally(() => runs.delete(r.id)),
+          execute(db, r, s)
+            .then(() => notifyFoundry(db, r.id))
+            .finally(() => runs.delete(r.id)),
         );
       }
     } catch (e) {
