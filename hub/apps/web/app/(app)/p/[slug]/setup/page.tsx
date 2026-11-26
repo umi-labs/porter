@@ -1,8 +1,9 @@
 import { getDb } from "@porter-hub/db";
+import { ProjectFrame } from "@/components/porter/app-frame";
 import { PageTitle } from "@/components/porter/frame";
 import { requireUser } from "@/lib/session";
 import { getSetup } from "@/lib/setup";
-import { orStatus, ProjectFrame, Section } from "@/lib/view-parts";
+import { orStatus, Section } from "@/lib/view-parts";
 import { SetupForm } from "./setup-form";
 
 export const dynamic = "force-dynamic";

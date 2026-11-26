@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { getDb } from "@porter-hub/db";
 import { destinationHost } from "@porter-hub/porter/config";
 import Link from "next/link";
+import { ProjectFrame } from "@/components/porter/app-frame";
 import { Chip } from "@/components/porter/chip";
 import { PageTitle } from "@/components/porter/frame";
 import { RunForm } from "@/components/run-form";
@@ -11,7 +12,7 @@ import { roleCan } from "@/lib/permissions";
 import { runLook } from "@/lib/run-look";
 import { listRuns } from "@/lib/runs";
 import { requireUser } from "@/lib/session";
-import { DataTable, NoSnapshot, Overview, orStatus, ProjectFrame, Section } from "@/lib/view-parts";
+import { DataTable, NoSnapshot, Overview, orStatus, Section } from "@/lib/view-parts";
 import { loadProject } from "@/lib/views";
 
 export const dynamic = "force-dynamic";

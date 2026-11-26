@@ -259,6 +259,14 @@
   .press:active {
     transform: none;
   }
+  /* The sidebar's collapse and the mobile sheet's slide: no movement, the sheet keeps its fade. */
+  [data-slot="sidebar-gap"],
+  [data-slot="sidebar-container"] {
+    transition: none;
+  }
+  [data-slot="sheet-content"] {
+    transition-property: opacity;
+  }
 }
 
 /* Don't use --chart-1..5 for stage or issue state: they are all oranges. */
