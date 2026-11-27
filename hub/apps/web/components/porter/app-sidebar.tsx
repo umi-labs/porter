@@ -1,6 +1,7 @@
 "use client";
 import {
   ChevronsUpDownIcon,
+  CircleUserIcon,
   FolderIcon,
   GlobeIcon,
   LayersIcon,
@@ -198,6 +199,10 @@ function UserMenu({ who, role }: { who: string; role?: string }) {
               </DropdownMenuRadioGroup>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
+            <DropdownMenuItem className="min-h-11 pointer-fine:min-h-8" render={<Link href="/account" />}>
+              <CircleUserIcon />
+              Account
+            </DropdownMenuItem>
             <DropdownMenuItem className="min-h-11 pointer-fine:min-h-8" onClick={signOut}>
               <LogOutIcon />
               Sign out
