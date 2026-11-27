@@ -85,6 +85,44 @@ async function mayGetMagicLink(db: Db, email: string) {
 // The one staff org (org membership there = staff); shared with the worker's invite-staff script.
 export { ensureStaffOrg, staffOrgSlug };
 
+type GithubEmail = { email: string; verified: boolean; primary: boolean };
+
+/**
+ * GitHub sign-in's user: the account's verified staff-domain email (its primary one first), not the
+ * public profile email, which is often personal. No verified staff email: refused.
+ */
+export async function githubStaffUser(accessToken: string, domain: string, fetchImpl: typeof fetch = fetch) {
+  const get = async (path: string) => {
+    const r = await fetchImpl(`https://api.github.com${path}`, {
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "user-agent": "porter-hub",
+        accept: "application/vnd.github+json",
+      },
+    });
+    return r.ok ? r.json() : null;
+  };
+  const [profile, emails] = await Promise.all([get("/user"), get("/user/emails")]);
+  if (!profile) return null;
+  const staff = ((emails ?? []) as GithubEmail[])
+    .filter((e) => e.verified && isStaffEmail(e.email, domain))
+    .sort((a, b) => Number(b.primary) - Number(a.primary))[0];
+  if (!staff)
+    throw new APIError("FORBIDDEN", {
+      message: "GitHub sign-in needs a verified Umi email on your GitHub account",
+    });
+  // No user.id: Better Auth takes the account id from the profile (accountSubject).
+  return {
+    user: {
+      name: profile.name || profile.login || "",
+      email: staff.email,
+      image: profile.avatar_url,
+      emailVerified: true,
+    },
+    data: profile,
+  };
+}
+
 /** Providers whose verified staff-domain users become staff: Google and Foundry hub. */
 const STAFF_PROVIDERS = ["google", "foundry"];
 
@@ -222,6 +260,11 @@ export function createAuth(
   };
   const foundryOn = !!(foundry.issuer && foundry.clientId && foundry.clientSecret);
   if (foundryOn && !domain) throw new Error("STAFF_EMAIL_DOMAIN must be set when Foundry sign-in is on");
+  // Sign in with GitHub, for existing staff accounts only (it never creates one: a verified email on
+  // GitHub can outlive the job). On when both are set.
+  const github = { clientId: env.GITHUB_CLIENT_ID ?? "", clientSecret: env.GITHUB_CLIENT_SECRET ?? "" };
+  const githubOn = !!(github.clientId && github.clientSecret);
+  if (githubOn && !domain) throw new Error("STAFF_EMAIL_DOMAIN must be set when GitHub sign-in is on");
 
   const staffDeviceApproval = {
     id: "porter-staff-device-approval",
@@ -260,24 +303,35 @@ export function createAuth(
         });
       },
     },
-    socialProviders: google.clientId
-      ? {
-          google: {
-            ...google,
-            clientId: google.clientId,
-            clientSecret: google.clientSecret ?? "",
-            // Google enforces the Workspace domain (hd claim); we check the email itself too.
-            // Keep `domain` lowercased: Google emits hd in lowercase and the comparison is exact.
-            hd: domain,
-            mapProfileToUser: (p) => {
-              if (p.email_verified !== true || !isStaffEmail(p.email, domain)) {
-                throw new APIError("FORBIDDEN", { message: "Google sign-in is for staff accounts only" });
-              }
-              return {};
+    socialProviders: {
+      ...(google.clientId
+        ? {
+            google: {
+              ...google,
+              clientId: google.clientId,
+              clientSecret: google.clientSecret ?? "",
+              // Google enforces the Workspace domain (hd claim); we check the email itself too.
+              // Keep `domain` lowercased: Google emits hd in lowercase and the comparison is exact.
+              hd: domain,
+              mapProfileToUser: (p) => {
+                if (p.email_verified !== true || !isStaffEmail(p.email, domain)) {
+                  throw new APIError("FORBIDDEN", { message: "Google sign-in is for staff accounts only" });
+                }
+                return {};
+              },
             },
-          },
-        }
-      : {},
+          }
+        : {}),
+      ...(githubOn
+        ? {
+            github: {
+              ...github,
+              disableSignUp: true,
+              getUserInfo: (token) => githubStaffUser(token.accessToken ?? "", domain),
+            },
+          }
+        : {}),
+    },
     hooks: {
       // Password sign-up is for staff: it needs the id of a pending staff-org invitation for exactly this email.
       // The id is the secret (invite-staff prints it); knowing an invited address is not enough.

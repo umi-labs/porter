@@ -7,6 +7,7 @@ export default function SignInPage() {
   return (
     <SignInForm
       foundry={!!(e.FOUNDRY_OIDC_ISSUER && e.FOUNDRY_OIDC_CLIENT_ID && e.FOUNDRY_OIDC_CLIENT_SECRET)}
+      github={!!(e.GITHUB_CLIENT_ID && e.GITHUB_CLIENT_SECRET)}
     />
   );
 }
