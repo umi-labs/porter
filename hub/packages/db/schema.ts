@@ -39,7 +39,7 @@ export const uploadState = pgEnum("upload_state", [
   "ready",
   "aborted",
 ]);
-export const uploadPurpose = pgEnum("upload_purpose", ["dump", "wxr", "media-archive", "other"]);
+export const uploadPurpose = pgEnum("upload_purpose", ["dump", "wxr", "media-archive", "sanity-export", "other"]);
 
 export const project = pgTable(
   "project",

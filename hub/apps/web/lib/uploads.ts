@@ -14,13 +14,14 @@ const DEFAULT_MAX_BYTES = 20 * 1024 ** 3;
 export const MAX_OPEN_UPLOADS = 5;
 export const maxBytes = () => Number(process.env.UPLOAD_MAX_BYTES) || DEFAULT_MAX_BYTES;
 
-export const PURPOSES = ["dump", "wxr", "media-archive", "other"] as const;
+export const PURPOSES = ["dump", "wxr", "media-archive", "sanity-export", "other"] as const;
 type Purpose = (typeof PURPOSES)[number];
 /** Matched on the lowercased filename suffix only; content is not sniffed in v1. */
 export const ALLOWED: Record<Purpose, readonly string[] | null> = {
   dump: [".sql", ".sql.gz", ".gz", ".zip", ".tar.gz", ".tgz"],
   wxr: [".xml", ".xml.gz", ".zip"],
   "media-archive": [".zip", ".tar", ".tar.gz", ".tgz"],
+  "sanity-export": [".tar.gz", ".tgz"],
   other: null,
 };
 

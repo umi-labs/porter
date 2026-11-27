@@ -14,6 +14,7 @@ const PURPOSES = {
   dump: ".sql .sql.gz .gz .zip .tar.gz .tgz",
   wxr: ".xml .xml.gz .zip",
   "media-archive": ".zip .tar .tar.gz .tgz",
+  "sanity-export": ".tar.gz .tgz",
   other: "",
 };
 type Purpose = keyof typeof PURPOSES;
@@ -446,6 +447,7 @@ const LABELS: Record<Purpose, string> = {
   dump: "Database dump",
   wxr: "WordPress export",
   "media-archive": "Media archive",
+  "sanity-export": "Sanity dataset export",
   other: "Other",
 };
 const ext = (name: string) => (name.match(/\.([a-z0-9]{1,4})(\.gz)?$/i)?.[1] ?? "file").slice(0, 4);

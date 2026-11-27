@@ -171,6 +171,8 @@ describe("create validation", () => {
     ["media-archive", "uploads.zip", 1, 201],
     ["media-archive", "uploads.tar", 1, 201],
     ["media-archive", "uploads.xml", 1, 400],
+    ["sanity-export", "production.tar.gz", 1, 201],
+    ["sanity-export", "data.ndjson", 1, 400],
     ["other", "anything.exe", 1, 201],
   ];
   test.each(cases)("%s accepts by suffix: %s -> %i", async (purpose, filename, size, status) => {
