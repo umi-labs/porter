@@ -8,6 +8,11 @@ import { type Actor, access, audit, HttpError, parse } from "./projects";
 import * as store from "./storage";
 
 export const PART_SIZE = 16 * 1024 * 1024;
+/** S3 allows at most 10,000 parts per multipart upload. */
+const MAX_PARTS = 10_000;
+/** 16 MiB, or bigger (whole MiB) for files past 10,000 × 16 MiB (~156 GiB), so the part limit never caps a file. */
+export const partSizeFor = (size: number) =>
+  Math.max(PART_SIZE, Math.ceil(size / MAX_PARTS / 1024 ** 2) * 1024 ** 2);
 export const MAX_PART_BATCH = 100;
 const DEFAULT_MAX_BYTES = 20 * 1024 ** 3;
 /** Open (still `uploading`) uploads one user may have per project. */
@@ -55,9 +60,12 @@ const schemas = {
   id: z.uuid(),
 };
 
-const partCount = (size: number) => Math.ceil(size / PART_SIZE);
-/** Exact byte length of part n (1-based): 16 MiB, except the last. */
-const partLength = (size: number, n: number) => Math.min(PART_SIZE, size - (n - 1) * PART_SIZE);
+const partCount = (size: number) => Math.ceil(size / partSizeFor(size));
+/** Exact byte length of part n (1-based): the part size, except the last. */
+const partLength = (size: number, n: number) => {
+  const ps = partSizeFor(size);
+  return Math.min(ps, size - (n - 1) * ps);
+};
 const view = (u: typeof upload.$inferSelect) => ({
   id: u.id,
   filename: u.filename,
@@ -137,7 +145,7 @@ export async function createUpload(db: Db, actor: Actor, slug: string, input: un
     });
     await audit(tx, actor, p.id, "upload.create", id, { filename, size: body.size, purpose: body.purpose });
   });
-  return { id, state: "uploading", part_size: PART_SIZE, part_count: partCount(body.size), filename };
+  return { id, state: "uploading", part_size: partSizeFor(body.size), part_count: partCount(body.size), filename };
 }
 
 export async function listUploads(db: Db, actor: Actor, slug: string) {
@@ -161,7 +169,7 @@ export async function getUpload(db: Db, actor: Actor, slug: string, id: string) 
           size: x.size,
         }))
       : undefined;
-  return { ...view(u), part_size: PART_SIZE, part_count: partCount(u.size ?? 0), parts };
+  return { ...view(u), part_size: partSizeFor(u.size ?? 0), part_count: partCount(u.size ?? 0), parts };
 }
 
 export async function partUrls(db: Db, actor: Actor, slug: string, id: string, input: unknown) {

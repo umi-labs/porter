@@ -1,4 +1,5 @@
 "use client";
+import { CopyIcon } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Banner, type Tone } from "@/components/porter/banner";
@@ -92,6 +93,7 @@ export function RunLive({
   const [error, setError] = useState<string | null>(null);
   const [lost, setLost] = useState(false);
   const [onlyProblems, setOnlyProblems] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const es = new EventSource(`/api/projects/${slug}/runs/${initial.id}/events`);
@@ -145,6 +147,23 @@ export function RunLive({
   const names = [...new Set([...planned, ...Object.keys(stages)])];
   const res = over ? result(run, look) : null;
   const shown = onlyProblems ? log.filter((l) => l.lvl !== "info") : log;
+
+  // Copies what's on screen with enough context to read it cold (e.g. pasted to someone for review).
+  function copyLog() {
+    const head = [
+      `Porter run ${run.id} (${slug}) · ${run.state}${run.exit_code != null ? ` · exit ${run.exit_code}` : ""}`,
+      `${run.stages === "all" ? "porter run" : run.stages.join(", ")}${isDryRun(run) ? " (dry run)" : run.apply ? " (apply)" : ""} · on v${run.base_version}${run.result_version != null ? ` · result v${run.result_version}` : ""}`,
+      run.error ? `error: ${run.error}` : null,
+      onlyProblems ? "(warnings and errors only)" : null,
+    ].filter(Boolean);
+    navigator.clipboard?.writeText([...head, "", ...shown.map((l) => l.text)].join("\n")).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      },
+      () => setError("Couldn’t copy the log"),
+    );
+  }
 
   const stageChip = (name: string): { state: State; label: string } => {
     const s = stages[name];
@@ -244,6 +263,10 @@ export function RunLive({
             <Checkbox checked={onlyProblems} onCheckedChange={setOnlyProblems} />
             Warnings and errors only
           </Label>
+          <Button variant="outline" size="sm" className="press" onClick={copyLog} disabled={!shown.length}>
+            <CopyIcon data-icon="inline-start" />
+            {copied ? "Copied" : "Copy log"}
+          </Button>
         </div>
         {lost && !over && (
           <p role="status" className="m-0 bg-warn-soft px-4 py-2 text-xs text-warn">

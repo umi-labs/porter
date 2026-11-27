@@ -96,6 +96,7 @@ const isActiveConflict = (e: unknown) => {
 
 /** Stages before load: re-running any of them invalidates load's dry run. */
 const UPSTREAM_OF_LOAD: readonly string[] = ["analyse", "extract", "normalise", "schema-check"];
+const NEEDS_DESTINATION: readonly string[] = ["schema-check", "load", "verify"];
 
 /** Queues a run on the latest version. Apply needs `confirm_host` equal to that version's destination host. */
 export async function createRun(
@@ -126,6 +127,15 @@ export async function createRun(
     .orderBy(desc(projectVersion.number))
     .limit(1);
   if (!v) throw new HttpError(409, "The project has no version yet; push one first");
+  // Without a destination the engine fails at schema check, so stop after normalise, as Setup promises.
+  if (!body.apply && !destinationHost(await toml(v))) {
+    if (body.stages === "all") body.stages = STAGES.filter((s) => !NEEDS_DESTINATION.includes(s));
+    else if (body.stages.some((s) => NEEDS_DESTINATION.includes(s)))
+      throw new HttpError(
+        400,
+        "schema-check, load and verify need a destination; add the Payload URL and API key in Setup",
+      );
+  }
   if (body.apply) {
     const host = destinationHost(await toml(v));
     if (!host) throw new HttpError(409, "porter.toml has no [destination] url to apply to");
