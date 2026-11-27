@@ -7,6 +7,7 @@ const LABELS: Record<string, string> = {
   credential: "Email and password",
   google: "Google",
   foundry: "Foundry hub",
+  github: "GitHub",
 };
 
 export type SignInWay = { id: string; label: string; linkedAt: Date | null };
@@ -16,7 +17,11 @@ export type SignInWay = { id: string; label: string; linkedAt: Date | null };
  * switched on that they haven't linked yet (linkedAt null). Signing in with one of those using the
  * same staff email links it.
  */
-export async function signInWays(db: Db, userId: string, env: Record<string, string | undefined> = process.env): Promise<SignInWay[]> {
+export async function signInWays(
+  db: Db,
+  userId: string,
+  env: Record<string, string | undefined> = process.env,
+): Promise<SignInWay[]> {
   const rows = await db
     .select({ id: account.providerId, linkedAt: account.createdAt })
     .from(account)
@@ -25,6 +30,7 @@ export async function signInWays(db: Db, userId: string, env: Record<string, str
   const on = [
     env.GOOGLE_CLIENT_ID && "google",
     env.FOUNDRY_OIDC_ISSUER && env.FOUNDRY_OIDC_CLIENT_ID && env.FOUNDRY_OIDC_CLIENT_SECRET && "foundry",
+    env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET && "github",
   ].filter((p): p is string => !!p);
   const linked = new Set(rows.map((r) => r.id));
   return [

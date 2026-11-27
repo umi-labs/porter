@@ -13,7 +13,7 @@ import { runMigrations } from "@porter-hub/db/migrate";
 import { freshDb } from "@porter-hub/db/test-helper";
 import { and, eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
-import { createAuth, type Mail } from "./auth";
+import { createAuth, githubStaffUser, type Mail } from "./auth";
 
 const DOMAIN = "umidigital.co.uk";
 let fresh: Awaited<ReturnType<typeof freshDb>>;
@@ -419,5 +419,41 @@ describe("environment", () => {
     vi.stubEnv("BETTER_AUTH_SECRET", "x".repeat(40));
     vi.stubEnv("BETTER_AUTH_URL", "");
     expect(() => createAuth({ db: conn.db })).toThrow(/BETTER_AUTH_URL/);
+  });
+});
+
+describe("github", () => {
+  const gh = (
+    emails: { email: string; verified: boolean; primary: boolean }[] | null,
+    profile: object | null = { id: 42, login: "octo", name: "", avatar_url: "a" },
+  ) =>
+    (async (url: string) => {
+      const body = String(url).endsWith("/user/emails") ? emails : profile;
+      return new Response(JSON.stringify(body), { status: body ? 200 : 401 });
+    }) as typeof fetch;
+
+  test("signs in as the verified staff email, primary first, never the public one", async () => {
+    const u = await githubStaffUser(
+      "t",
+      "umi.test",
+      gh([
+        { email: "me@gmail.com", verified: true, primary: true },
+        { email: "old@umi.test", verified: false, primary: false },
+        { email: "me@umi.test", verified: true, primary: false },
+      ]),
+    );
+    expect(u?.user).toMatchObject({ email: "me@umi.test", emailVerified: true, name: "octo" });
+    expect(u?.data).toMatchObject({ id: 42 });
+  });
+
+  test("no verified staff email (or a lookalike domain) is refused", async () => {
+    for (const emails of [
+      [{ email: "me@gmail.com", verified: true, primary: true }],
+      [{ email: "me@umi.test", verified: false, primary: true }],
+      [{ email: "me@evilumi.test", verified: true, primary: true }],
+      null,
+    ])
+      await expect(githubStaffUser("t", "umi.test", gh(emails))).rejects.toThrow(/verified Umi email/);
+    expect(await githubStaffUser("t", "umi.test", gh([], null))).toBeNull();
   });
 });

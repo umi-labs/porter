@@ -8,8 +8,8 @@ import { Input } from "@/components/ui/input";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 
-/** `foundry`: Sign in with Foundry hub is configured (FOUNDRY_OIDC_*). */
-export function SignInForm({ foundry }: { foundry: boolean }) {
+/** `foundry` / `github`: that sign-in is configured (FOUNDRY_OIDC_*, GITHUB_CLIENT_*). */
+export function SignInForm({ foundry, github }: { foundry: boolean; github: boolean }) {
   const [message, setMessage] = useState("");
   const [usePassword, setUsePassword] = useState(false);
   // Bumped on each failed password sign-in, so the shake replays.
@@ -56,6 +56,17 @@ export function SignInForm({ foundry }: { foundry: boolean }) {
           onClick={() => authClient.signIn.social({ provider: "foundry", callbackURL: "/" })}
         >
           Continue with Foundry hub <span className="font-normal text-muted-foreground">· Umi staff</span>
+        </Button>
+      )}
+
+      {github && (
+        <Button
+          variant="outline"
+          size="lg"
+          className="press h-10 w-full"
+          onClick={() => authClient.signIn.social({ provider: "github", callbackURL: "/" })}
+        >
+          Continue with GitHub <span className="font-normal text-muted-foreground">· Umi staff</span>
         </Button>
       )}
 

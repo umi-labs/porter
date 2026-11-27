@@ -85,6 +85,8 @@ Required ones have no default; compose refuses to start without them (`required 
 | `DATABASE_URL`               | no              | `postgres://porter:$POSTGRES_PASSWORD@db:5432/porter`                                                                      | Set only to use an external Postgres 17 (see the PgBouncer caveat in [§12](#12-caveats)).                      |
 | `GOOGLE_CLIENT_ID`           | no              | `…apps.googleusercontent.com`                                                                                              | Turns on "Continue with Google" for staff.                                                                     |
 | `GOOGLE_CLIENT_SECRET`       | with Google     |                                                                                                                            |                                                                                                                |
+| `GITHUB_CLIENT_ID`           | no              | GitHub OAuth app client ID                                                                                                 | Turns on "Continue with GitHub" for existing staff accounts ([§7](#7-google-oauth-staff-sign-in)).             |
+| `GITHUB_CLIENT_SECRET`       | with GitHub     |                                                                                                                            |                                                                                                                |
 | `STAFF_EMAIL_DOMAIN`         | with Google     | `umidigital.co.uk`                                                                                                         | The Workspace domain. Only verified `@<domain>` Google accounts can sign in, and they become staff.            |
 | `STAFF_ORG_SLUG`             | no              | `umi`                                                                                                                      | Slug of the one staff organization. Don't change it after the first sign-in.                                   |
 | `SMTP_HOST`                  | yes in practice | `smtp.postmarkapp.com`                                                                                                     | Without mail, magic links and email verification can't be sent.                                                |
@@ -288,6 +290,21 @@ In the Google Cloud console, under a project owned by the Workspace:
 The hub checks the domain too. Google sends it as the `hd` claim, and the hub also checks that the email ends in
 exactly `@STAFF_EMAIL_DOMAIN` and is verified. Google accounts outside the domain are refused. Clients never use
 Google; they use magic links.
+
+### GitHub
+
+GitHub sign-in is for staff who already have a Porter account. It never creates one, because a verified email on
+GitHub can outlive someone's job.
+
+1. On GitHub, go to **Settings → Developer settings → OAuth Apps → New OAuth App**. Use the umi-labs organisation's
+   settings so it isn't tied to one person.
+   - Homepage URL: `https://hub.example.com`
+   - Authorization callback URL: `https://hub.example.com/api/auth/callback/github`
+2. Generate a client secret. Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` (with `STAFF_EMAIL_DOMAIN`) and redeploy.
+
+The hub signs the person in as the verified `@STAFF_EMAIL_DOMAIN` email on their GitHub account (the primary one
+first), not their public profile email. With none, GitHub sign-in is refused. That email must already belong to a
+Porter account; the account is then linked.
 
 ## 8. SMTP
 
