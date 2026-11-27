@@ -1,7 +1,7 @@
 import { getDb } from "@porter-hub/db";
 import { notFound } from "next/navigation";
 import { PageTitle } from "@/components/porter/frame";
-import { pageNum } from "@/lib/snapshot-reader";
+import { issueFilter, pageNum } from "@/lib/snapshot-reader";
 import { IssuesView, NoSnapshot } from "@/lib/view-parts";
 import { loadShare } from "@/lib/views";
 
@@ -12,10 +12,11 @@ export default async function SharedIssues({
   searchParams,
 }: {
   params: Promise<{ token: string }>;
-  searchParams: Promise<{ page?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { token } = await params;
-  const page = pageNum((await searchParams).page);
+  const sp = await searchParams;
+  const page = pageNum(sp.page);
   const v = await loadShare(getDb(), token, "issues");
   if (!v) notFound();
   return (
@@ -29,7 +30,13 @@ export default async function SharedIssues({
         }
       />
       {v.snap ? (
-        <IssuesView snap={v.snap} page={page} base={`/s/${token}/issues`} full={false} />
+        <IssuesView
+          snap={v.snap}
+          page={page}
+          filter={issueFilter(sp)}
+          base={`/s/${token}/issues`}
+          full={false}
+        />
       ) : (
         <NoSnapshot />
       )}

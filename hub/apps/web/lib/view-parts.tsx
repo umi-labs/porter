@@ -9,6 +9,7 @@ import { Resolution, SeverityTag } from "@/components/porter/severity";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Empty as EmptyBox, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
 import {
   Pagination,
   PaginationContent,
@@ -21,7 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 import { fmtDateTime, fmtNum } from "./format";
 import { HttpError } from "./projects";
-import type { Page, Snapshot } from "./snapshot-reader";
+import type { IssueFilter, Page, Snapshot, UrlFilter } from "./snapshot-reader";
 import { issuesPage, listReports, overview, urlsPage } from "./snapshot-reader";
 import type { StageView } from "./stage-state";
 
@@ -133,7 +134,24 @@ export function NoSnapshot({ plain, setupHref }: { plain?: boolean; setupHref?: 
   );
 }
 
-export function Pager({ base, p }: { base: string; p: Page<unknown> }) {
+/** `base` plus the filters in `params` (empty ones dropped), as a link. */
+function withQuery(base: string, params: Record<string, string | undefined>) {
+  const q = new URLSearchParams(
+    Object.entries(params).filter((e): e is [string, string] => !!e[1]),
+  ).toString();
+  return q ? `${base}?${q}` : base;
+}
+
+export function Pager({
+  base,
+  p,
+  params = {},
+}: {
+  base: string;
+  p: Page<unknown>;
+  params?: Record<string, string | undefined>;
+}) {
+  const at = (n: number) => withQuery(base, { ...params, page: String(n) });
   return (
     <Pagination aria-label="Pages" className="mx-0 w-auto justify-end">
       <PaginationContent className="flex-wrap">
@@ -142,12 +160,12 @@ export function Pager({ base, p }: { base: string; p: Page<unknown> }) {
         </PaginationItem>
         {p.page > 1 && (
           <PaginationItem>
-            <PaginationPrevious href={`${base}?page=${p.page - 1}`} />
+            <PaginationPrevious href={at(p.page - 1)} />
           </PaginationItem>
         )}
         {p.page < p.pages && (
           <PaginationItem>
-            <PaginationNext href={`${base}?page=${p.page + 1}`} />
+            <PaginationNext href={at(p.page + 1)} />
           </PaginationItem>
         )}
       </PaginationContent>
@@ -519,26 +537,129 @@ export function Overview({
   );
 }
 
+/** A filter as a row of links; the current one is filled. Changing a filter goes back to page 1. */
+function FilterChips({
+  label,
+  options,
+  current,
+  href,
+}: {
+  label: string;
+  options: { value?: string; text: string; n?: number }[];
+  current?: string;
+  href: (value?: string) => string;
+}) {
+  return (
+    <nav aria-label={label} className="flex flex-wrap items-center gap-1.5">
+      <span className="mr-1 text-xs text-muted-foreground">{label}</span>
+      {options.map((o) => {
+        const on = (o.value ?? "") === (current ?? "");
+        return (
+          <Badge
+            key={o.value ?? ""}
+            variant={on ? "default" : "outline"}
+            className="h-7 px-2.5"
+            render={<Link href={href(o.value)} aria-current={on ? "true" : undefined} />}
+          >
+            {o.text}
+            {o.n != null && <span className="tabular-nums opacity-70">{fmtNum(o.n)}</span>}
+          </Badge>
+        );
+      })}
+    </nav>
+  );
+}
+
+/** Text search as a plain GET form, so it works without JS and the URL can be shared. */
+function SearchBox({
+  base,
+  params,
+  value,
+  placeholder,
+}: {
+  base: string;
+  params: Record<string, string | undefined>;
+  value?: string;
+  placeholder: string;
+}) {
+  return (
+    <form method="get" action={base} className="w-full sm:w-72">
+      {Object.entries(params).map(([k, v]) => v && <input key={k} type="hidden" name={k} value={v} />)}
+      <Input name="q" type="search" defaultValue={value} placeholder={placeholder} aria-label={placeholder} />
+    </form>
+  );
+}
+
 export function IssuesView({
   snap,
   page,
   base,
   full,
+  filter = {},
 }: {
   snap: Snapshot;
   page: number;
   base: string;
   full: boolean;
+  filter?: IssueFilter;
 }) {
-  const p = issuesPage(snap.dir, page, full);
+  const p = issuesPage(snap.dir, page, full, filter);
   if (!p) return <Missing snap={snap} />;
+  const params = {
+    status: full ? filter.status : undefined,
+    kind: filter.kind,
+    severity: filter.severity,
+    q: full ? filter.q : undefined,
+  };
+  const href = (k: keyof typeof params) => (v?: string) => withQuery(base, { ...params, [k]: v });
+  const sum = (xs: { n: number }[]) => xs.reduce((t, x) => t + x.n, 0);
   return (
     <Section
       title={full ? `Issues in v${snap.version.number}` : `Open issues in v${snap.version.number}`}
-      action={<Pager base={base} p={p} />}
+      action={<Pager base={base} p={p} params={params} />}
     >
+      <div className="flex flex-col gap-3 pb-4">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          {full && (
+            <FilterChips
+              label="Show"
+              current={filter.status}
+              href={href("status")}
+              options={[{ text: "Open" }, { value: "all", text: "Open and resolved" }]}
+            />
+          )}
+          <FilterChips
+            label="Severity"
+            current={filter.severity}
+            href={href("severity")}
+            options={[
+              { text: "All", n: sum(p.severities) },
+              ...["error", "warning", "info"]
+                .map((v) => ({ value: v, text: v, n: p.severities.find((x) => x.key === v)?.n ?? 0 }))
+                .filter((o) => o.n > 0 || o.value === filter.severity),
+            ]}
+          />
+          {full && (
+            <SearchBox
+              base={base}
+              params={{ ...params, q: undefined }}
+              value={filter.q}
+              placeholder="Search messages"
+            />
+          )}
+        </div>
+        <FilterChips
+          label="Kind"
+          current={filter.kind}
+          href={href("kind")}
+          options={[
+            { text: "All", n: sum(p.kinds) },
+            ...p.kinds.map((k) => ({ value: k.key, text: k.key, n: k.n })),
+          ]}
+        />
+      </div>
       {p.total === 0 ? (
-        <p className="m-0 text-muted-foreground">No issues in this version.</p>
+        <p className="m-0 text-muted-foreground">No issues match.</p>
       ) : (
         <DataTable
           head={[
@@ -574,13 +695,37 @@ export function IssuesView({
   );
 }
 
-export function UrlsView({ snap, page, base }: { snap: Snapshot; page: number; base: string }) {
-  const p = urlsPage(snap.dir, page);
+export function UrlsView({
+  snap,
+  page,
+  base,
+  filter = {},
+}: {
+  snap: Snapshot;
+  page: number;
+  base: string;
+  filter?: UrlFilter;
+}) {
+  const p = urlsPage(snap.dir, page, filter);
   if (!p) return <Missing snap={snap} />;
+  const params = { show: filter.show, q: filter.q };
   return (
-    <Section title={`URLs in v${snap.version.number}`} action={<Pager base={base} p={p} />}>
+    <Section title={`URLs in v${snap.version.number}`} action={<Pager base={base} p={p} params={params} />}>
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3 pb-4">
+        <FilterChips
+          label="Show"
+          current={filter.show}
+          href={(v) => withQuery(base, { ...params, show: v })}
+          options={[
+            { text: "All", n: p.counts.all },
+            { value: "unmapped", text: "Not mapped", n: p.counts.unmapped },
+            { value: "mapped", text: "Mapped", n: p.counts.mapped },
+          ]}
+        />
+        <SearchBox base={base} params={{ show: filter.show }} value={filter.q} placeholder="Search URLs" />
+      </div>
       {p.total === 0 ? (
-        <p className="m-0 text-muted-foreground">No URLs in this version.</p>
+        <p className="m-0 text-muted-foreground">No URLs match.</p>
       ) : (
         <DataTable head={["URL", "Old status", "Maps to"]}>
           {p.rows.map((r, i) => (
@@ -589,8 +734,17 @@ export function UrlsView({ snap, page, base }: { snap: Snapshot; page: number; b
               <TableCell className="max-w-[480px] font-mono text-xs whitespace-normal break-all">
                 {r.url}
               </TableCell>
-              <TableCell>{r.status ?? ""}</TableCell>
-              <TableCell className={r.target === "none" ? "text-err" : ""}>{r.target}</TableCell>
+              <TableCell className="tabular-nums">{r.status ?? ""}</TableCell>
+              <TableCell className="whitespace-normal break-words">
+                {r.target === "none" ? (
+                  <span className="text-err">Not mapped</span>
+                ) : (
+                  <>
+                    <span className="text-muted-foreground">{r.target}</span>
+                    {r.targetTitle && <> · {r.targetTitle}</>}
+                  </>
+                )}
+              </TableCell>
             </TableRow>
           ))}
         </DataTable>

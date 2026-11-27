@@ -199,6 +199,46 @@ async fn rest_env_overrides_keyring() {
 }
 
 #[tokio::test]
+async fn rest_login_not_accepted_falls_back_to_public_content() {
+    let _g = lock().await;
+    unsafe { std::env::set_var("PORTER_WP_USERNAME", "u") };
+    unsafe { std::env::set_var("PORTER_WP_PASSWORD", "app pass") };
+    let s = MockServer::start().await;
+    mock_root(&s, json!(["wp/v2"])).await;
+    // WordPress ignoring the login (e.g. application passwords off): users/me says not logged in.
+    Mock::given(method("GET"))
+        .and(path("/wp-json/wp/v2/users/me"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&s)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/wp-json/wp/v2/posts"))
+        .and(query_param("context", "view"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("X-WP-TotalPages", "1")
+                .set_body_json(json!([{"id": 1, "status": "publish", "title": {"rendered": "P"}}])),
+        )
+        .mount(&s)
+        .await;
+    let (_d, p) = run(&s, None, Stage::Extract).await;
+    assert_eq!(raw_files(&p, "posts"), 1);
+    let m = issue_messages(&p);
+    assert!(
+        m.iter().any(|m| m.contains("did not accept the login")),
+        "{m:?}"
+    );
+    assert!(!m.iter().any(|m| m.contains("app pass")));
+    let reqs = s.received_requests().await.unwrap();
+    assert!(
+        !reqs
+            .iter()
+            .any(|r| r.url.path() != "/wp-json/wp/v2/users/me"
+                && r.url.query().unwrap_or("").contains("context=edit"))
+    );
+}
+
+#[tokio::test]
 async fn rest_denied_endpoint_is_a_gap_not_a_failure() {
     let _g = lock().await;
     unsafe { std::env::set_var("PORTER_WP_BEARER_TOKEN", "t") };

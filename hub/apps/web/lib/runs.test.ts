@@ -233,6 +233,17 @@ describe("run requests", () => {
     expect((await go({ stages: ["load"] })).status).toBe(201);
   });
 
+  test("without a destination, all stops after normalise and destination stages are refused", async () => {
+    const noDest = makeApi(conn.db, async (r) => ({ id: r.headers.get("x-user") as string }), {
+      readToml: async () => `[project]\nname = "x"\n`,
+    });
+    expect((await noDest.createRun(req("dev", { stages: ["verify"] }), slug)).status).toBe(400);
+    const r = await noDest.createRun(req("dev", { stages: "all" }), slug);
+    expect(r.status).toBe(201);
+    expect((await json(r)).stages).toEqual(["analyse", "extract", "normalise"]);
+    await clearRuns();
+  });
+
   test("apply with all stages is refused: porter run --apply skips the dry-run check", async () => {
     const r = await api.createRun(
       req("dev", { stages: "all", apply: true, confirm_host: "CMS.EXAMPLE.COM:8443" }),

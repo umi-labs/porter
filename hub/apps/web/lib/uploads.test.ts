@@ -18,7 +18,7 @@ import { makeApi } from "./api";
 import { sha256Blob } from "./hash-stream";
 import * as store from "./storage";
 import { hexToBase64 } from "./storage";
-import { MAX_OPEN_UPLOADS, PART_SIZE, sanitizeFilename } from "./uploads";
+import { MAX_OPEN_UPLOADS, PART_SIZE, partSizeFor, sanitizeFilename } from "./uploads";
 
 let fresh: Awaited<ReturnType<typeof freshDb>>;
 let conn: ReturnType<typeof connect>;
@@ -597,4 +597,11 @@ describe("visibility and download", () => {
     expect((await api.getUpload(req("owner"), idp(randomUUID()))).status).toBe(404);
     expect((await api.getUpload(req("owner"), idp("nope"))).status).toBe(400);
   });
+});
+
+test("part size grows past S3's 10,000-part limit", () => {
+  expect(partSizeFor(5 * 1024 ** 3)).toBe(PART_SIZE);
+  const big = 200 * 1024 ** 3;
+  expect(partSizeFor(big) % 1024 ** 2).toBe(0);
+  expect(Math.ceil(big / partSizeFor(big))).toBeLessThanOrEqual(10_000);
 });

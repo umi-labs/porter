@@ -197,8 +197,9 @@ impl WpRestConnector {
     }
 
     /// Env vars override the keyring entry, field by field. A missing keyring is an info
-    /// access-gap and the run carries on with env only.
-    fn api<'a>(&self, ctx: &'a StageCtx) -> Result<Api<'a>> {
+    /// access-gap and the run carries on with env only. A login WordPress doesn't accept is
+    /// dropped (see `check_login`), so it never costs the public content.
+    async fn api<'a>(&self, ctx: &'a StageCtx) -> Result<Api<'a>> {
         let mut creds = Creds::default();
         if let Some(name) = &self.keyring {
             let found = keyring::Entry::new("porter", name)
@@ -217,7 +218,7 @@ impl WpRestConnector {
             }
         }
         let creds = creds.overlaid_by(Creds::from_env(|k| std::env::var(k).ok()));
-        Ok(Api {
+        let mut api = Api {
             ctx,
             // Redirects are followed by hand, same-site only (see `Api::get`).
             client: Client::builder()
@@ -227,7 +228,9 @@ impl WpRestConnector {
             base: self.url.clone(),
             auth: creds.into_auth(self.auth.as_deref()),
             cancel: ctx.cancel.clone(),
-        })
+        };
+        api.check_login().await?;
+        Ok(api)
     }
 }
 
@@ -392,6 +395,30 @@ impl Api<'_> {
             ),
             _ => Ok(()),
         }
+    }
+
+    /// With a login, asks who we are. 401/403 means WordPress treats us as anonymous (wrong or
+    /// revoked application password, application passwords switched off, e.g. by Wordfence, or
+    /// the server stripping the Authorization header). Edit-context requests would then all
+    /// fail, so carry on as anonymous and say why. Anything else is not evidence; keep the login.
+    async fn check_login(&mut self) -> Result<()> {
+        if !self.auth.is_some() {
+            return Ok(());
+        }
+        if let Reply::Denied = self
+            .get("/wp/v2/users/me", &[("context", "edit".into())])
+            .await
+        {
+            self.gap(
+                "/wp/v2/users/me",
+                "WordPress did not accept the login (HTTP 401/403), so porter read public content only. \
+                 Check the username and application password, that application passwords are allowed \
+                 (security plugins such as Wordfence can turn them off) and that the server passes the \
+                 Authorization header to WordPress",
+            )?;
+            self.auth = Auth::None;
+        }
+        Ok(())
     }
 
     fn unauthenticated_gaps(&self) -> Result<()> {
@@ -624,7 +651,7 @@ impl Connector for WpRestConnector {
     }
 
     async fn analyse(&self, ctx: &StageCtx) -> Result<()> {
-        let api = self.api(ctx)?;
+        let api = self.api(ctx).await?;
         api.unauthenticated_gaps()?;
         let (namespaces, routes) = api.namespaces().await?;
         let types = api
@@ -693,7 +720,7 @@ impl Connector for WpRestConnector {
     }
 
     async fn extract(&self, ctx: &StageCtx) -> Result<()> {
-        let api = self.api(ctx)?;
+        let api = self.api(ctx).await?;
         api.unauthenticated_gaps()?;
         let authed = api.auth.is_some();
         let (namespaces, _) = api.namespaces().await?;

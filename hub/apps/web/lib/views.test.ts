@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 import {
@@ -23,7 +23,16 @@ import { makeApi } from "./api";
 import { HttpError } from "./projects";
 import { REPORT_HEADERS, SHARE_HEADERS, serveReport } from "./report";
 import * as sh from "./shares";
-import { extractTarZst, issuesPage, listReports, overview, PAGE_SIZE, urlsPage } from "./snapshot-reader";
+import {
+  extractTarZst,
+  issueFilter,
+  issuesPage,
+  listReports,
+  overview,
+  PAGE_SIZE,
+  urlFilter,
+  urlsPage,
+} from "./snapshot-reader";
 import { hexToBase64, keys, presignPut } from "./storage";
 import { loadProject, loadShare } from "./views";
 
@@ -58,6 +67,7 @@ function entry(
 const tarZst = (...entries: Buffer[]) => zstdCompressSync(Buffer.concat([...entries, Buffer.alloc(1024)]));
 
 function makeProjectDb(path: string, opts: { issues?: number; noIssues?: boolean } = {}) {
+  writeFileSync(join(dirname(path), "porter.toml"), '[source]\nadapter = "wp"\n');
   const db = new DatabaseSync(path);
   db.exec(`
     CREATE TABLE items (id TEXT PRIMARY KEY, kind TEXT NOT NULL, connector TEXT NOT NULL DEFAULT 'wp', source_id TEXT NOT NULL DEFAULT '', url TEXT, data TEXT NOT NULL, deleted_at TEXT);
@@ -72,6 +82,10 @@ function makeProjectDb(path: string, opts: { issues?: number; noIssues?: boolean
   );
   db.prepare("INSERT INTO items (id,kind,data) VALUES ('r2','route',?)").run(
     JSON.stringify({ url: "/gone", http_status: 404, target: "none" }),
+  );
+  // The crawl connector's raw copy of /about: not the adapter's, so never listed or counted.
+  db.prepare("INSERT INTO items (id,kind,connector,data) VALUES ('r3','route','crawl',?)").run(
+    JSON.stringify({ url: "/about", http_status: 200, target: "none" }),
   );
   db.prepare(
     "INSERT INTO runs (id,stage,started_at,ended_at) VALUES ('1','analyse','2026-01-01',NULL)",
@@ -172,7 +186,7 @@ beforeAll(async () => {
     1,
     tarZst(
       entry("./"),
-      entry("porter.toml", "secret = 1"),
+      entry("porter.toml", 'secret = 1\n[source]\nadapter = "wp"\n'),
       entry("project.db", readFileSync(join(src, "project.db"))),
       entry("raw/"),
       entry("raw/dump.sql", "RAW-SUBMISSIONS"),
@@ -275,9 +289,38 @@ describe("snapshot queries", () => {
   });
   test("urls", () => {
     expect(urlsPage(snapDir, 1)?.rows).toEqual([
-      { url: "/about", status: 200, target: "document" },
-      { url: "/gone", status: 404, target: "none" },
+      { url: "/about", status: 200, target: "document", targetTitle: "About us" },
+      { url: "/gone", status: 404, target: "none", targetTitle: null },
     ]);
+    expect(urlsPage(snapDir, 1)?.counts).toEqual({ all: 2, mapped: 1, unmapped: 1 });
+  });
+  test("url filters: mapped or not, and search", () => {
+    expect(urlsPage(snapDir, 1, { show: "unmapped" })?.rows.map((r) => r.url)).toEqual(["/gone"]);
+    expect(urlsPage(snapDir, 1, { show: "mapped" })).toMatchObject({ total: 1 });
+    expect(urlsPage(snapDir, 1, { q: "abo" })?.rows.map((r) => r.url)).toEqual(["/about"]);
+    // LIKE wildcards are literal.
+    expect(urlsPage(snapDir, 1, { q: "%" })?.total).toBe(0);
+  });
+  test("issue filters, with chip counts", () => {
+    const p = issuesPage(snapDir, 1, true, { q: "issue 12" });
+    expect(p?.rows.map((r) => ("message" in r ? r.message : ""))).toEqual([
+      "issue 12",
+      ...Array.from({ length: 10 }, (_, i) => `issue 12${i}`),
+    ]);
+    expect(p?.kinds).toEqual([{ key: "broken-link", n: 11 }]);
+    expect(issuesPage(snapDir, 1, true, { kind: "missing-media" })?.total).toBe(0);
+    expect(issuesPage(snapDir, 1, true, { severity: "warning" })?.total).toBe(250);
+    // Share links never search messages: q is ignored rather than leaking via counts.
+    expect(issuesPage(snapDir, 1, false, { q: "issue 12" })?.total).toBe(250);
+  });
+  test("filters from search params ignore junk", () => {
+    expect(issueFilter({ status: "x", kind: ["a", "b"], q: "  hi " })).toEqual({
+      kind: undefined,
+      severity: undefined,
+      status: "open",
+      q: "hi",
+    });
+    expect(urlFilter({ show: "nope" })).toEqual({ show: undefined, q: undefined });
   });
   test("an older snapshot missing a table gives null, not a crash", () => {
     const d = mkdtempSync(join(work, "old-"));

@@ -1,7 +1,7 @@
 import { getDb } from "@porter-hub/db";
 import { notFound } from "next/navigation";
 import { PageTitle } from "@/components/porter/frame";
-import { pageNum } from "@/lib/snapshot-reader";
+import { pageNum, urlFilter } from "@/lib/snapshot-reader";
 import { NoSnapshot, UrlsView } from "@/lib/view-parts";
 import { loadShare } from "@/lib/views";
 
@@ -12,10 +12,11 @@ export default async function SharedUrls({
   searchParams,
 }: {
   params: Promise<{ token: string }>;
-  searchParams: Promise<{ page?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { token } = await params;
-  const page = pageNum((await searchParams).page);
+  const sp = await searchParams;
+  const page = pageNum(sp.page);
   const v = await loadShare(getDb(), token, "urls");
   if (!v) notFound();
   return (
@@ -28,7 +29,11 @@ export default async function SharedUrls({
           </a>
         }
       />
-      {v.snap ? <UrlsView snap={v.snap} page={page} base={`/s/${token}/urls`} /> : <NoSnapshot />}
+      {v.snap ? (
+        <UrlsView snap={v.snap} page={page} filter={urlFilter(sp)} base={`/s/${token}/urls`} />
+      ) : (
+        <NoSnapshot />
+      )}
     </>
   );
 }
