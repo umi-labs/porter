@@ -71,6 +71,13 @@
       "when": 1795705136670,
       "tag": "0009_foundry_link",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795797691194,
+      "tag": "0010_sudden_shiva",
+      "breakpoints": true
     }
   ]
 }

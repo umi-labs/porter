@@ -1,0 +1,1 @@
+ALTER TYPE "public"."upload_purpose" ADD VALUE 'sanity-export' BEFORE 'other';
